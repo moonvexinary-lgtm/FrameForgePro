@@ -23,9 +23,9 @@
 name: Windows Build & Test
 
 on:
-  # Manual trigger only for now: the push must be verified before any
-  # remote build starts (user requirement). Flip back to push/pull_request
-  # triggers once the first verified build is approved.
+  push:
+    branches: [frameforge-dev, master]
+  pull_request:
   workflow_dispatch:
 
 jobs:
