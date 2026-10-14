@@ -30,7 +30,7 @@ jobs:
       CRAFT_MASTER: ${{ github.workspace }}\craftmaster
       CRAFT_ROOT: ${{ github.workspace }}\craft
       CRAFT_SETTINGS: ${{ github.workspace }}\craft-settings.ini
-      CRAFT_TARGET: windows-msvc2022_64-cl
+      CRAFT_TARGET: windows-msvc2026_64-cl
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -75,10 +75,10 @@ jobs:
           Packager/UseCache = True
           ContinuousIntegration/Enabled = True
 
-          [windows-msvc2022_64-cl]
-          General/ABI = windows-cl-msvc2022-x86_64
+          [windows-msvc2026_64-cl]
+          General/ABI = windows-cl-msvc2026-x86_64
 
-          [windows-msvc2022_64-cl-BlueprintSettings]
+          [windows-msvc2026_64-cl-BlueprintSettings]
           kde/kdemultimedia/kdenlive.version = master
           '@ -replace '\$\{\{ github\.workspace \}\}', '$env:GITHUB_WORKSPACE' -replace '\$\{\{ env\.pythonLocation \}\}', '$env:pythonLocation' | Set-Content -Path "$env:CRAFT_SETTINGS" -Encoding UTF8
           # 3. Pre-clone the KDE blueprints into the "legacy" location that
