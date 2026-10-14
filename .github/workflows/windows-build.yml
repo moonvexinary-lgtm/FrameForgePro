@@ -25,17 +25,32 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 350
     env:
       CRAFT_MASTER: ${{ github.workspace }}\craftmaster
       CRAFT_ROOT: ${{ github.workspace }}\craft
       CRAFT_SETTINGS: ${{ github.workspace }}\craft-settings.ini
-      CRAFT_TARGET: windows-msvc2026_64-cl
+      CRAFT_TARGET: windows-msvc2022_64-cl
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Install VS2022 Build Tools (for msvc2022 cache packages)
+        shell: pwsh
+        run: |
+          # The runner has VS2026 only; craft needs msvc2022 for the
+          # prebuilt binary cache from files.kde.org
+          $vsInstaller = "${env:TEMP}\vs_installer.exe"
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_BuildTools.exe" -OutFile $vsInstaller
+          Start-Process -FilePath $vsInstaller -ArgumentList @(
+            "--quiet", "--wait", "--norestart", "--nocache",
+            "--installPath", "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools",
+            "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621"
+          ) -Wait
+          & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products "*" -version "[17,18)" -property installationPath
 
       - name: Set up Python (Craft)
         uses: actions/setup-python@v5
@@ -76,10 +91,10 @@ jobs:
           ContinuousIntegration/Enabled = True
           Blueprints/Locations = ${{ github.workspace }}\craft\kde-blueprints
 
-          [windows-msvc2026_64-cl]
-          General/ABI = windows-cl-msvc2026-x86_64
+          [windows-msvc2022_64-cl]
+          General/ABI = windows-cl-msvc2022-x86_64
 
-          [windows-msvc2026_64-cl-BlueprintSettings]
+          [windows-msvc2022_64-cl-BlueprintSettings]
           kde/kdemultimedia/kdenlive.version = master
           '@ -replace '\$\{\{ github\.workspace \}\}', '$env:GITHUB_WORKSPACE' -replace '\$\{\{ env\.pythonLocation \}\}', '$env:pythonLocation' | Set-Content -Path "$env:CRAFT_SETTINGS" -Encoding UTF8
           # 3. Pre-clone the KDE blueprints and register them as a
