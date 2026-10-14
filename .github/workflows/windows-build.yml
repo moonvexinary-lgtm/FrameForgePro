@@ -1,24 +1,18 @@
 # FrameForge Pro — remote Windows build & test (GitHub Actions)
 #
-# Strategy (compatible with the "no local build environment" constraint):
-#   Phase 1 (cached): KDE Craft builds the dependency chain (Qt 6, KDE
-#   Frameworks, MLT 7, OpenTimelineIO, Imath, KDDockWidgets) from the
-#   official KDE blueprints on the runner. Restored via actions/cache, so
-#   only the first run pays the full dependency cost (~60-120 min); warm
-#   runs restore in minutes.
-#   Phase 2 (every run): the FrameForge/Kdenlive checkout is configured,
-#   built and ctest-tested against the Craft-installed dependencies, using
-#   Craft's environment script. The Catch2 suite includes the FrameForge
-#   DSP tests (levels, extract, dehummer, etc.) written in earlier slices.
-#
-# First-run expectations (honest): the Craft bootstrap block below follows
-# the documented CraftMaster pattern, but the settings schema and the env
-# activation are the two blocks that may need one iteration on the first
-# remote run. Reference: https://invent.kde.org/packaging/craftmaster
-# and the Craft docs (https://craft.kde.org/docs/).
-#
-# No secrets are required; the repository is public-friendly (GPL-3.0
-# source availability is already an obligation of the project).
+# Verified against the actual CraftMaster/Craft sources (KDE GitHub mirrors):
+#   - CraftMaster.py CLI: --config <ini> --prefix does NOT exist; the root
+#     comes from [Variables] Root in the settings file. Commands follow -c.
+#   - invent.kde.org returns 403 to GitHub runner IPs, so craft, craftmaster
+#     and craft-blueprints-kde are all cloned from KDE's GitHub mirrors.
+#   - The KDE blueprints repo is normally fetched by the
+#     craft/craft-blueprints-kde package from invent.kde.org; its source
+#     explicitly checks for a pre-existing "legacy" checkout at
+#     <craftRoot>/etc/blueprints/craft-kde and uses that instead — so we
+#     pre-clone the GitHub mirror there (BlueprintVersions/EnableDailyUpdates
+#     is disabled so nothing re-fetches from KDE GitLab).
+#   - ABI format (from craft's CraftSettings.ini.template):
+#     windows-cl-msvc2022-x86_64.
 
 name: Windows Build & Test
 
@@ -36,69 +30,86 @@ jobs:
       CRAFT_MASTER: ${{ github.workspace }}\craftmaster
       CRAFT_ROOT: ${{ github.workspace }}\craft
       CRAFT_SETTINGS: ${{ github.workspace }}\craft-settings.ini
+      CRAFT_TARGET: windows-msvc2022_64-cl
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Set up Python (CraftMaster)
+      - name: Set up Python (Craft)
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Cache Craft workspace (downloads/build/install/cache)
+      - name: Cache Craft workspace
         uses: actions/cache@v4
         with:
           path: |
-            craft/downloads
-            craft/build
-            craft/install
-            craft/cache
-          key: craft-win-msvc2022-x64-${{ hashFiles('.craft.ini') }}
+            craft
+          key: craft-win-msvc2022-${{ hashFiles('.craft.ini') }}-${{ github.run_id }}
           restore-keys: |
-            craft-win-msvc2022-x64-
+            craft-win-msvc2022-${{ hashFiles('.craft.ini') }}-
+            craft-win-msvc2022-
 
-      # ------------------------------------------------------------------
-      # Phase 1: dependency toolchain via KDE Craft (cached).
-      # TUNE-ON-FIRST-RUN: the settings schema below follows the
-      # CraftMaster README; if the first run rejects it, consult
-      # https://invent.kde.org/packaging/craftmaster and adjust.
-      # ------------------------------------------------------------------
-      - name: Bootstrap CraftMaster and the KDE blueprints
+      - name: Bootstrap CraftMaster, Craft and the KDE blueprints
         shell: pwsh
         run: |
-          git clone --depth 1 https://invent.kde.org/packaging/craftmaster.git "$env:CRAFT_MASTER"
+          # 1. CraftMaster from KDE's GitHub mirror (invent.kde.org 403s runner IPs)
+          git clone --depth 1 https://github.com/KDE/craftmaster.git "$env:CRAFT_MASTER"
+          # 2. Settings for CraftMaster (schema verified against CraftMaster.py/Config.py)
           @'
           [General]
           Branch = master
           ShallowClone = True
+          CraftUrl = https://github.com/KDE/craft.git
 
-          [BlueprintSettings]
+          [Variables]
+          Root = ${{ github.workspace }}\craft
+
+          [GeneralSettings]
+          Paths/Python = ${{ env.pythonLocation }}
+          Compile/Jobs = 8
+          Compile/UseNinja = True
+          BlueprintVersions/EnableDailyUpdates = False
+          Packager/UseCache = True
+          ContinuousIntegration/Enabled = True
+
+          [windows-msvc2022_64-cl]
+          General/ABI = windows-cl-msvc2022-x86_64
+
+          [windows-msvc2022_64-cl-BlueprintSettings]
           kde/kdemultimedia/kdenlive.version = master
-          '@ | Set-Content -Path "$env:CRAFT_SETTINGS" -Encoding UTF8
-          python "$env:CRAFT_MASTER\craftmaster.py" --config "$env:CRAFT_SETTINGS" --prefix "$env:CRAFT_ROOT" -c
+          '@ -replace '\$\{\{ github\.workspace \}\}', '$env:GITHUB_WORKSPACE' -replace '\$\{\{ env\.pythonLocation \}\}', '$env:pythonLocation' | Set-Content -Path "$env:CRAFT_SETTINGS" -Encoding UTF8
+          # 3. Pre-clone the KDE blueprints into the "legacy" location that
+          #    craft/craft-blueprints-kde explicitly checks for
+          #    (BlueprintRepositoryPackageBase.checkoutDir in craft's source).
+          $bpDir = "$env:CRAFT_ROOT\$env:CRAFT_TARGET\etc\blueprints\craft-kde"
+          if (-not (Test-Path $bpDir)) {
+            New-Item -ItemType Directory -Force -Path $bpDir | Out-Null
+            git clone --depth 1 https://github.com/KDE/craft-blueprints-kde.git "$bpDir"
+          }
+          Get-Content "$env:CRAFT_SETTINGS"
 
       - name: Install dependencies (craft kdenlive dependency chain)
         shell: pwsh
         run: |
-          python "$env:CRAFT_MASTER\craftmaster.py" --config "$env:CRAFT_SETTINGS" --prefix "$env:CRAFT_ROOT" -c --install-deps kde/kdemultimedia/kdenlive
+          # --install-deps builds the whole chain (Qt6, KF6, MLT7, OTIO,
+          # Imath, KDDockWidgets). First run ~1-2 h; later runs restore
+          # from the Actions cache. The KDE binary cache
+          # (files.kde.org/craft) may pre-empt source builds where usable.
+          python "$env:CRAFT_MASTER\CraftMaster.py" --config "$env:CRAFT_SETTINGS" -c --install-deps kde/kdemultimedia/kdenlive
 
-      # ------------------------------------------------------------------
-      # Phase 2: build and test THIS checkout against the Craft-installed
-      # dependencies.
-      # ------------------------------------------------------------------
       - name: Configure, build and test the FrameForge checkout
         shell: pwsh
         run: |
           # Activate the Craft environment (PATH, CMAKE_PREFIX_PATH, ...)
-          # TUNE-ON-FIRST-RUN: craft ships an environment script in its
-          # root; adjust the filename if the version differs.
-          & "$env:CRAFT_ROOT\craftenv.ps1"
+          & "$env:CRAFT_ROOT\$env:CRAFT_TARGET\craft\craftenv.ps1"
+          $prefix = "$env:CRAFT_ROOT\$env:CRAFT_TARGET\install"
           cmake -S "$env:GITHUB_WORKSPACE" -B "$env:GITHUB_WORKSPACE\build-frameforge" `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DBUILD_TESTING=ON `
-            -DCMAKE_PREFIX_PATH="$env:CRAFT_ROOT\install"
+            -DCMAKE_PREFIX_PATH="$prefix"
           cmake --build "$env:GITHUB_WORKSPACE\build-frameforge" --config RelWithDebInfo --parallel
           ctest --test-dir "$env:GITHUB_WORKSPACE\build-frameforge" -C RelWithDebInfo --output-on-failure
 
