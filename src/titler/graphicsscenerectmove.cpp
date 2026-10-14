@@ -1,0 +1,1748 @@
+/*
+    SPDX-FileCopyrightText: 2008 Marco Gittler <g.marco@freenet.de>
+    SPDX-FileCopyrightText: 2008 Jean-Baptiste Mardelle <jb@kdenlive.org>
+
+SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+*/
+
+#include "graphicsscenerectmove.h"
+#include "kdenlivesettings.h"
+#include "titler/gradientwidget.h"
+#include "titler/richtextformat.h"
+#include "titler/richtextgradient.h"
+#include "titler/richtextoutline.h"
+#include "titler/titledocument.h"
+
+#include <QAbstractTextDocumentLayout>
+#include <QApplication>
+#include <QClipboard>
+#include <QCursor>
+#include <QGraphicsRectItem>
+#include <QGraphicsSceneMouseEvent>
+#include <QGraphicsView>
+#include <QKeyEvent>
+#include <QList>
+#include <QMimeData>
+#include <QMimeDatabase>
+#include <QScopedValueRollback>
+#include <QScrollBar>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QTextFragment>
+#include <qmath.h>
+#include <utility>
+
+static int TITLERVERSION = 0;
+
+MyQGraphicsEffect::MyQGraphicsEffect(QObject *parent)
+    : QGraphicsEffect(parent)
+
+{
+}
+
+void MyQGraphicsEffect::setShadow(const QImage &image, const QPointF &origin)
+{
+    m_shadow = image;
+    m_shadowOrigin = origin;
+    updateBoundingRect();
+    update();
+}
+
+void MyQGraphicsEffect::setOffset(int xOffset, int yOffset, int blur)
+{
+    m_xOffset = xOffset;
+    m_yOffset = yOffset;
+    m_blur = blur;
+    updateBoundingRect();
+}
+
+void MyQGraphicsEffect::draw(QPainter *painter)
+{
+    painter->drawImage(m_shadowOrigin + QPointF(m_xOffset - 2 * m_blur, m_yOffset - 2 * m_blur), m_shadow);
+    drawSource(painter);
+}
+
+QRectF MyQGraphicsEffect::boundingRectFor(const QRectF &sourceRect) const
+{
+    return sourceRect.united(QRectF(m_shadowOrigin + QPointF(m_xOffset - 2 * m_blur, m_yOffset - 2 * m_blur), m_shadow.size()));
+}
+
+namespace {
+void paintTitleOutline(QPainter *painter, QTextDocument *document, const QPen &pen)
+{
+    TitlerOutline::paint(painter, document, pen);
+}
+} // namespace
+
+MyTextItem::MyTextItem(const QString &txt, QGraphicsItem *parent)
+    : QGraphicsTextItem(txt, parent)
+    , m_alignment(QFlags<Qt::AlignmentFlag>())
+{
+    // Disabled because cache makes text cursor invisible and borders ugly
+    // setCacheMode(QGraphicsItem::ItemCoordinateCache);
+    setFlag(QGraphicsItem::ItemSendsGeometryChanges, true);
+    document()->setDocumentMargin(0);
+    m_shadowEffect = new MyQGraphicsEffect(this);
+    m_shadowEffect->setEnabled(false);
+    setGraphicsEffect(m_shadowEffect);
+    updateGeometry();
+    connect(document(), &QTextDocument::contentsChanged, this, &MyTextItem::doUpdateGeometry);
+    updateTW(false, 2, 1, 0, 0);
+}
+
+Qt::Alignment MyTextItem::alignment() const
+{
+    return m_alignment;
+}
+
+void MyTextItem::updateShadow(bool enabled, int blur, int xoffset, int yoffset, QColor color)
+{
+    prepareGeometryChange();
+    m_shadowOffset = QPoint(xoffset, yoffset);
+    m_shadowBlur = blur;
+    m_shadowColor = std::move(color);
+    m_shadowEffect->setEnabled(enabled);
+    m_shadowEffect->setOffset(xoffset, yoffset, blur);
+    if (enabled) {
+        updateShadow();
+    }
+    update();
+}
+
+void MyTextItem::setTextColor(const QColor &col)
+{
+    setDefaultTextColor(col);
+    refreshFormat();
+}
+
+QStringList MyTextItem::shadowInfo() const
+{
+    QStringList info;
+    info << QString::number(static_cast<int>(m_shadowEffect->isEnabled())) << m_shadowColor.name(QColor::HexArgb) << QString::number(m_shadowBlur)
+         << QString::number(m_shadowOffset.x()) << QString::number(m_shadowOffset.y());
+    return info;
+}
+
+void MyTextItem::loadShadow(const QStringList &info)
+{
+    if (info.count() < 5) {
+        return;
+    }
+    updateShadow((static_cast<bool>(info.at(0).toInt())), info.at(2).toInt(), info.at(3).toInt(), info.at(4).toInt(), QColor(info.at(1)));
+}
+
+void MyTextItem::setAlignment(Qt::Alignment alignment)
+{
+    // Rich text: layout must not erase the user's text selection.
+    m_alignment = alignment;
+    const Qt::Alignment effective = alignment == Qt::Alignment() ? Qt::AlignLeft : alignment;
+    bool changed = false;
+    for (QTextBlock block = document()->begin(); block.isValid(); block = block.next()) {
+        changed |= block.blockFormat().alignment() != effective;
+    }
+    if (changed) {
+        QTextCursor cursor(document());
+        cursor.select(QTextCursor::Document);
+        QTextBlockFormat delta;
+        delta.setAlignment(effective);
+        cursor.mergeBlockFormat(delta);
+    }
+}
+
+void MyTextItem::setOutline(qreal width, const QColor &color)
+{
+    width = qIsFinite(width) ? qMax(qreal(0), width) : qreal(0);
+    const QColor outlineColor = color.isValid() ? color : QColor(Qt::black);
+    const QPen pen(outlineColor, width, width > 0 ? Qt::SolidLine : Qt::NoPen, Qt::RoundCap, Qt::RoundJoin);
+    if (pen != m_outlinePen) {
+        prepareGeometryChange();
+        m_outlinePen = pen;
+    }
+    setData(TitleDocument::OutlineWidth, width);
+    setData(TitleDocument::OutlineColor, outlineColor);
+
+    // Keep the legacy default separate from the fill and per-character overrides.
+    bool hasOutline = false;
+    for (QTextBlock block = document()->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (fragment.isValid() && fragment.charFormat().textOutline().style() != Qt::NoPen) {
+                hasOutline = true;
+            }
+        }
+    }
+    QTextCharFormat fillOnly;
+    fillOnly.setTextOutline(QPen(Qt::NoPen));
+    if (hasOutline) {
+        QTextCursor cursor(document());
+        cursor.select(QTextCursor::Document);
+        cursor.mergeCharFormat(fillOnly);
+    }
+    QTextCursor active = textCursor();
+    if (!active.hasSelection() && active.charFormat().textOutline().style() != Qt::NoPen) {
+        active.mergeCharFormat(fillOnly);
+        setTextCursor(active);
+    }
+    doUpdateGeometry();
+}
+
+void MyTextItem::applyOutlineWidth(qreal width)
+{
+    if (!qIsFinite(width) || width < 0 || width > TitlerOutline::MaximumWidth) {
+        return;
+    }
+    QTextCharFormat delta;
+    delta.setProperty(TitlerOutline::WidthProperty, width);
+    TitlerRichText::apply(this, delta);
+    Q_EMIT cursorFormatChanged(this);
+}
+
+void MyTextItem::applyOutlineColor(const QColor &color)
+{
+    if (!color.isValid()) {
+        return;
+    }
+    QTextCharFormat delta;
+    delta.setProperty(TitlerOutline::ColorProperty, color);
+    TitlerRichText::apply(this, delta);
+    Q_EMIT cursorFormatChanged(this);
+}
+
+QPen MyTextItem::defaultOutline() const
+{
+    return m_outlinePen;
+}
+
+void MyTextItem::refreshFormat()
+{
+    const auto rect = baseBoundingRect();
+    TitlerGradientV1::applyLayoutBrushes(document(), int(rect.width()), int(rect.height()), data(TitleDocument::Gradient).toString());
+}
+
+void MyTextItem::doUpdateGeometry()
+{
+    if (m_richTextLayoutBusy) {
+        return;
+    }
+    QScopedValueRollback<bool> guard(m_richTextLayoutBusy, true);
+    const qreal margin = TitlerOutline::margin(document(), m_outlinePen);
+    if (margin != m_outlineMargin) {
+        prepareGeometryChange();
+        m_outlineMargin = margin;
+    }
+    updateGeometry();
+    refreshFormat();
+    if (m_shadowEffect->isEnabled()) {
+        updateShadow();
+    }
+    update();
+}
+
+bool MyTextItem::sceneEvent(QEvent *event)
+{
+    if (event->type() == QEvent::KeyPress) {
+        auto *ke = static_cast<QKeyEvent *>(event);
+        if (ke->matches(QKeySequence::Paste)) {
+            QClipboard *clipboard = QGuiApplication::clipboard();
+            const QString clipContent = clipboard->text();
+            if (!clipContent.isEmpty()) {
+                textCursor().removeSelectedText();
+                textCursor().insertText(clipContent);
+            }
+            return true;
+        }
+    }
+    const bool handled = QGraphicsTextItem::sceneEvent(event);
+
+    if (event->type() == QEvent::KeyPress) {
+        Q_EMIT cursorFormatChanged(this);
+    }
+
+    return handled;
+}
+
+void MyTextItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
+{
+    QGraphicsTextItem::mousePressEvent(event);
+    Q_EMIT cursorFormatChanged(this);
+}
+
+void MyTextItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
+{
+    QGraphicsTextItem::mouseReleaseEvent(event);
+    Q_EMIT cursorFormatChanged(this);
+}
+
+void MyTextItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *w)
+{
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    paintTitleOutline(painter, document(), m_outlinePen);
+    // Qt paints the rich fill, selection and blinking caret only once.
+    QGraphicsTextItem::paint(painter, option, w);
+    if (!textInteractionFlags().testFlag(Qt::TextEditable) && (isSelected() || toPlainText().isEmpty())) {
+        QPen pen(isSelected() ? Qt::red : Qt::blue);
+        pen.setStyle(Qt::DashLine);
+        painter->setPen(pen);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRect(boundingRect());
+    }
+    painter->restore();
+}
+
+void MyTextItem::updateTW(bool enabled, int step, int mode, int sigma, int seed)
+{
+    m_tw_enabled = enabled;
+    m_tw_step = step;
+    m_tw_mode = mode;
+    m_tw_sigma = sigma;
+    m_tw_seed = seed;
+}
+
+void MyTextItem::loadTW(const QStringList &info)
+{
+    if (info.count() < 5) {
+        return;
+    }
+    updateTW((static_cast<bool>(info.at(0).toInt())), info.at(1).toInt(), info.at(2).toInt(), info.at(3).toInt(), info.at(4).toInt());
+}
+
+QStringList MyTextItem::twInfo() const
+{
+    QStringList info;
+    info << QString::number(int(m_tw_enabled)) << QString::number(m_tw_step) << QString::number(m_tw_mode) << QString::number(m_tw_sigma)
+         << QString::number(m_tw_seed);
+    return info;
+}
+
+void MyTextItem::updateShadow()
+{
+    if (toPlainText().isEmpty()) {
+        m_shadowEffect->setShadow(QImage());
+        return;
+    }
+    const qreal margin = m_outlineMargin;
+    const QRectF sourceRect = baseBoundingRect().united(m_inkBounds).adjusted(-margin, -margin, margin, margin);
+    const int pad = qMax(0, 2 * m_shadowBlur);
+    QImage shadow(qMax(1, int(std::ceil(sourceRect.width())) + 2 * pad), qMax(1, int(std::ceil(sourceRect.height())) + 2 * pad),
+                  QImage::Format_ARGB32_Premultiplied);
+    shadow.fill(Qt::transparent);
+    {
+        QPainter painter(&shadow);
+        painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
+        painter.translate(pad - sourceRect.left(), pad - sourceRect.top());
+        paintTitleOutline(&painter, document(), m_outlinePen);
+        QAbstractTextDocumentLayout::PaintContext context;
+        context.palette.setColor(QPalette::Text, defaultTextColor());
+        document()->documentLayout()->draw(&painter, context);
+    }
+    {
+        QPainter tint(&shadow);
+        tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        tint.fillRect(shadow.rect(), m_shadowColor);
+    }
+    if (m_shadowBlur > 0) {
+        blurShadow(shadow, m_shadowBlur);
+    }
+    m_shadowEffect->setShadow(shadow, sourceRect.topLeft());
+}
+
+void MyTextItem::blurShadow(QImage &result, int radius)
+{
+    int tab[] = {14, 10, 8, 6, 5, 5, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2};
+    int alpha = (radius < 1) ? 16 : (radius > 17) ? 1 : tab[radius - 1];
+
+    int r1 = 0;
+    int r2 = result.height() - 1;
+    int c1 = 0;
+    int c2 = result.width() - 1;
+
+    int bpl = result.bytesPerLine();
+    int rgba[4];
+    unsigned char *p;
+
+    int i1 = 0;
+    int i2 = 3;
+
+    for (int col = c1; col <= c2; col++) {
+        p = result.scanLine(r1) + col * 4;
+        for (int i = i1; i <= i2; i++) {
+            rgba[i] = p[i] << 4;
+        }
+
+        p += bpl;
+        for (int j = r1; j < r2; j++, p += bpl)
+            for (int i = i1; i <= i2; i++) {
+                p[i] = uchar((rgba[i] += ((p[i] << 4) - rgba[i]) * alpha / 16) >> 4);
+            }
+    }
+
+    for (int row = r1; row <= r2; row++) {
+        p = result.scanLine(row) + c1 * 4;
+        for (int i = i1; i <= i2; i++) {
+            rgba[i] = p[i] << 4;
+        }
+
+        p += 4;
+        for (int j = c1; j < c2; j++, p += 4)
+            for (int i = i1; i <= i2; i++) {
+                p[i] = uchar((rgba[i] += ((p[i] << 4) - rgba[i]) * alpha / 16) >> 4);
+            }
+    }
+
+    for (int col = c1; col <= c2; col++) {
+        p = result.scanLine(r2) + col * 4;
+        for (int i = i1; i <= i2; i++) {
+            rgba[i] = p[i] << 4;
+        }
+
+        p -= bpl;
+        for (int j = r1; j < r2; j++, p -= bpl)
+            for (int i = i1; i <= i2; i++) {
+                p[i] = uchar((rgba[i] += ((p[i] << 4) - rgba[i]) * alpha / 16) >> 4);
+            }
+    }
+
+    for (int row = r1; row <= r2; row++) {
+        p = result.scanLine(row) + c2 * 4;
+        for (int i = i1; i <= i2; i++) {
+            rgba[i] = p[i] << 4;
+        }
+
+        p -= 4;
+        for (int j = c1; j < c2; j++, p -= 4)
+            for (int i = i1; i <= i2; i++) {
+                p[i] = uchar((rgba[i] += ((p[i] << 4) - rgba[i]) * alpha / 16) >> 4);
+            }
+    }
+}
+
+void MyTextItem::updateGeometry()
+{
+    // textWidth() is the width committed by the previous geometry update.
+    // A larger glyph can expand the layout beyond that width before this slot
+    // runs. Its updated bounds are not the previous alignment reference.
+    const qreal previousWidth = textWidth();
+    const QRectF currentLayout = baseBoundingRect();
+    const QPointF topRightPrev(previousWidth < 0 ? currentLayout.right() : currentLayout.left() + previousWidth, currentLayout.top());
+    setTextWidth(-1);
+    setTextWidth(baseBoundingRect().width());
+    setAlignment(m_alignment);
+    QPointF topRight = baseBoundingRect().topRight();
+
+    // if the text is right-aligned, then shift the container leftwards by the
+    // same amount it grew to maintain right-alignment
+    if (m_alignment & Qt::AlignRight) {
+        setPos(pos() + (topRightPrev - topRight));
+    }
+    // likewise, shift it halfway if we're center-aligned
+    else if (m_alignment & Qt::AlignHCenter) {
+        setPos(pos() + (topRightPrev - topRight) / 2);
+    }
+    const QRectF ink = TitlerOutline::inkBounds(document());
+    if (ink != m_inkBounds) {
+        prepareGeometryChange();
+        m_inkBounds = ink;
+    }
+}
+
+QRectF MyTextItem::baseBoundingRect() const
+{
+    // Rich text: Qt's layout accounts for different sizes within a line.
+    return QGraphicsTextItem::boundingRect();
+}
+
+QRectF MyTextItem::boundingRect() const
+{
+    const qreal margin = m_outlineMargin;
+    QRectF base = baseBoundingRect().united(m_inkBounds).adjusted(-margin, -margin, margin, margin);
+    if (m_shadowEffect->isEnabled() && m_shadowOffset.x() > 0) {
+        base.setRight(base.right() + m_shadowOffset.x());
+    }
+    if (m_shadowEffect->isEnabled() && m_shadowOffset.y() > 0) {
+        base.setBottom(base.bottom() + m_shadowOffset.y());
+    }
+    return base;
+}
+
+QVariant MyTextItem::itemChange(GraphicsItemChange change, const QVariant &value)
+{
+    if (change == ItemPositionChange && (scene() != nullptr)) {
+        QPointF newPos = value.toPointF();
+        if (QApplication::mouseButtons() == Qt::LeftButton && (qobject_cast<GraphicsSceneRectMove *>(scene()) != nullptr)) {
+            auto *customScene = qobject_cast<GraphicsSceneRectMove *>(scene());
+            if (customScene->resizeMode() == GraphicsSceneRectMove::NoResize) {
+                int gridSize = customScene->gridSize();
+                int xV = (newPos.x() / gridSize) * gridSize;
+                int yV = (newPos.y() / gridSize) * gridSize;
+                if (QApplication::keyboardModifiers() == Qt::ShiftModifier) {
+                    xV = pos().x();
+                }
+                if (QApplication::keyboardModifiers() == (Qt::ShiftModifier | Qt::AltModifier)) {
+                    yV = pos().y();
+                }
+                newPos = QPointF(xV, yV);
+            }
+        }
+        return newPos;
+    }
+    if (change == QGraphicsItem::ItemSelectedHasChanged) {
+        if (!value.toBool()) {
+            // Make sure to deselect text when item loses focus
+            QTextCursor cur(document());
+            cur.clearSelection();
+            setTextCursor(cur);
+        }
+    }
+    return QGraphicsItem::itemChange(change, value);
+}
+
+void MyTextItem::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *evt)
+{
+    if (textInteractionFlags() == Qt::TextEditorInteraction) {
+        // if editor mode is already on: pass double click events on to the editor:
+        QGraphicsTextItem::mouseDoubleClickEvent(evt);
+        Q_EMIT cursorFormatChanged(this);
+        return;
+    }
+    // if editor mode is off:
+    // 1. turn editor mode on and set selected and focused:
+    // SetTextInteraction(true);
+    setTextInteractionFlags(Qt::TextEditorInteraction);
+    setFocus(Qt::MouseFocusReason);
+    setCursor(QCursor(Qt::IBeamCursor));
+    // 2. send a single click to this QGraphicsTextItem (this will set the cursor to the mouse position):
+    // create a new mouse event with the same parameters as evt
+    auto *click = new QGraphicsSceneMouseEvent(QEvent::GraphicsSceneMousePress);
+    click->setButton(evt->button());
+    click->setPos(evt->pos());
+    QGraphicsTextItem::mousePressEvent(click);
+    delete click; // don't forget to delete the event
+    Q_EMIT cursorFormatChanged(this);
+}
+
+MyRectItem::MyRectItem(QGraphicsItem *parent)
+    : QGraphicsRectItem(parent)
+{
+    // Disabled because cache makes text cursor invisible and borders ugly
+    // setCacheMode(QGraphicsItem::ItemCoordinateCache);
+    setFlag(QGraphicsItem::ItemSendsGeometryChanges, true);
+    m_cornerRadius = 0;
+}
+
+void MyRectItem::setRect(const QRectF &rectangle)
+{
+    QGraphicsRectItem::setRect(rectangle);
+    if (m_rect != rectangle && !data(TitleDocument::Gradient).isNull()) {
+        m_rect = rectangle;
+        QLinearGradient gr = GradientWidget::gradientFromString(data(TitleDocument::Gradient).toString(), int(m_rect.width()), int(m_rect.height()));
+        setBrush(QBrush(gr));
+    }
+}
+
+QVariant MyRectItem::itemChange(GraphicsItemChange change, const QVariant &value)
+{
+    if (change == ItemPositionChange && (scene() != nullptr)) {
+        QPointF newPos = value.toPointF();
+        if (QApplication::mouseButtons() == Qt::LeftButton && (qobject_cast<GraphicsSceneRectMove *>(scene()) != nullptr)) {
+            auto *customScene = qobject_cast<GraphicsSceneRectMove *>(scene());
+            if (customScene->resizeMode() == GraphicsSceneRectMove::NoResize) {
+                int gridSize = customScene->gridSize();
+                int xV = (newPos.x() / gridSize) * gridSize;
+                int yV = (newPos.y() / gridSize) * gridSize;
+                if (QApplication::keyboardModifiers() == Qt::ShiftModifier) {
+                    xV = pos().x();
+                }
+                if (QApplication::keyboardModifiers() == (Qt::ShiftModifier | Qt::AltModifier)) {
+                    yV = pos().y();
+                }
+                newPos = QPointF(xV, yV);
+            }
+        }
+        return newPos;
+    }
+    return QGraphicsItem::itemChange(change, value);
+}
+
+void MyRectItem::setCornerRadius(int cornerRadius)
+{
+    m_cornerRadius = cornerRadius;
+    update(boundingRect());
+}
+
+int MyRectItem::cornerRadius() const
+{
+    return m_cornerRadius;
+}
+
+int MyRectItem::normalizedCornerRadius() const
+{
+    return qMin(m_cornerRadius, (int)qMin(rect().width(), rect().height()) / 2);
+}
+
+void MyRectItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+{
+    Q_UNUSED(widget);
+    int radius = normalizedCornerRadius();
+
+    painter->setBrush(brush());
+    painter->setPen(pen());
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->drawRoundedRect(rect(), radius, radius);
+
+    if (option->state & QStyle::State_Selected) {
+        qreal itemPenWidth = pen().widthF();
+        const qreal pad = itemPenWidth / 2;
+
+        painter->setPen(QPen(option->palette.windowText(), 0, Qt::DashLine));
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRect(boundingRect().adjusted(pad, pad, -pad, -pad));
+
+        if (radius > 0) {
+            painter->setBrush(QColor(128, 128, 128, 200));
+            painter->setPen(QPen(QColor(255, 255, 255, 200), 5));
+            int ellipseSize = 24;
+            painter->drawEllipse(radius - ellipseSize / 2, ellipseSize / -2, ellipseSize, ellipseSize);
+        }
+    }
+}
+
+MyEllipseItem::MyEllipseItem(QGraphicsItem *parent)
+    : QGraphicsEllipseItem(parent)
+{
+    // Disabled because cache makes text cursor invisible and borders ugly
+    // setCacheMode(QGraphicsItem::ItemCoordinateCache);
+    setFlag(QGraphicsItem::ItemSendsGeometryChanges, true);
+}
+
+void MyEllipseItem::setRect(const QRectF &rectangle)
+{
+    QGraphicsEllipseItem::setRect(rectangle);
+    if (m_ellipse != rectangle && !data(TitleDocument::Gradient).isNull()) {
+        m_ellipse = rectangle;
+        QLinearGradient gr = GradientWidget::gradientFromString(data(TitleDocument::Gradient).toString(), int(m_ellipse.width()), int(m_ellipse.height()));
+        setBrush(QBrush(gr));
+    }
+}
+
+QVariant MyEllipseItem::itemChange(GraphicsItemChange change, const QVariant &value)
+{
+    if (change == ItemPositionChange && (scene() != nullptr)) {
+        QPointF newPos = value.toPointF();
+        if (QApplication::mouseButtons() == Qt::LeftButton && (qobject_cast<GraphicsSceneRectMove *>(scene()) != nullptr)) {
+            auto *customScene = qobject_cast<GraphicsSceneRectMove *>(scene());
+            if (customScene->resizeMode() == GraphicsSceneRectMove::NoResize) {
+                int gridSize = customScene->gridSize();
+                int xV = (newPos.x() / gridSize) * gridSize;
+                int yV = (newPos.y() / gridSize) * gridSize;
+                if (QApplication::keyboardModifiers() == Qt::ShiftModifier) {
+                    xV = pos().x();
+                }
+                if (QApplication::keyboardModifiers() == (Qt::ShiftModifier | Qt::AltModifier)) {
+                    yV = pos().y();
+                }
+                newPos = QPointF(xV, yV);
+            }
+        }
+        return newPos;
+    }
+    return QGraphicsItem::itemChange(change, value);
+}
+
+MyPixmapItem::MyPixmapItem(const QPixmap &pixmap, QGraphicsItem *parent)
+    : QGraphicsPixmapItem(pixmap, parent)
+{
+    // Disabled because cache makes text cursor invisible and borders ugly
+    // setCacheMode(QGraphicsItem::ItemCoordinateCache);
+    setFlag(QGraphicsItem::ItemSendsGeometryChanges, true);
+    setData(0, pixmap.width());
+    setData(1, pixmap.height());
+}
+
+QVariant MyPixmapItem::itemChange(GraphicsItemChange change, const QVariant &value)
+{
+    if (change == ItemPositionChange && (scene() != nullptr)) {
+        QPointF newPos = value.toPointF();
+        if (QApplication::mouseButtons() == Qt::LeftButton && (qobject_cast<GraphicsSceneRectMove *>(scene()) != nullptr)) {
+            auto *customScene = qobject_cast<GraphicsSceneRectMove *>(scene());
+            if (customScene->resizeMode() == GraphicsSceneRectMove::NoResize) {
+                int gridSize = customScene->gridSize();
+                int xV = (newPos.x() / gridSize) * gridSize;
+                int yV = (newPos.y() / gridSize) * gridSize;
+                if (QApplication::keyboardModifiers() == Qt::ShiftModifier) {
+                    xV = pos().x();
+                }
+                if (QApplication::keyboardModifiers() == (Qt::ShiftModifier | Qt::AltModifier)) {
+                    yV = pos().y();
+                }
+                newPos = QPointF(xV, yV);
+            }
+        }
+        return newPos;
+    }
+    return QGraphicsItem::itemChange(change, value);
+}
+
+MySvgItem::MySvgItem(const QString &fileName, QGraphicsItem *parent)
+    : QGraphicsSvgItem(fileName, parent)
+{
+    // Disabled because cache makes text cursor invisible and borders ugly
+    // setCacheMode(QGraphicsItem::ItemCoordinateCache);
+    setFlag(QGraphicsItem::ItemSendsGeometryChanges, true);
+    setData(0, boundingRect().width());
+    setData(1, boundingRect().height());
+}
+
+QVariant MySvgItem::itemChange(GraphicsItemChange change, const QVariant &value)
+{
+    if (change == ItemPositionChange && (scene() != nullptr)) {
+        QPointF newPos = value.toPointF();
+        if (QApplication::mouseButtons() == Qt::LeftButton && (qobject_cast<GraphicsSceneRectMove *>(scene()) != nullptr)) {
+            auto *customScene = qobject_cast<GraphicsSceneRectMove *>(scene());
+            if (customScene->resizeMode() == GraphicsSceneRectMove::NoResize) {
+                int gridSize = customScene->gridSize();
+                int xV = (newPos.x() / gridSize) * gridSize;
+                int yV = (newPos.y() / gridSize) * gridSize;
+                if (QApplication::keyboardModifiers() == Qt::ShiftModifier) {
+                    xV = pos().x();
+                }
+                if (QApplication::keyboardModifiers() == (Qt::ShiftModifier | Qt::AltModifier)) {
+                    yV = pos().y();
+                }
+                newPos = QPointF(xV, yV);
+            }
+        }
+        return newPos;
+    }
+    return QGraphicsItem::itemChange(change, value);
+}
+GraphicsSceneRectMove::GraphicsSceneRectMove(int titlerVersion, int frameWidth, int frameHeight, QObject *parent)
+    : QGraphicsScene(parent)
+
+{
+    // grabMouse();
+    TITLERVERSION = titlerVersion;
+    m_zoom = 1.0;
+    setBackgroundBrush(QBrush(Qt::transparent));
+    m_fontSize = 0;
+    m_frameWidth = frameWidth;
+    m_frameHeight = frameHeight;
+}
+
+void GraphicsSceneRectMove::contextMenuEvent(QGraphicsSceneContextMenuEvent *)
+{
+    // Disable QGraphicsScene standard context menu that was crashing
+}
+
+void GraphicsSceneRectMove::dragEnterEvent(QGraphicsSceneDragDropEvent *event)
+{
+    m_dragAllowed = false;
+    if (event->mimeData()->hasUrls()) {
+        QList<QUrl> urls = event->mimeData()->urls();
+        bool imageOnly = true;
+        for (auto &u : urls) {
+            auto mime = QMimeDatabase().mimeTypeForFile(u.toLocalFile());
+            if (!mime.name().startsWith(QStringLiteral("image/"))) {
+                imageOnly = false;
+                break;
+            }
+        }
+        if (imageOnly) {
+            m_dragAllowed = true;
+            event->acceptProposedAction();
+        }
+    } else {
+        QGraphicsScene::dragEnterEvent(event);
+    }
+}
+
+void GraphicsSceneRectMove::dragMoveEvent(QGraphicsSceneDragDropEvent *event)
+{
+    event->setAccepted(m_dragAllowed);
+}
+
+void GraphicsSceneRectMove::dropEvent(QGraphicsSceneDragDropEvent *event)
+{
+    clearTextSelection(true);
+    event->setAccepted(m_dragAllowed);
+    QPoint pos = event->scenePos().toPoint();
+    QList<QUrl> urls = event->mimeData()->urls();
+    for (auto &u : urls) {
+        Q_EMIT addImage(u, pos);
+        pos.setX(pos.x() + 10);
+        pos.setY(pos.y() + 10);
+    }
+}
+
+void GraphicsSceneRectMove::setSelectedItem(QGraphicsItem *item)
+{
+    clearSelection();
+    m_selectedItem = item;
+    if (item) {
+        m_selectedItemInitialPos = item->scenePos();
+        item->setSelected(true);
+    }
+    update();
+}
+
+GraphicsSceneRectMove::TITLETOOL GraphicsSceneRectMove::tool() const
+{
+    return m_tool;
+}
+
+void GraphicsSceneRectMove::setTool(GraphicsSceneRectMove::TITLETOOL tool)
+{
+    m_tool = tool;
+    switch (m_tool) {
+    case TITLE_ELLIPSE:
+    case TITLE_RECTANGLE:
+        setCursor(Qt::CrossCursor);
+        break;
+    case TITLE_TEXT:
+        setCursor(Qt::IBeamCursor);
+        break;
+    default:
+        setCursor(Qt::ArrowCursor);
+    }
+}
+
+void GraphicsSceneRectMove::keyPressEvent(QKeyEvent *keyEvent)
+{
+    if (keyEvent->matches(QKeySequence::Copy)) {
+        Q_EMIT copy();
+    } else if (keyEvent->matches(QKeySequence::Paste)) {
+        Q_EMIT paste();
+    }
+
+    QGraphicsItem *focused = focusItem();
+    if (focused && focused->type() == QGraphicsTextItem::Type) {
+        auto *t = static_cast<MyTextItem *>(focused);
+        if (t->textInteractionFlags() & Qt::TextEditorInteraction) {
+            QGraphicsScene::keyPressEvent(keyEvent);
+            return;
+        }
+    }
+
+    if (m_selectedItem == nullptr || !(m_selectedItem->flags() & QGraphicsItem::ItemIsMovable)) {
+        QGraphicsScene::keyPressEvent(keyEvent);
+        return;
+    }
+    if (m_selectedItem->type() == QGraphicsTextItem::Type) {
+        auto *t = static_cast<MyTextItem *>(m_selectedItem);
+        if (t->textInteractionFlags() & Qt::TextEditorInteraction) {
+            QGraphicsScene::keyPressEvent(keyEvent);
+            return;
+        }
+    }
+
+    int diff = m_gridSize;
+    if ((keyEvent->modifiers() & Qt::ControlModifier) != 0u) {
+        diff = m_gridSize * 5;
+    }
+    switch (keyEvent->key()) {
+    case Qt::Key_Left:
+        for (QGraphicsItem *qgi : selectedItems()) {
+            qgi->moveBy(-diff, 0);
+        }
+        Q_EMIT itemMoved();
+        Q_EMIT actionFinished();
+        break;
+    case Qt::Key_Right:
+        for (QGraphicsItem *qgi : selectedItems()) {
+            qgi->moveBy(diff, 0);
+        }
+        Q_EMIT itemMoved();
+        Q_EMIT actionFinished();
+        break;
+    case Qt::Key_Up:
+        for (QGraphicsItem *qgi : selectedItems()) {
+            qgi->moveBy(0, -diff);
+        }
+        Q_EMIT itemMoved();
+        Q_EMIT actionFinished();
+        break;
+    case Qt::Key_Down:
+        for (QGraphicsItem *qgi : selectedItems()) {
+            qgi->moveBy(0, diff);
+        }
+        Q_EMIT itemMoved();
+        Q_EMIT actionFinished();
+        break;
+    case Qt::Key_Delete:
+    case Qt::Key_Backspace:
+        for (QGraphicsItem *qgi : selectedItems()) {
+            if (qgi->data(-1).toInt() == -1) {
+                continue;
+            }
+            removeItem(qgi);
+            delete qgi;
+        }
+        m_selectedItem = nullptr;
+        Q_EMIT selectionChanged();
+        Q_EMIT actionFinished();
+        break;
+    default:
+        QGraphicsScene::keyPressEvent(keyEvent);
+    }
+}
+
+void GraphicsSceneRectMove::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *e)
+{
+    QPointF p = e->scenePos();
+    p += QPoint(-2, -2);
+    m_resizeMode = NoResize;
+    m_selectedItem = nullptr;
+
+    // http://web.archive.org/web/20140728070013/http://www.kdenlive.org/mantis/view.php?id=1035
+    QList<QGraphicsItem *> i = items(QRectF(p, QSizeF(4, 4)).toRect());
+    if (i.isEmpty()) {
+        return;
+    }
+
+    int ix = 1;
+    QGraphicsItem *g = i.constFirst();
+    while (!(g->flags() & QGraphicsItem::ItemIsSelectable) && ix < i.count()) {
+        g = i.at(ix);
+        ix++;
+    }
+    if ((g != nullptr) && g->type() == QGraphicsTextItem::Type && (((g->flags() & static_cast<int>((QGraphicsItem::ItemIsSelectable) != 0))) != 0)) {
+        m_selectedItem = g;
+    } else {
+        Q_EMIT doubleClickEvent();
+    }
+    QGraphicsScene::mouseDoubleClickEvent(e);
+}
+
+GraphicsSceneRectMove::resizeModes GraphicsSceneRectMove::resizeMode() const
+{
+    return m_resizeMode;
+}
+
+void GraphicsSceneRectMove::mouseReleaseEvent(QGraphicsSceneMouseEvent *e)
+{
+    m_pan = false;
+
+    qDeleteAll(m_lastSnapPreviews);
+    m_lastSnapPreviews.clear();
+
+    if (m_selectedItem && (m_tool == TITLE_RECTANGLE || m_tool == TITLE_ELLIPSE)) {
+        setSelectedItem(m_selectedItem);
+    }
+    if (m_createdText && m_selectedItem) {
+        m_selectedItem->setSelected(true);
+        auto *newText = static_cast<MyTextItem *>(m_selectedItem);
+        QTextCursor cur(newText->document());
+        cur.select(QTextCursor::Document);
+        newText->setTextCursor(cur);
+        m_createdText = false;
+    }
+    if ((e->modifiers() & Qt::ShiftModifier) != 0u) {
+        e->accept();
+    } else {
+        QGraphicsScene::mouseReleaseEvent(e);
+    }
+    QList<QGraphicsView *> viewlist = views();
+    if (!viewlist.isEmpty()) {
+        viewlist.constFirst()->setDragMode(QGraphicsView::RubberBandDrag);
+    }
+    Q_EMIT actionFinished();
+}
+
+void GraphicsSceneRectMove::mousePressEvent(QGraphicsSceneMouseEvent *e)
+{
+    if ((e->buttons() & Qt::MiddleButton) != 0u) {
+        clearTextSelection();
+        QList<QGraphicsView *> viewlist = views();
+        if (!viewlist.isEmpty()) {
+            viewlist.constFirst()->setDragMode(QGraphicsView::ScrollHandDrag);
+            m_pan = true;
+            e->accept();
+            QGraphicsScene::mousePressEvent(e);
+            return;
+        }
+    }
+    if ((e->modifiers() & Qt::AltModifier) != 0u) {
+        // Cycle through items
+        QList<QGraphicsItem *> itemsList;
+        QList<QGraphicsItem *> list = items(e->scenePos());
+        // Remove all non selectable items
+        for (QGraphicsItem *g : list) {
+            // check is there is a selected item in list
+            if (!(g->flags() & QGraphicsItem::ItemIsSelectable)) {
+                continue;
+            }
+            if (g->zValue() > -1000) {
+                itemsList << g;
+            }
+        }
+        if (itemsList.size() > 1 && m_selectedItem && list.contains(m_selectedItem)) {
+            int ix = itemsList.indexOf(m_selectedItem) + 1;
+            if (ix >= itemsList.size()) {
+                ix = 0;
+            }
+            QGraphicsItem *toSelect = itemsList.at(ix);
+            if (toSelect) {
+                clearSelection();
+                toSelect->setSelected(true);
+                m_selectedItem = toSelect;
+                m_selectedItemInitialPos = m_selectedItem->scenePos();
+            }
+            e->accept();
+            return;
+        }
+    }
+    int xPos = (int(e->scenePos().x()) / m_gridSize) * m_gridSize;
+    int yPos = (int(e->scenePos().y()) / m_gridSize) * m_gridSize;
+    m_moveStarted = false;
+    m_clickPoint = e->scenePos();
+    m_dragPoint = m_clickPoint;
+    m_resizeMode = m_possibleAction;
+    QList<QGraphicsItem *> list = items(e->scenePos());
+    if (m_selectedItem && (!m_selectedItem->isSelected() || !(m_selectedItem->flags() & QGraphicsItem::ItemIsSelectable))) {
+        m_selectedItem = nullptr;
+    }
+    bool initiallySelected = m_selectedItem && (list.contains(m_selectedItem) || m_resizeMode != NoResize);
+    if (m_selectedItem && initiallySelected) {
+        // Ensure selected item is considered first
+        list.removeAll(m_selectedItem);
+        list.prepend(m_selectedItem);
+    }
+    QGraphicsItem *item = nullptr;
+    if (m_tool == TITLE_SELECT) {
+        QList<QGraphicsView *> viewlist = views();
+        if ((e->modifiers() & Qt::ControlModifier) != 0u) {
+            clearTextSelection();
+            if (!viewlist.isEmpty()) {
+                viewlist.constFirst()->setDragMode(QGraphicsView::ScrollHandDrag);
+                e->ignore();
+                // QGraphicsScene::mousePressEvent(e);
+                return;
+            }
+        } else {
+            if (!viewlist.isEmpty()) {
+                if (m_resizeMode != NoResize || initiallySelected) {
+                    viewlist.constFirst()->setDragMode(QGraphicsView::NoDrag);
+                } else {
+                    viewlist.constFirst()->setRubberBandSelectionMode(Qt::IntersectsItemShape);
+                }
+            }
+        }
+        if (initiallySelected) {
+            item = m_selectedItem;
+        } else {
+            for (QGraphicsItem *g : list) {
+                // check is there is a selected item in list
+                if (!(g->flags() & QGraphicsItem::ItemIsSelectable)) {
+                    continue;
+                }
+                if (g->zValue() > -1000) {
+                    if (!g->isSelected()) {
+                        g->setSelected(true);
+                    }
+                    item = g;
+                    break;
+                }
+            }
+        }
+        if (item == nullptr || (e->modifiers() != Qt::ShiftModifier && !initiallySelected)) {
+            clearTextSelection();
+        } else if ((e->modifiers() & Qt::ShiftModifier) != 0u) {
+            clearTextSelection(false);
+        }
+        if ((item != nullptr) && ((item->flags() & QGraphicsItem::ItemIsMovable) != 0)) {
+            m_sceneClickPoint = e->scenePos();
+            m_selectedItem = item;
+            if (item->type() == QGraphicsTextItem::Type) {
+                auto *t = static_cast<MyTextItem *>(item);
+                if (t->textInteractionFlags() & static_cast<int>((Qt::TextEditorInteraction) != 0)) {
+                    QGraphicsScene::mousePressEvent(e);
+                    return;
+                }
+                t->setTextInteractionFlags(Qt::NoTextInteraction);
+                t->setFlag(QGraphicsItem::ItemSendsGeometryChanges, true);
+                setCursor(Qt::ClosedHandCursor);
+            } else if (item->type() == QGraphicsRectItem::Type || item->type() == QGraphicsEllipseItem::Type || item->type() == QGraphicsSvgItem::Type ||
+                       item->type() == QGraphicsPixmapItem::Type) {
+                QRectF r1;
+                if (item->type() == QGraphicsRectItem::Type) {
+                    r1 = static_cast<QGraphicsRectItem *>(m_selectedItem)->rect().normalized();
+                    r1.translate(item->scenePos());
+                } else if (m_selectedItem->type() == QGraphicsEllipseItem::Type) {
+                    r1 = static_cast<QGraphicsEllipseItem *>(m_selectedItem)->rect().normalized();
+                    r1.translate(item->scenePos());
+                } else {
+                    r1 = item->sceneBoundingRect().normalized();
+                }
+                switch (m_resizeMode) {
+                case BottomRight:
+                case Right:
+                case Down:
+                    m_dragPoint = r1.bottomRight();
+                    m_clickPoint = r1.topLeft();
+                    e->accept();
+                    break;
+                case TopLeft:
+                case Left:
+                case Up:
+                    m_dragPoint = r1.topLeft();
+                    m_clickPoint = r1.bottomRight();
+                    e->accept();
+                    break;
+                case TopRight:
+                    m_dragPoint = r1.topRight();
+                    m_clickPoint = r1.bottomLeft();
+                    e->accept();
+                    break;
+                case BottomLeft:
+                    m_dragPoint = r1.bottomLeft();
+                    m_clickPoint = r1.topRight();
+                    e->accept();
+                    break;
+                default:
+                    if (initiallySelected) {
+                        // TODO: how can we keep the currently active item to make it move
+                    }
+                    break;
+                }
+            }
+        }
+        if (!e->isAccepted()) {
+            QGraphicsScene::mousePressEvent(e);
+        }
+    } else if (m_tool == TITLE_RECTANGLE || m_tool == TITLE_ELLIPSE) {
+        clearTextSelection();
+        m_sceneClickPoint = QPointF(xPos, yPos);
+        m_selectedItem = nullptr;
+        e->ignore();
+    } else if (m_tool == TITLE_TEXT) {
+        if (e->button() == Qt::LeftButton) {
+            clearTextSelection();
+            MyTextItem *textItem = new MyTextItem(i18n("Text"), nullptr);
+            textItem->textCursor().select(QTextCursor::Document);
+            yPos = ((int(e->scenePos().y()) - (m_fontSize / 2)) / m_gridSize) * m_gridSize;
+            textItem->setPos(xPos, yPos);
+            addItem(textItem);
+            textItem->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable);
+            textItem->setTextInteractionFlags(Qt::TextEditorInteraction);
+            textItem->setFocus(Qt::MouseFocusReason);
+            textItem->setAlignment(QFlags<Qt::AlignmentFlag>(KdenliveSettings::titlerAlign()));
+            Q_EMIT newText(textItem);
+            m_selectedItem = textItem;
+            m_selectedItem->setSelected(true);
+            m_createdText = true;
+        } else {
+            QGraphicsScene::mousePressEvent(e);
+        }
+    }
+    if (m_selectedItem) {
+        m_selectedItemInitialPos = m_selectedItem->scenePos();
+    }
+}
+
+void GraphicsSceneRectMove::clearTextSelection(bool reset)
+{
+    bool hadTextInteraction = false;
+    if ((m_selectedItem != nullptr) && m_selectedItem->type() == QGraphicsTextItem::Type) {
+        // disable text editing
+        auto *t = static_cast<MyTextItem *>(m_selectedItem);
+        if (t->textInteractionFlags() & Qt::TextEditorInteraction) {
+            hadTextInteraction = true;
+        }
+        t->textCursor().setPosition(0);
+        QTextBlock cur = t->textCursor().block();
+        t->setTextCursor(QTextCursor(cur));
+        t->setTextInteractionFlags(Qt::NoTextInteraction);
+        t->unsetCursor();
+    }
+    if (reset) {
+        m_selectedItem = nullptr;
+        clearSelection();
+    }
+    if (hadTextInteraction) {
+        Q_EMIT actionFinished();
+    }
+}
+
+QPointF GraphicsSceneRectMove::getSnappedGraphicsItem(QGraphicsItem *moveItem, QPointF moveDestination)
+{
+    QRectF rect = moveItem->sceneBoundingRect();
+    rect.moveTopLeft(moveDestination);
+
+    qreal edgeDistance = 16;
+
+    // For snapping
+    qreal bestX = 0;
+    qreal bestXDistance = INFINITY;
+    qreal bestY = 0;
+    qreal bestYDistance = INFINITY;
+
+    // For visualization
+    QGraphicsItem *bestXItem = nullptr;
+    qreal bestXHappened = 0;
+    QGraphicsItem *bestYItem = nullptr;
+    qreal bestYHappened = 0;
+
+    // Scene edge snapping
+
+    QRectF frameRects[] = {
+        QRectF(0, 0, m_frameWidth, m_frameHeight),
+        QRectF(m_frameWidth * 0.05, m_frameHeight * 0.05, m_frameWidth * 0.9, m_frameHeight * 0.9),
+        QRectF(m_frameWidth * 0.1, m_frameHeight * 0.1, m_frameWidth * 0.8, m_frameHeight * 0.8),
+    };
+
+    for (auto frameRect : frameRects) {
+        qreal edgeStartHDist = qAbs(rect.left() - frameRect.left());
+        qreal edgeStartVDist = qAbs(rect.top() - frameRect.top());
+        qreal edgeEndHDist = qAbs(rect.right() - frameRect.right());
+        qreal edgeEndVDist = qAbs(rect.bottom() - frameRect.bottom());
+
+        if (edgeStartHDist < bestXDistance) {
+            bestX = frameRect.left();
+            bestXDistance = edgeStartHDist;
+            bestXHappened = frameRect.left();
+        }
+
+        if (edgeStartVDist < bestYDistance) {
+            bestY = frameRect.top();
+            bestYDistance = edgeStartVDist;
+            bestYHappened = frameRect.top();
+        }
+
+        if (edgeEndHDist < bestXDistance) {
+            bestX = frameRect.right() - rect.width();
+            bestXDistance = edgeEndHDist;
+            bestXHappened = frameRect.right();
+        }
+
+        if (edgeEndVDist < bestYDistance) {
+            bestY = frameRect.bottom() - rect.height();
+            bestYDistance = edgeEndVDist;
+            bestYHappened = frameRect.bottom();
+        }
+    }
+
+    // Center snapping
+
+    qreal centerX = m_frameWidth / 2.0;
+    qreal centerY = m_frameHeight / 2.0;
+
+    qreal centerHDist = qAbs(rect.center().x() - centerX);
+    qreal centerVDist = qAbs(rect.center().y() - centerY);
+
+    if (centerHDist < bestXDistance) {
+        bestX = centerX - rect.width() / 2;
+        bestXDistance = centerHDist;
+        bestXHappened = centerX;
+    }
+
+    if (centerVDist < bestYDistance) {
+        bestY = centerY - rect.height() / 2;
+        bestYDistance = centerVDist;
+        bestYHappened = centerY;
+    }
+
+    // Item snapping
+
+    for (auto item : items()) {
+        if (!(item->flags() & QGraphicsItem::ItemIsSelectable)) continue;
+        if (item == moveItem) continue;
+        QRectF itemRect = item->sceneBoundingRect();
+
+        // Make sure the element is vertically aligned for horizontal snapping
+        if (rect.bottom() >= itemRect.top() && rect.top() <= itemRect.bottom()) {
+            qreal outerRightDist = qAbs(itemRect.right() - rect.left());
+            qreal outerLeftDist = qAbs(itemRect.left() - rect.right());
+            qreal innerLeftDist = qAbs(itemRect.left() - rect.left());
+            qreal innerRightDist = qAbs(itemRect.right() - rect.right());
+            qreal centerDist = qAbs(itemRect.center().x() - rect.center().x());
+
+            if (centerDist < bestXDistance) {
+                bestX = itemRect.center().x() - rect.width() / 2;
+                bestXDistance = centerDist;
+                bestXItem = item;
+                bestXHappened = itemRect.center().x();
+            }
+            if (outerRightDist < bestXDistance) {
+                bestX = itemRect.right();
+                bestXDistance = outerRightDist;
+                bestXItem = item;
+                bestXHappened = itemRect.right();
+            }
+            if (outerLeftDist < bestXDistance) {
+                bestX = itemRect.left() - rect.width();
+                bestXDistance = outerLeftDist;
+                bestXItem = item;
+                bestXHappened = itemRect.left();
+            }
+            if (innerLeftDist < bestXDistance) {
+                bestX = itemRect.left();
+                bestXDistance = innerLeftDist;
+                bestXItem = item;
+                bestXHappened = itemRect.left();
+            }
+            if (innerRightDist < bestXDistance) {
+                bestX = itemRect.right() - rect.width();
+                bestXDistance = innerRightDist;
+                bestXItem = item;
+                bestXHappened = itemRect.right();
+            }
+        }
+        // Make sure the element is horizontally aligned for vertical snapping
+        if (rect.right() >= itemRect.left() && rect.left() <= itemRect.right()) {
+            qreal outerBottomDist = qAbs(itemRect.bottom() - rect.top());
+            qreal outerTopDist = qAbs(itemRect.top() - rect.bottom());
+            qreal innerTopDist = qAbs(itemRect.top() - rect.top());
+            qreal innerBottomDist = qAbs(itemRect.bottom() - rect.bottom());
+            qreal centerDist = qAbs(itemRect.center().y() - rect.center().y());
+
+            if (centerDist < bestYDistance) {
+                bestY = itemRect.center().y() - rect.height() / 2;
+                bestYDistance = centerDist;
+                bestYItem = item;
+                bestYHappened = itemRect.center().y();
+            }
+            if (outerBottomDist < bestYDistance) {
+                bestY = itemRect.bottom();
+                bestYDistance = outerBottomDist;
+                bestYItem = item;
+                bestYHappened = itemRect.bottom();
+            }
+            if (outerTopDist < bestYDistance) {
+                bestY = itemRect.top() - rect.height();
+                bestYDistance = outerTopDist;
+                bestYItem = item;
+                bestYHappened = itemRect.top();
+            }
+            if (innerTopDist < bestYDistance) {
+                bestY = itemRect.top();
+                bestYDistance = innerTopDist;
+                bestYItem = item;
+                bestYHappened = itemRect.top();
+            }
+            if (innerBottomDist < bestYDistance) {
+                bestY = itemRect.bottom() - rect.height();
+                bestYDistance = innerBottomDist;
+                bestYItem = item;
+                bestYHappened = itemRect.bottom();
+            }
+        }
+    }
+
+    if (bestXDistance <= edgeDistance) {
+        moveDestination.setX(bestX);
+
+        int start = 0;
+        int end = m_frameHeight;
+
+        if (bestXItem != nullptr) {
+            start = bestXItem->y() - 100;
+            end = bestXItem->y() + bestXItem->boundingRect().height() + 100;
+        }
+
+        auto line =
+            addLine(bestXHappened, start, bestXHappened, end, bestXItem != nullptr ? QPen(Qt::yellow, 3, Qt::DotLine) : QPen(Qt::yellow, 2, Qt::SolidLine));
+        line->setZValue(10000);
+        m_lastSnapPreviews.append(line);
+    }
+
+    if (bestYDistance <= edgeDistance) {
+        moveDestination.setY(bestY);
+
+        int start = 0;
+        int end = m_frameWidth;
+
+        if (bestYItem != nullptr) {
+            start = bestYItem->x() - 100;
+            end = bestYItem->x() + bestYItem->boundingRect().width() + 100;
+        }
+
+        auto line =
+            addLine(start, bestYHappened, end, bestYHappened, bestYItem != nullptr ? QPen(Qt::yellow, 3, Qt::DotLine) : QPen(Qt::yellow, 2, Qt::SolidLine));
+        line->setZValue(10000);
+        m_lastSnapPreviews.append(line);
+    }
+
+    return moveDestination;
+}
+
+void GraphicsSceneRectMove::mouseMoveEvent(QGraphicsSceneMouseEvent *e)
+{
+    QList<QGraphicsView *> viewlist = views();
+    if (viewlist.isEmpty()) {
+        e->ignore();
+        return;
+    }
+    QGraphicsView *view = viewlist.constFirst();
+    if (m_pan) {
+        QPoint diff = e->lastScreenPos() - e->screenPos();
+        view->horizontalScrollBar()->setValue(view->horizontalScrollBar()->value() + diff.x());
+        view->verticalScrollBar()->setValue(view->verticalScrollBar()->value() + diff.y());
+        e->accept();
+        QGraphicsScene::mouseMoveEvent(e);
+        return;
+    }
+    if (e->buttons() != Qt::NoButton && !m_moveStarted) {
+        if ((view->mapFromScene(e->scenePos()) - view->mapFromScene(m_clickPoint)).manhattanLength() < QApplication::startDragDistance()) {
+            e->ignore();
+            return;
+        }
+        m_moveStarted = true;
+    }
+
+    if ((m_selectedItem != nullptr) && (m_selectedItem->flags() & QGraphicsItem::ItemIsMovable) && ((e->buttons() & Qt::LeftButton) != 0u)) {
+        qDeleteAll(m_lastSnapPreviews);
+        m_lastSnapPreviews.clear();
+
+        int objectType = m_selectedItem->type();
+        if (objectType == QGraphicsRectItem::Type || objectType == QGraphicsEllipseItem::Type || objectType == QGraphicsSvgItem::Type ||
+            objectType == QGraphicsPixmapItem::Type) {
+            if (m_resizeMode != NoResize) {
+                int xPos = (int(e->scenePos().x()) / m_gridSize) * m_gridSize;
+                int yPos = (int(e->scenePos().y()) / m_gridSize) * m_gridSize;
+                QPointF newpoint(xPos, yPos);
+                bool centerResize = e->modifiers() & Qt::ShiftModifier;
+                switch (m_resizeMode) {
+                case BottomRight:
+                case BottomLeft:
+                case TopRight:
+                case TopLeft:
+                    m_dragPoint = newpoint;
+                    break;
+                case Up:
+                case Down:
+                    m_dragPoint = QPointF(m_dragPoint.x(), newpoint.y());
+                    break;
+                case Right:
+                case Left:
+                    m_dragPoint = QPointF(newpoint.x(), m_dragPoint.y());
+                    break;
+                case RadiusAdjust: {
+                    int newRadius = m_dragStartRadius + (newpoint.x() - m_clickPoint.x());
+                    if (newRadius < 0) newRadius = 0;
+                    int maxRadius = qMin(m_selectedItem->boundingRect().width(), m_selectedItem->boundingRect().height()) / 2;
+                    if (newRadius > maxRadius) newRadius = maxRadius;
+                    auto rectItem = static_cast<MyRectItem *>(m_selectedItem);
+                    rectItem->setCornerRadius(newRadius);
+                    Q_EMIT itemMoved();
+                    return;
+                }
+                default:
+                    break;
+                }
+                if (objectType == QGraphicsRectItem::Type || objectType == QGraphicsEllipseItem::Type) {
+                    // Resize using aspect ratio
+                    if (!m_selectedItem->data(0).isNull()) {
+                        // we want to keep aspect ratio
+                        QPointF newDrag = m_dragPoint - m_clickPoint;
+                        double hRatio = newDrag.x() / m_selectedItem->data(0).toInt();
+                        double vRatio = newDrag.y() / m_selectedItem->data(1).toInt();
+                        if (hRatio < vRatio) {
+                            newDrag.setY(m_selectedItem->data(1).toInt() * hRatio);
+                        } else {
+                            newDrag.setX(m_selectedItem->data(0).toInt() * vRatio);
+                        }
+                        m_dragPoint = m_clickPoint + newDrag;
+                    }
+                }
+                if (objectType == QGraphicsRectItem::Type) {
+                    auto *gi = static_cast<MyRectItem *>(m_selectedItem);
+                    if (centerResize) {
+                        QRectF oldrect = static_cast<QGraphicsRectItem *>(m_selectedItem)->rect();
+                        oldrect.translate(gi->scenePos());
+                        const QPointF center = (oldrect.bottomRight() + oldrect.topLeft()) * 0.5;
+                        m_clickPoint = center * 2.0 - m_dragPoint;
+                    }
+                    const QRectF newrect = QRectF(m_clickPoint, m_dragPoint).normalized();
+                    gi->setPos(newrect.topLeft());
+                    gi->setRect(QRectF(QPointF(), newrect.bottomRight() - newrect.topLeft()));
+                    return;
+                }
+                if (objectType == QGraphicsEllipseItem::Type) {
+                    auto *gi = static_cast<MyEllipseItem *>(m_selectedItem);
+                    if (centerResize) {
+                        QRectF oldrect = static_cast<QGraphicsEllipseItem *>(m_selectedItem)->rect();
+                        oldrect.translate(gi->scenePos());
+                        const QPointF center = (oldrect.bottomRight() + oldrect.topLeft()) * 0.5;
+                        m_clickPoint = center * 2.0 - m_dragPoint;
+                    }
+                    const QRectF newrect = QRectF(m_clickPoint, m_dragPoint).normalized();
+                    gi->setPos(newrect.topLeft());
+                    gi->setRect(QRectF(QPointF(), newrect.bottomRight() - newrect.topLeft()));
+                    return;
+                }
+                if ((objectType == QGraphicsPixmapItem::Type || objectType == QGraphicsSvgItem::Type)) {
+                    const QRectF oldrect = m_selectedItem->boundingRect();
+                    if (centerResize) {
+                        const QPointF center = (oldrect.bottomRight() + oldrect.topLeft()) * 0.5;
+                        m_clickPoint = center * 2.0 - m_dragPoint;
+                    }
+                    const QRectF newrect = QRectF(m_clickPoint, m_dragPoint).normalized();
+                    double scalex = newrect.width() / oldrect.width();
+                    double scaley = newrect.height() / oldrect.height();
+                    if (!m_selectedItem->data(0).isNull()) {
+                        // Scale accordinf to aspect ratio
+                        if (m_resizeMode == Up || m_resizeMode == Down) {
+                            scalex = scaley;
+                        } else if (m_resizeMode == Left || m_resizeMode == Right) {
+                            scaley = scalex;
+                        } else if (scalex < scaley) {
+                            scalex = scaley;
+                        } else {
+                            scaley = scalex;
+                        }
+                    }
+                    Q_EMIT scalePixmap(m_selectedItem, scalex, scaley, m_resizeMode, centerResize);
+                    return;
+                }
+            }
+            QPointF diff = e->scenePos() - m_sceneClickPoint;
+            diff += m_selectedItemInitialPos;
+            int xPos = (int(diff.x()) / m_gridSize) * m_gridSize;
+            int yPos = (int(diff.y()) / m_gridSize) * m_gridSize;
+            QPointF newpoint(xPos, yPos);
+            if (!(e->modifiers() & Qt::ControlModifier)) {
+                newpoint = getSnappedGraphicsItem(m_selectedItem, newpoint);
+            }
+            m_selectedItem->setPos(newpoint);
+        } else if (objectType == QGraphicsTextItem::Type) {
+            qDebug() << "///// MOVING AN ITEM WITH TEXT\nXXXXXXXXXXXXXXXXXXXXXX";
+            auto *t = static_cast<MyTextItem *>(m_selectedItem);
+            if (t->textInteractionFlags() & static_cast<int>((Qt::TextEditorInteraction) != 0)) {
+                qDebug() << "!!!!! YOP YOP INTERACTION FLAGS READY\n\nYYYYYYYYYYYYY";
+                QGraphicsScene::mouseMoveEvent(e);
+                return;
+            }
+            QPointF diff = e->scenePos() - m_sceneClickPoint;
+            diff += m_selectedItemInitialPos;
+            int xPos = (int(diff.x()) / m_gridSize) * m_gridSize;
+            int yPos = (int(diff.y()) / m_gridSize) * m_gridSize;
+            QPointF newpoint(xPos, yPos);
+            if (!(e->modifiers() & Qt::ControlModifier)) {
+                newpoint = getSnappedGraphicsItem(m_selectedItem, newpoint);
+            }
+            m_selectedItem->setPos(newpoint);
+        }
+        Q_EMIT itemMoved();
+    } else if (m_tool == TITLE_SELECT) {
+        QPointF p = e->scenePos();
+        p += QPoint(-2, -2);
+        m_resizeMode = NoResize;
+        bool itemFound = false;
+        // First check if we are ready to resize an item
+        if (m_selectedItem && m_selectedItem->isSelected() && (m_selectedItem->flags() & QGraphicsItem::ItemIsSelectable)) {
+            QRectF r1 = m_selectedItem->sceneBoundingRect();
+            QRectF top = r1;
+            top.setHeight(1);
+            QRectF bottom = r1;
+            bottom.setTop(bottom.bottom() - 1);
+            QRectF right = r1;
+            right.setLeft(right.right() - 1);
+            QRectF left = r1;
+            left.setWidth(1);
+
+            // The area interested by the mouse pointer
+            QPointF viewPos = e->scenePos();
+            QFontMetrics metrics(font());
+            int box = metrics.lineSpacing() / 2;
+            const QRectF mouseArea(viewPos.x() - box, viewPos.y() - box, 2 * box, 2 * box);
+
+            // Check for collisions between the mouse and the borders
+            if (mouseArea.contains(r1.topLeft())) {
+                m_possibleAction = TopLeft;
+                setCursor(Qt::SizeFDiagCursor);
+                itemFound = true;
+            } else if (mouseArea.contains(r1.bottomRight())) {
+                m_possibleAction = BottomRight;
+                setCursor(Qt::SizeFDiagCursor);
+                itemFound = true;
+            } else if (mouseArea.contains(r1.topRight())) {
+                m_possibleAction = TopRight;
+                setCursor(Qt::SizeBDiagCursor);
+                itemFound = true;
+            } else if (mouseArea.contains(r1.bottomLeft())) {
+                m_possibleAction = BottomLeft;
+                setCursor(Qt::SizeBDiagCursor);
+                itemFound = true;
+            } else if (top.intersects(mouseArea)) {
+                m_possibleAction = Up;
+                setCursor(Qt::SizeVerCursor);
+                itemFound = true;
+            } else if (bottom.intersects(mouseArea)) {
+                m_possibleAction = Down;
+                setCursor(Qt::SizeVerCursor);
+                itemFound = true;
+            } else if (right.intersects(mouseArea)) {
+                m_possibleAction = Right;
+                setCursor(Qt::SizeHorCursor);
+                itemFound = true;
+            } else if (left.intersects(mouseArea)) {
+                m_possibleAction = Left;
+                setCursor(Qt::SizeHorCursor);
+                itemFound = true;
+            }
+
+            if (TITLERVERSION >= 600 && m_selectedItem->type() == QGraphicsRectItem::Type) {
+                int radius = static_cast<MyRectItem *>(m_selectedItem)->normalizedCornerRadius();
+                qreal ellipseSize = 24;
+                QRectF radiusAdjustRect(m_selectedItem->sceneBoundingRect().left() + radius - ellipseSize / 2,
+                                        m_selectedItem->sceneBoundingRect().top() + ellipseSize / -2, ellipseSize, ellipseSize);
+                if (mouseArea.intersects(radiusAdjustRect)) {
+                    setCursor(Qt::PointingHandCursor);
+                    m_possibleAction = RadiusAdjust;
+                    itemFound = true;
+                    m_dragStartRadius = radius;
+                }
+            }
+        }
+        if (!itemFound) {
+            QList<QGraphicsItem *> list = items(QRectF(p, QSizeF(4, 4)).toRect());
+            for (const QGraphicsItem *g : std::as_const(list)) {
+                if (!(g->flags() & QGraphicsItem::ItemIsSelectable)) {
+                    continue;
+                }
+                if ((g->type() == QGraphicsRectItem::Type || g->type() == QGraphicsEllipseItem::Type || g->type() == QGraphicsPixmapItem::Type ||
+                     g->type() == QGraphicsSvgItem::Type) &&
+                    g->zValue() > -1000) {
+                    if (view == nullptr) {
+                        continue;
+                    }
+                    itemFound = true;
+                    setCursor(Qt::OpenHandCursor);
+                    m_possibleAction = NoResize;
+                    break;
+                }
+            }
+        }
+        if (!itemFound) {
+            m_possibleAction = NoResize;
+            setCursor(Qt::ArrowCursor);
+        }
+        QGraphicsScene::mouseMoveEvent(e);
+    } else if (m_tool == TITLE_RECTANGLE && ((e->buttons() & Qt::LeftButton) != 0u)) {
+        if (m_selectedItem == nullptr) {
+            // create new rect item
+            QRectF r(0, 0, e->scenePos().x() - m_sceneClickPoint.x(), e->scenePos().y() - m_sceneClickPoint.y());
+            r = r.normalized();
+            auto *rect = new MyRectItem();
+            rect->setRect(QRectF(0, 0, r.width(), r.height()));
+            addItem(rect);
+            m_selectedItem = rect;
+            m_selectedItem->setPos(m_sceneClickPoint);
+            m_selectedItem->setSelected(true);
+            Q_EMIT newRect(rect);
+            m_selectedItem->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
+            m_resizeMode = BottomRight;
+            QGraphicsScene::mouseMoveEvent(e);
+        }
+    } else if (m_tool == TITLE_ELLIPSE && ((e->buttons() & Qt::LeftButton) != 0u)) {
+        if (m_selectedItem == nullptr) {
+            // create new rect item
+            QRectF r(0, 0, e->scenePos().x() - m_sceneClickPoint.x(), e->scenePos().y() - m_sceneClickPoint.y());
+            r = r.normalized();
+            auto *ellipse = new MyEllipseItem();
+            ellipse->setRect(QRectF(0, 0, r.width(), r.height()));
+            addItem(ellipse);
+            m_selectedItem = ellipse;
+            m_selectedItem->setPos(m_sceneClickPoint);
+            m_selectedItem->setSelected(true);
+            Q_EMIT newEllipse(ellipse);
+            m_selectedItem->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
+            m_resizeMode = BottomRight;
+            QGraphicsScene::mouseMoveEvent(e);
+        }
+    }
+}
+
+void GraphicsSceneRectMove::wheelEvent(QGraphicsSceneWheelEvent *wheelEvent)
+{
+    if (wheelEvent->modifiers() == Qt::ControlModifier) {
+        QList<QGraphicsView *> viewlist = views();
+        if (!viewlist.isEmpty()) {
+            if (wheelEvent->delta() > 0) {
+                Q_EMIT sceneZoom(true);
+            } else {
+                Q_EMIT sceneZoom(false);
+            }
+        }
+    } else {
+        wheelEvent->setAccepted(false);
+    }
+}
+
+void GraphicsSceneRectMove::setScale(double s)
+{
+    if (m_zoom < 1.0 / 7.0 && s < 1.0) {
+        return;
+    }
+    if (m_zoom > 10.0 / 7.9 && s > 1.0) {
+        return;
+    }
+    QList<QGraphicsView *> viewlist = views();
+    if (!viewlist.isEmpty()) {
+        viewlist[0]->scale(s, s);
+        m_zoom = m_zoom * s;
+    }
+}
+
+void GraphicsSceneRectMove::setZoom(double s)
+{
+    QList<QGraphicsView *> viewlist = views();
+    if (!viewlist.isEmpty()) {
+        viewlist[0]->resetTransform();
+        viewlist[0]->scale(s, s);
+        m_zoom = s;
+    }
+}
+
+void GraphicsSceneRectMove::setCursor(const QCursor &c)
+{
+    const QList<QGraphicsView *> l = views();
+    for (QGraphicsView *v : l) {
+        v->setCursor(c);
+    }
+}
+
+void GraphicsSceneRectMove::slotUpdateFontSize(int s)
+{
+    m_fontSize = s;
+}
+
+void GraphicsSceneRectMove::drawForeground(QPainter *painter, const QRectF &rect)
+{
+    // draw the grid if needed
+    if (m_gridSize <= 1 || m_gridSize * m_zoom < 5) {
+        return;
+    }
+
+    QPen pen(QColor(255, 0, 0, 200));
+    painter->setPen(pen);
+
+    qreal left = int(rect.left()) - (int(rect.left()) % m_gridSize);
+    qreal top = int(rect.top()) - (int(rect.top()) % m_gridSize);
+    QVector<QPointF> points;
+    for (qreal x = left; x < rect.right(); x += m_gridSize) {
+        for (qreal y = top; y < rect.bottom(); y += m_gridSize) {
+            points.append(QPointF(x, y));
+        }
+    }
+    painter->drawPoints(points.data(), points.size());
+}
+
+int GraphicsSceneRectMove::gridSize() const
+{
+    return m_gridSize;
+}
+
+void GraphicsSceneRectMove::slotUseGrid(bool enableGrid)
+{
+    m_gridSize = enableGrid ? 20 : 1;
+}
+
+void GraphicsSceneRectMove::addNewItem(QGraphicsItem *item)
+{
+    clearSelection();
+    addItem(item);
+    item->setSelected(true);
+    m_selectedItem = item;
+}
