@@ -74,6 +74,7 @@ jobs:
           BlueprintVersions/EnableDailyUpdates = False
           Packager/UseCache = True
           ContinuousIntegration/Enabled = True
+          Blueprints/Locations = ${{ github.workspace }}\craft\kde-blueprints
 
           [windows-msvc2026_64-cl]
           General/ABI = windows-cl-msvc2026-x86_64
@@ -81,12 +82,10 @@ jobs:
           [windows-msvc2026_64-cl-BlueprintSettings]
           kde/kdemultimedia/kdenlive.version = master
           '@ -replace '\$\{\{ github\.workspace \}\}', '$env:GITHUB_WORKSPACE' -replace '\$\{\{ env\.pythonLocation \}\}', '$env:pythonLocation' | Set-Content -Path "$env:CRAFT_SETTINGS" -Encoding UTF8
-          # 3. Pre-clone the KDE blueprints into the "legacy" location that
-          #    craft/craft-blueprints-kde explicitly checks for
-          #    (BlueprintRepositoryPackageBase.checkoutDir in craft's source).
-          $bpDir = "$env:CRAFT_ROOT\$env:CRAFT_TARGET\etc\blueprints\craft-kde"
+          # 3. Pre-clone the KDE blueprints and register them as a
+          #    blueprint location via Blueprints/Locations.
+          $bpDir = "$env:CRAFT_ROOT\kde-blueprints"
           if (-not (Test-Path $bpDir)) {
-            New-Item -ItemType Directory -Force -Path $bpDir | Out-Null
             git clone --depth 1 https://github.com/KDE/craft-blueprints-kde.git "$bpDir"
           }
           Get-Content "$env:CRAFT_SETTINGS"
