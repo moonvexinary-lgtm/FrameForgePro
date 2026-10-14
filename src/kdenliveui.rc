@@ -16,6 +16,7 @@
       <Action name="project_render"/>
       <Action name="import_project"/>
       <Action name="export_project"/>
+      <Action name="export_edl"/>
       <Separator/>
       <Action name="open_backup"/>
       <Action name="project_settings"/>

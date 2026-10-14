@@ -13,9 +13,12 @@ set(KdenliveTest_SOURCES
     colorscopestest.cpp
     compositiontest.cpp
     documenttest.cpp
+    edltest.cpp
     effectstest.cpp
     effectsgrouptest.cpp
     filetest.cpp # codespell:ignore filetest
+    frameforge_dsptest.cpp
+    frameforge_videodsptest.cpp
     gradienteditwidgettest.cpp
     groupstest.cpp
     hidetest.cpp

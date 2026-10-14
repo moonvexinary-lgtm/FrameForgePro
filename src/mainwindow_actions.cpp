@@ -667,6 +667,10 @@ void MainWindow::setupActions()
     m_otioExport = new OtioExport(this);
     connect(exportAction, &QAction::triggered, m_otioExport, &OtioExport::slotExport);
     addAction(QStringLiteral("export_project"), exportAction);
+    QAction *edlExportAction = new QAction(QIcon::fromTheme(QStringLiteral("document-export")), i18n("E&DL Export…"), this);
+    m_edlExport = new EdlExport(this);
+    connect(edlExportAction, &QAction::triggered, m_edlExport, &EdlExport::slotExport);
+    addAction(QStringLiteral("export_edl"), edlExportAction);
     QAction *importAction = new QAction(QIcon::fromTheme(QStringLiteral("document-import")), i18n("OpenTimelineIO &Import…"), this);
     m_otioImport = new OtioImport(this);
     connect(importAction, &QAction::triggered, m_otioImport, &OtioImport::slotImport);

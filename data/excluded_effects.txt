@@ -321,7 +321,6 @@ avfilter.lutrgb
 avfilter.lutyuv
 avfilter.nnedi
 avfilter.pad
-avfilter.perspective
 avfilter.rotate
 avfilter.swaprect
 avfilter.tlut2

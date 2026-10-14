@@ -36,6 +36,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 
 #include "bin/bin.h"
 #include "definitions.h"
+#include "export/edlexport.h"
 #include "jobs/abstracttask.h"
 #include "otio/otioexport.h"
 #include "otio/otioimport.h"
@@ -262,6 +263,7 @@ private:
 
     OtioExport *m_otioExport{nullptr};
     OtioImport *m_otioImport{nullptr};
+    EdlExport *m_edlExport{nullptr};
     KColorSchemeManager *m_colorschemes;
     ScopeManager *m_scopesManager{nullptr};
     KDDockWidgets::QtWidgets::MainWindow *mainDockWindow;

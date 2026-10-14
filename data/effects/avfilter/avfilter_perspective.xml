@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<!DOCTYPE kpartgui>
+<effect xmlns="https://www.kdenlive.org" tag="avfilter.perspective" id="avfilter.perspective">
+    <name>Corner Pin</name>
+    <description>Distort the clip by shifting its four corners. Use it to stretch, shrink, skew or simulate perspective, for example to fit a screen replacement into a moving shot</description>
+    <author>libavfilter</author>
+    <parameter type="constant" name="av.x0" default="0" min="0" max="%width" factor="1" decimals="2">
+        <name>Upper Left X</name>
+        <comment>X position (in pixels) of the clip's upper left corner</comment>
+    </parameter>
+    <parameter type="constant" name="av.y0" default="0" min="0" max="%height" factor="1" decimals="2">
+        <name>Upper Left Y</name>
+        <comment>Y position (in pixels) of the clip's upper left corner</comment>
+    </parameter>
+    <parameter type="constant" name="av.x1" default="%width" min="0" max="%width" factor="1" decimals="2">
+        <name>Upper Right X</name>
+        <comment>X position (in pixels) of the clip's upper right corner</comment>
+    </parameter>
+    <parameter type="constant" name="av.y1" default="0" min="0" max="%height" factor="1" decimals="2">
+        <name>Upper Right Y</name>
+        <comment>Y position (in pixels) of the clip's upper right corner</comment>
+    </parameter>
+    <parameter type="constant" name="av.x2" default="0" min="0" max="%width" factor="1" decimals="2">
+        <name>Lower Left X</name>
+        <comment>X position (in pixels) of the clip's lower left corner</comment>
+    </parameter>
+    <parameter type="constant" name="av.y2" default="%height" min="0" max="%height" factor="1" decimals="2">
+        <name>Lower Left Y</name>
+        <comment>Y position (in pixels) of the clip's lower left corner</comment>
+    </parameter>
+    <parameter type="constant" name="av.x3" default="%width" min="0" max="%width" factor="1" decimals="2">
+        <name>Lower Right X</name>
+        <comment>X position (in pixels) of the clip's lower right corner</comment>
+    </parameter>
+    <parameter type="constant" name="av.y3" default="%height" min="0" max="%height" factor="1" decimals="2">
+        <name>Lower Right Y</name>
+        <comment>Y position (in pixels) of the clip's lower right corner</comment>
+    </parameter>
+    <parameter type="list" name="av.interpolation" default="0" paramlist="0;1">
+        <name>Interpolation</name>
+        <comment>Interpolation method used to remap the pixels</comment>
+        <paramlistdisplay>Linear,Cubic</paramlistdisplay>
+    </parameter>
+    <parameter type="list" name="av.sense" default="1" paramlist="0;1">
+        <name>Sense</name>
+        <comment><![CDATA[<b>Destination</b> (default) moves the clip's corners to the positions entered above.<br>
+<b>Source</b> instead grabs the quad described by the positions from the clip and stretches it to fill the whole frame.]]></comment>
+        <paramlistdisplay>Source,Destination</paramlistdisplay>
+    </parameter>
+</effect>

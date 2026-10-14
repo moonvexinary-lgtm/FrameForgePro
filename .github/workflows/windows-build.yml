@@ -1,0 +1,121 @@
+# FrameForge Pro — remote Windows build & test (GitHub Actions)
+#
+# Strategy (compatible with the "no local build environment" constraint):
+#   Phase 1 (cached): KDE Craft builds the dependency chain (Qt 6, KDE
+#   Frameworks, MLT 7, OpenTimelineIO, Imath, KDDockWidgets) from the
+#   official KDE blueprints on the runner. Restored via actions/cache, so
+#   only the first run pays the full dependency cost (~60-120 min); warm
+#   runs restore in minutes.
+#   Phase 2 (every run): the FrameForge/Kdenlive checkout is configured,
+#   built and ctest-tested against the Craft-installed dependencies, using
+#   Craft's environment script. The Catch2 suite includes the FrameForge
+#   DSP tests (levels, extract, dehummer, etc.) written in earlier slices.
+#
+# First-run expectations (honest): the Craft bootstrap block below follows
+# the documented CraftMaster pattern, but the settings schema and the env
+# activation are the two blocks that may need one iteration on the first
+# remote run. Reference: https://invent.kde.org/packaging/craftmaster
+# and the Craft docs (https://craft.kde.org/docs/).
+#
+# No secrets are required; the repository is public-friendly (GPL-3.0
+# source availability is already an obligation of the project).
+
+name: Windows Build & Test
+
+on:
+  # Manual trigger only for now: the push must be verified before any
+  # remote build starts (user requirement). Flip back to push/pull_request
+  # triggers once the first verified build is approved.
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    env:
+      CRAFT_MASTER: ${{ github.workspace }}\craftmaster
+      CRAFT_ROOT: ${{ github.workspace }}\craft
+      CRAFT_SETTINGS: ${{ github.workspace }}\craft-settings.ini
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python (CraftMaster)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache Craft workspace (downloads/build/install/cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            craft/downloads
+            craft/build
+            craft/install
+            craft/cache
+          key: craft-win-msvc2022-x64-${{ hashFiles('.craft.ini') }}
+          restore-keys: |
+            craft-win-msvc2022-x64-
+
+      # ------------------------------------------------------------------
+      # Phase 1: dependency toolchain via KDE Craft (cached).
+      # TUNE-ON-FIRST-RUN: the settings schema below follows the
+      # CraftMaster README; if the first run rejects it, consult
+      # https://invent.kde.org/packaging/craftmaster and adjust.
+      # ------------------------------------------------------------------
+      - name: Bootstrap CraftMaster and the KDE blueprints
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://invent.kde.org/packaging/craftmaster.git "$env:CRAFT_MASTER"
+          @'
+          [General]
+          Branch = master
+          ShallowClone = True
+
+          [BlueprintSettings]
+          kde/kdemultimedia/kdenlive.version = master
+          '@ | Set-Content -Path "$env:CRAFT_SETTINGS" -Encoding UTF8
+          python "$env:CRAFT_MASTER\craftmaster.py" --config "$env:CRAFT_SETTINGS" --prefix "$env:CRAFT_ROOT" -c
+
+      - name: Install dependencies (craft kdenlive dependency chain)
+        shell: pwsh
+        run: |
+          python "$env:CRAFT_MASTER\craftmaster.py" --config "$env:CRAFT_SETTINGS" --prefix "$env:CRAFT_ROOT" -c --install-deps kde/kdemultimedia/kdenlive
+
+      # ------------------------------------------------------------------
+      # Phase 2: build and test THIS checkout against the Craft-installed
+      # dependencies.
+      # ------------------------------------------------------------------
+      - name: Configure, build and test the FrameForge checkout
+        shell: pwsh
+        run: |
+          # Activate the Craft environment (PATH, CMAKE_PREFIX_PATH, ...)
+          # TUNE-ON-FIRST-RUN: craft ships an environment script in its
+          # root; adjust the filename if the version differs.
+          & "$env:CRAFT_ROOT\craftenv.ps1"
+          cmake -S "$env:GITHUB_WORKSPACE" -B "$env:GITHUB_WORKSPACE\build-frameforge" `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DBUILD_TESTING=ON `
+            -DCMAKE_PREFIX_PATH="$env:CRAFT_ROOT\install"
+          cmake --build "$env:GITHUB_WORKSPACE\build-frameforge" --config RelWithDebInfo --parallel
+          ctest --test-dir "$env:GITHUB_WORKSPACE\build-frameforge" -C RelWithDebInfo --output-on-failure
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: build-frameforge/Testing/
+          retention-days: 14
+
+      - name: Upload built application
+        uses: actions/upload-artifact@v4
+        with:
+          name: frameforge-windows-bin
+          path: |
+            build-frameforge/bin/
+            build-frameforge/*.exe
+          retention-days: 30
+          if-no-files-found: warn

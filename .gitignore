@@ -23,3 +23,6 @@ compile_commands.json
 
 # Artefacts from running KDE CI locally
 kde-ci-reports/*
+
+# FrameForge research archive (large fetched reference pages; extracts + manifest are tracked)
+research/adobe/raw/

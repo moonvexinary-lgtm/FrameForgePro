@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Jean-Baptiste Mardelle <jb@kdenlive.org>
 
 INSTALL(FILES 
+PAL/band_wipe.pgm
+PAL/barn_doors.pgm
 PAL/bi-linear_x.pgm
 PAL/bi-linear_y.pgm
 PAL/burst.pgm
@@ -20,9 +22,13 @@ PAL/square.pgm
 PAL/square2-bars.pgm
 PAL/square2.pgm
 PAL/symmetric_clock.pgm
+PAL/wedge.pgm
+PAL/zigzag_blocks.pgm
 DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX}/lumas/PAL)
 
 INSTALL(FILES 
+HD/band_wipe.pgm
+HD/barn_doors.pgm
 HD/bi-linear_x.pgm
 HD/bi-linear_y.pgm
 HD/burst.pgm
@@ -41,4 +47,6 @@ HD/square.pgm
 HD/square2-bars.pgm
 HD/square2.pgm
 HD/symmetric_clock.pgm
+HD/wedge.pgm
+HD/zigzag_blocks.pgm
 DESTINATION ${KDE_INSTALL_DATADIR}${DATA_INSTALL_PREFIX}/lumas/HD)

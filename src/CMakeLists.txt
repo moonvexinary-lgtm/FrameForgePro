@@ -47,6 +47,8 @@ add_subdirectory(capture)
 add_subdirectory(dialogs)
 add_subdirectory(doc)
 add_subdirectory(effects)
+add_subdirectory(export)
+add_subdirectory(frameforge)
 add_subdirectory(jobs)
 add_subdirectory(lib)
 add_subdirectory(library)
@@ -208,16 +210,16 @@ qt_add_resources(kdenlive_extra_SRCS icons.qrc uiresources.qrc)
 ## The svg (or svgz) icon must be provided first to be used on MacOS
 set(ICONS_FOLDER ${CMAKE_CURRENT_SOURCE_DIR}/../data/icons)
 set(ICON_FILES
-  ${ICONS_FOLDER}/sc-apps-kdenlive.svg
-  ${ICONS_FOLDER}/16-apps-kdenlive.png
-  ${ICONS_FOLDER}/22-apps-kdenlive.png
-  ${ICONS_FOLDER}/32-apps-kdenlive.png
-  ${ICONS_FOLDER}/48-apps-kdenlive.png
-  ${ICONS_FOLDER}/64-apps-kdenlive.png
-  ${ICONS_FOLDER}/128-apps-kdenlive.png
-  ${ICONS_FOLDER}/256-apps-kdenlive.png
-  ${ICONS_FOLDER}/512-apps-kdenlive.png
-  ${ICONS_FOLDER}/1024-apps-kdenlive.png
+  ${ICONS_FOLDER}/sc-apps-frameforge.svg
+  ${ICONS_FOLDER}/16-apps-frameforge.png
+  ${ICONS_FOLDER}/22-apps-frameforge.png
+  ${ICONS_FOLDER}/32-apps-frameforge.png
+  ${ICONS_FOLDER}/48-apps-frameforge.png
+  ${ICONS_FOLDER}/64-apps-frameforge.png
+  ${ICONS_FOLDER}/128-apps-frameforge.png
+  ${ICONS_FOLDER}/256-apps-frameforge.png
+  ${ICONS_FOLDER}/512-apps-frameforge.png
+  ${ICONS_FOLDER}/1024-apps-frameforge.png
 )
 ecm_add_app_icon(kdenlive ICONS ${ICON_FILES})
 
