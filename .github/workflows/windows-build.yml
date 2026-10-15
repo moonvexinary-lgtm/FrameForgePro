@@ -97,6 +97,7 @@ jobs:
 
           [windows-msvc2022_64-cl-BlueprintSettings]
           kde/kdemultimedia/kdenlive.version = master
+          libs/frei0r-plugins.cmakeArgs = -DBUILD_TESTING=OFF
           '@ -replace '\$\{\{ github\.workspace \}\}', '$env:GITHUB_WORKSPACE' -replace '\$\{\{ env\.pythonLocation \}\}', '$env:pythonLocation' | Set-Content -Path "$env:CRAFT_SETTINGS" -Encoding UTF8
           # 3. Pre-clone the KDE blueprints and register them as a
           #    blueprint location via Blueprints/Locations.
