@@ -5,6 +5,8 @@
     SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 */
 
+#include "test_utils.hpp"
+
 #include "frameforge/video/alphaglow.h"
 #include "frameforge/video/cineon.h"
 #include "frameforge/video/edgefeather.h"
