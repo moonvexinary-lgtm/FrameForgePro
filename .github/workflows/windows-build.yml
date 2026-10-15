@@ -133,11 +133,17 @@ jobs:
                 $newLines += '            "-DMOD_GLAXNIMATE_QT6=OFF",'
                 $newLines += '            "-DMOD_PLUSGPL=OFF",'
                 $newLines += '            "-DMOD_RTAUDIO=OFF",'
+                $newLines += '            "-DMOD_JACKRACK=OFF",'
+                $newLines += '            "-DMOD_OPENFX=OFF",'
+                $newLines += '            "-DMOD_SPATIALAUDIO=OFF",'
+                $newLines += '            "-DMOD_RUBBERBAND=OFF",'
                 $alreadyPatched = $true
               } elseif ($line -match 'MOD_PLUSGPL' -and $alreadyPatched) {
-                # Skip the original PLUSGPL line (already patched above)
               } elseif ($line -match 'MOD_RTAUDIO' -and $alreadyPatched) {
-                # Skip the original RTAUDIO line (already patched above)
+              } elseif ($line -match 'MOD_JACKRACK' -and $alreadyPatched) {
+              } elseif ($line -match 'MOD_OPENFX' -and $alreadyPatched) {
+              } elseif ($line -match 'MOD_SPATIALAUDIO' -and $alreadyPatched) {
+              } elseif ($line -match 'MOD_RUBBERBAND' -and $alreadyPatched) {
               } else {
                 $newLines += $line
               }
