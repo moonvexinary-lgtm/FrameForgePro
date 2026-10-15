@@ -61,11 +61,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            craft
-          key: craft-win-msvc2022-${{ hashFiles('.craft.ini') }}-${{ github.run_id }}
+            craft/install
+          key: craft-install-win-msvc2022-${{ hashFiles('.craft.ini') }}
           restore-keys: |
-            craft-win-msvc2022-${{ hashFiles('.craft.ini') }}-
-            craft-win-msvc2022-
+            craft-install-win-msvc2022-
 
       - name: Bootstrap CraftMaster, Craft and the KDE blueprints
         shell: pwsh
@@ -107,12 +106,19 @@ jobs:
           }
           # Patch: disable frei0r test compilation on MSVC (the test files
           # use POSIX headers unistd.h/libgen.h that don't exist on MSVC).
+          # Simple line insertion after the WITHOUT_CAIRO line.
           $frei0rPy = "$bpDir\libs\frei0r-plugins\frei0r-plugins.py"
           if ((Test-Path $frei0rPy) -and -not (Select-String -Path $frei0rPy -Pattern 'BUILD_TESTING' -Quiet)) {
-            $content = Get-Content $frei0rPy -Raw
-            $content = $content -replace '"-DWITHOUT_CAIRO=.*\]', "-DWITHOUT_CAIRO=`$(`$self.subinfo.options.isActive('libs/cairo').inverted.asOnOff))",`n            "-DBUILD_TESTING=OFF",`n        ]"
-            Set-Content -Path $frei0rPy -Value $content -Encoding UTF8
-            "Patched frei0r blueprint: BUILD_TESTING=OFF"
+            $lines = Get-Content $frei0rPy
+            $newLines = @()
+            foreach ($line in $lines) {
+              $newLines += $line
+              if ($line -match 'WITHOUT_CAIRO') {
+                $newLines += '            "-DBUILD_TESTING=OFF",'
+              }
+            }
+            $newLines | Set-Content -Path $frei0rPy -Encoding UTF8
+            "Patched frei0r blueprint: BUILD_TESTING=OFF added"
           }
           Get-Content "$env:CRAFT_SETTINGS"
 
