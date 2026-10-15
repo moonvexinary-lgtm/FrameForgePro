@@ -124,11 +124,11 @@ jobs:
           }
           # Patch MLT: disable glaxnimate module (tarball lacks the git submodule)
           $mltPy = "$bpDir\libs\mlt\mlt.py"
-          if ((Test-Path $mltPy) -and -not (Select-String -Path $mltPy -Pattern 'GLAXNIMATE_QT6=OFF' -Quiet)) {
+          if ((Test-Path $mltPy) -and (Select-String -Path $mltPy -Pattern 'GLAXNIMATE_QT6.*isActive' -Quiet)) {
             $content = Get-Content $mltPy -Raw
-            $content = $content -replace "isActive\('libs/libarchive'\)", "isActive('libs/nonexistent-pkg')"
+            $content = $content -replace [regex]::Escape("f`"-DMOD_GLAXNIMATE_QT6={self.subinfo.options.isActive('libs/libarchive').asOnOff}`",""), '"-DMOD_GLAXNIMATE_QT6=OFF",'
             Set-Content -Path $mltPy -Value $content -Encoding UTF8
-            "Patched MLT blueprint: GLAXNIMATE_QT6=OFF (tarball has no submodule)"
+            "Patched MLT blueprint: GLAXNIMATE_QT6=OFF hardcoded (tarball has no submodule)"
           }
           Get-Content "$env:CRAFT_SETTINGS"
           # 4. Pre-clone MLT (the recursive git clone fails on the runner;
