@@ -174,9 +174,12 @@ jobs:
       - name: Configure, build and test the FrameForge checkout
         shell: pwsh
         run: |
-          # Activate the Craft environment (PATH, CMAKE_PREFIX_PATH, ...)
-          & "$env:CRAFT_ROOT\$env:CRAFT_TARGET\craft\craftenv.ps1"
+          # Set the craft environment manually (craftenv.ps1 uses console
+          # UI tricks that fail on headless CI runners)
           $prefix = "$env:CRAFT_ROOT\$env:CRAFT_TARGET\install"
+          $env:PATH = "$prefix\bin;$env:CRAFT_ROOT\$env:CRAFT_TARGET\dev-utils\bin;$env:PATH"
+          $env:CMAKE_PREFIX_PATH = "$prefix"
+          $env:PKG_CONFIG_PATH = "$prefix\lib\pkgconfig"
           cmake -S "$env:GITHUB_WORKSPACE" -B "$env:GITHUB_WORKSPACE\build-frameforge" `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DBUILD_TESTING=ON `
