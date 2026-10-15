@@ -5,6 +5,8 @@
     SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 */
 
+#include "test_utils.hpp"
+
 #include "frameforge/audio/dehummer.h"
 
 #include <cmath>
