@@ -122,6 +122,14 @@ jobs:
             $newLines | Set-Content -Path $frei0rPy -Encoding UTF8
             "Patched frei0r blueprint: BUILD_TESTING=OFF added"
           }
+          # Patch MLT: disable glaxnimate module (tarball lacks the git submodule)
+          $mltPy = "$bpDir\libs\mlt\mlt.py"
+          if ((Test-Path $mltPy) -and -not (Select-String -Path $mltPy -Pattern 'GLAXNIMATE_QT6=OFF' -Quiet)) {
+            $content = Get-Content $mltPy -Raw
+            $content = $content -replace "isActive\('libs/libarchive'\)", "isActive('libs/nonexistent-pkg')"
+            Set-Content -Path $mltPy -Value $content -Encoding UTF8
+            "Patched MLT blueprint: GLAXNIMATE_QT6=OFF (tarball has no submodule)"
+          }
           Get-Content "$env:CRAFT_SETTINGS"
           # 4. Pre-clone MLT (the recursive git clone fails on the runner;
           #    cloning without submodules to the expected path so craft
