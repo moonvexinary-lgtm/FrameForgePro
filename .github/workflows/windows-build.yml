@@ -122,6 +122,15 @@ jobs:
             "Patched frei0r blueprint: BUILD_TESTING=OFF added"
           }
           Get-Content "$env:CRAFT_SETTINGS"
+          # 4. Pre-clone MLT (the recursive git clone fails on the runner;
+          #    cloning without submodules to the expected path so craft
+          #    finds it already there and skips its own clone).
+          $mltDir = "$env:CRAFT_ROOT\download\git\libs\mlt"
+          if (-not (Test-Path $mltDir)) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $mltDir) | Out-Null
+            git clone --depth 1 https://github.com/mltframework/mlt.git "$mltDir"
+            "MLT pre-cloned (no submodules)"
+          }
 
       - name: Install dependencies (craft kdenlive dependency chain)
         shell: pwsh
