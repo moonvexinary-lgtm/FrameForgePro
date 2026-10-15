@@ -52,7 +52,7 @@ void boxBlurAlpha(uint8_t *rgba, size_t stride, int width, int height, int radiu
             const int bottom = std::min(height - 1, y + radius);
             const int count = bottom - top + 1;
             uint8_t *pixel = rgba + y * stride + static_cast<size_t>(x) * 4;
-            pixel[3] = static_cast<uint8_t>(std::clamp(std::lroundf((prefix[bottom + 1] - prefix[top]) / static_cast<float>(count)), 0.0f, 255.0f));
+            pixel[3] = static_cast<uint8_t>(std::clamp(std::lroundf((prefix[bottom + 1] - prefix[top]) / static_cast<float>(count)), 0L, 255L));
         }
     }
 }
