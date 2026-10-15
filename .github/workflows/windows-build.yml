@@ -90,6 +90,7 @@ jobs:
           Packager/UseCache = True
           ContinuousIntegration/Enabled = True
           Blueprints/Locations = ${{ github.workspace }}\craft\kde-blueprints
+          Portage/Ignores = libs/frei0r-plugins;libs/frei0r-bigsh0t
 
           [windows-msvc2022_64-cl]
           General/ABI = windows-cl-msvc2022-x86_64
