@@ -88,6 +88,7 @@ jobs:
           BlueprintVersions/EnableDailyUpdates = False
           Packager/UseCache = True
           ContinuousIntegration/Enabled = True
+          ContinuousIntegration/ClearBuildFolder = True
           Blueprints/Locations = ${{ github.workspace }}\craft\kde-blueprints
           Portage/Ignores = libs/frei0r-plugins;libs/frei0r-bigsh0t
 
