@@ -138,6 +138,13 @@ jobs:
             $newLines | Set-Content -Path $mltPy -Encoding UTF8
             "Patched MLT blueprint: GLAXNIMATE_QT6=OFF (line replacement)"
           }
+          # Also disable plusgpl/rtaudio modules (POSIX headers on MSVC)
+          if ((Test-Path $mltPy) -and -not (Select-String -Path $mltPy -Pattern 'MOD_PLUSGPL=OFF' -Quiet)) {
+            $content = Get-Content $mltPy -Raw
+            $content = $content -replace '"-DMOD_GLAXNIMATE_QT6=OFF",', '"-DMOD_GLAXNIMATE_QT6=OFF",`n            "-DMOD_PLUSGPL=OFF",`n            "-DMOD_RTAUDIO=OFF",'
+            Set-Content -Path $mltPy -Value $content -Encoding UTF8
+            "Patched MLT blueprint: PLUSGPL=OFF, RTAUDIO=OFF (POSIX headers on MSVC)"
+          }
           Get-Content "$env:CRAFT_SETTINGS"
           # 4. Pre-clone MLT (the recursive git clone fails on the runner;
           #    cloning without submodules to the expected path so craft
