@@ -184,6 +184,32 @@ jobs:
             -DCMAKE_PREFIX_PATH="$craftPrefix"
           cmake --build "$env:GITHUB_WORKSPACE\build-frameforge" --config RelWithDebInfo --parallel
 
+      - name: Deploy runtime DLLs
+        shell: pwsh
+        run: |
+          # Copy all craft-installed DLLs and data into the exe directory
+          # so the application is self-contained
+          $craftPrefix = "$env:CRAFT_ROOT\$env:CRAFT_TARGET"
+          $exeDir = "$env:GITHUB_WORKSPACE\build-frameforge\bin\RelWithDebInfo"
+          Copy-Item "$craftPrefix\bin\*.dll" $exeDir -Force
+          # Copy the plugin directories (Qt plugins, KDE plugins, MLT modules)
+          if (Test-Path "$craftPrefix\plugins") {
+            Copy-Item "$craftPrefix\plugins" "$exeDir\plugins" -Recurse -Force
+          }
+          if (Test-Path "$craftPrefix\lib") {
+            Copy-Item "$craftPrefix\lib" "$exeDir\lib" -Recurse -Force
+          }
+          if (Test-Path "$craftPrefix\share") {
+            Copy-Item "$craftPrefix\share" "$exeDir\share" -Recurse -Force
+          }
+          if (Test-Path "$craftPrefix\data") {
+            Copy-Item "$craftPrefix\data" "$exeDir\data" -Recurse -Force
+          }
+          # Remove test executables to reduce artifact size
+          Get-ChildItem $exeDir -Filter "*test.exe" | Remove-Item -Force
+          Get-ChildItem $exeDir -Filter "*benchmark.exe" | Remove-Item -Force
+          "Deployed. Size: $([math]::Round((Get-ChildItem $exeDir -Recurse -File | Measure-Object Length -Sum).Sum/1GB,2)) GB"
+
       - name: Run tests (informational; MLT profile paths fail on runner)
         shell: pwsh
         continue-on-error: true
