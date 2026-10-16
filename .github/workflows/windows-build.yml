@@ -188,7 +188,7 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          ctest --test-dir "$env:GITHUB_WORKSPACE\build-frameforge" -C RelWithDebInfo --output-on-failure
+          ctest --test-dir "$env:GITHUB_WORKSPACE\build-frameforge" -C RelWithDebInfo --output-on-failure --timeout 60
 
       - name: Upload test evidence
         if: always()
