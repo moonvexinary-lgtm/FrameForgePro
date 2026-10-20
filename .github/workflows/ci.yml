@@ -1,8 +1,9 @@
 # FrameForge Pro CI — all compilation and testing is cloud-only (windows-2025).
 # Storage policy: report disk space before and after, no target-dir caching,
-# incremental compilation off, small workspace so no job splitting is needed yet.
-# A problem matcher turns rustc/clippy/cargo error lines into check-run
-# annotations, so the exact failing lines are visible without log access.
+# incremental compilation off.
+# Diagnostics: a problem matcher turns rustc/clippy/cargo error lines into
+# check-run annotations, and on failure every cargo log is pushed to the
+# `ci-diagnostics` branch so failures are readable without log access.
 name: ci
 
 on:
@@ -15,6 +16,9 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   CARGO_NET_RETRY: "10"
+
+permissions:
+  contents: write
 
 jobs:
   windows:
@@ -34,53 +38,52 @@ jobs:
       - name: Toolchain
         run: rustc --version; cargo --version
 
-      - name: Register rust problem matcher (diagnostic only; never fails)
+      - name: Register rust problem matcher
         run: |
-          try {
-            $json = @'
-            {
-              "problemMatcher": [
-                {
-                  "owner": "rust",
-                  "pattern": [
-                    {
-                      "regexp": "^error(?:\\[E\\d+\\])?: (.+)$",
-                      "message": 1
-                    },
-                    {
-                      "regexp": "^\\s*-->\\s*([^:]+):(\\d+):(\\d+)$",
-                      "file": 1,
-                      "line": 2,
-                      "column": 3
-                    }
-                  ]
-                }
-              ]
-            }
-            '@
-            [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/rust-matcher.json", $json)
-            Write-Host "::add-matcher::$env:RUNNER_TEMP/rust-matcher.json"
-          } catch {
-            Write-Host "problem matcher registration failed (continuing without it)"
+          $matcher = @{
+            problemMatcher = @(
+              @{
+                owner = "rust"
+                pattern = @(
+                  @{ regexp = '^error(?:\[[E]\d+\])?: (.+)$'; message = 1 }
+                  @{ regexp = '^\s*-->\s*([^:]+):(\d+):(\d+)$'; file = 1; line = 2; column = 3 }
+                )
+              }
+            )
           }
+          $json = ConvertTo-Json -InputObject $matcher -Depth 10
+          [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/rust-matcher.json", $json)
+          Write-Host "::add-matcher::$env:RUNNER_TEMP/rust-matcher.json"
 
       - name: Formatting (rustfmt --check)
-        run: cargo fmt --all --check
+        if: always()
+        run: |
+          cargo fmt --all --check 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/fmt.log"
+          exit $LASTEXITCODE
 
       - name: Lint (clippy -D warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        if: always()
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/clippy.log"
+          exit $LASTEXITCODE
 
       - name: Type-check (cargo check)
         if: always()
-        run: cargo check --workspace --all-targets
+        run: |
+          cargo check --workspace --all-targets 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/check.log"
+          exit $LASTEXITCODE
 
       - name: Tests (cargo test)
         if: always()
-        run: cargo test --workspace
+        run: |
+          cargo test --workspace 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/test.log"
+          exit $LASTEXITCODE
 
       - name: Release build (frameforge-pro)
         if: always()
-        run: cargo build --release -p frameforge-pro
+        run: |
+          cargo build --release -p frameforge-pro 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/build.log"
+          exit $LASTEXITCODE
 
       - name: Binary self-test
         if: always()
@@ -89,3 +92,22 @@ jobs:
       - name: Disk space (after)
         if: always()
         run: Get-PSDrive C | Select-Object Name, Used, Free | Format-Table
+
+      - name: Publish diagnostics to the ci-diagnostics branch (on failure)
+        if: failure()
+        run: |
+          $dir = "ci-diagnostics/$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          foreach ($f in "fmt.log", "clippy.log", "check.log", "test.log", "build.log") {
+            $p = Join-Path $env:RUNNER_TEMP $f
+            if (Test-Path $p) { Copy-Item $p (Join-Path $dir $f) }
+          }
+          if ((Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) {
+            Write-Host "no logs to publish"
+            exit 0
+          }
+          git config user.name "frameforge-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add ci-diagnostics
+          git commit -q -m "CI diagnostics for run $env:GITHUB_RUN_ID"
+          git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "HEAD:refs/heads/ci-diagnostics"
