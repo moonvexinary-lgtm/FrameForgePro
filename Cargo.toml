@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/moonvexinary-lgtm/FrameForgePro"
+
+[workspace.dependencies]
+# --- FilmCraft: the nonlinear editing engine --------------------------------
+# Pinned to the same revision the EffectCraft workspace builds against (see
+# effectcraft/Cargo.toml), so one copy of each filmcraft crate serves both
+# engines in this workspace.
+filmcraft-time = { git = "https://github.com/storytold/filmcraft", rev = "2c5ba7a72619935f0481f99d59409e0d1844b234" }
+
+# --- EffectCraft: the compositing / motion-graphics engine ------------------
+effectcraft-time = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
+
+# --- FrameForge Pro ----------------------------------------------------------
+frameforge-core = { path = "crates/core" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

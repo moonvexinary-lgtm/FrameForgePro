@@ -1,0 +1,19 @@
+FrameForge Pro
+Copyright 2026 FrameForge Pro contributors
+
+This product includes software developed by the FilmCraft contributors
+(https://github.com/storytold/filmcraft), Copyright (c) 2026 ArtCraft Team and
+the FilmCraft contributors, licensed under MIT OR Apache-2.0.
+
+This product includes software developed by the EffectCraft contributors
+(https://github.com/storytold/effectcraft), Copyright (c) 2026 ArtCraft Team
+and the EffectCraft contributors, licensed under MIT OR Apache-2.0.
+
+The legacy C++/Qt/QML/MLT application this project replaces (preserved on the
+`frameforge-dev` branch and the `frameforge-cpp-legacy` tag; a fork of KDE
+Kdenlive) is GPL-3.0. None of its source code is included in this branch.
+
+FrameForge Pro is an independent project. It is not affiliated with, endorsed
+by, or derived from Adobe Premiere Pro, Adobe After Effects, KDE Kdenlive,
+Blackmagic DaVinci Resolve, or any other product. No proprietary source code,
+artwork, fonts, presets, or assets from any of those products is included.

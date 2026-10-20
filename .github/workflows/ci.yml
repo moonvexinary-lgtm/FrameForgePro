@@ -1,0 +1,54 @@
+# FrameForge Pro CI — all compilation and testing is cloud-only (windows-2025).
+# Storage policy: report disk space before and after, no target-dir caching,
+# incremental compilation off, small workspace so no job splitting is needed yet.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  windows:
+    name: fmt / clippy / check / test / build
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Disk space (before)
+        run: Get-PSDrive C | Select-Object Name, Used, Free | Format-Table
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Toolchain
+        run: rustc --version; cargo --version
+
+      - name: Formatting (rustfmt --check)
+        run: cargo fmt --all --check
+
+      - name: Lint (clippy -D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Type-check (cargo check)
+        run: cargo check --workspace --all-targets
+
+      - name: Tests (cargo test)
+        run: cargo test --workspace
+
+      - name: Release build (frameforge-pro)
+        run: cargo build --release -p frameforge-pro
+
+      - name: Binary self-test
+        run: ./target/release/frameforge-pro.exe
+
+      - name: Disk space (after)
+        if: always()
+        run: Get-PSDrive C | Select-Object Name, Used, Free | Format-Table

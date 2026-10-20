@@ -1,52 +1,56 @@
-![](data/pics/kdenlive-logo.png)
+# FrameForge Pro
 
-# Kdenlive
+A unified, Rust-native video editor for Windows: **FilmCraft's** nonlinear editing engine
+and **EffectCraft's** compositing and motion-graphics engine in one application, with
+Premiere Pro-inspired professional workflows.
 
-Kdenlive is a powerful, free and open-source video editor that brings professional-grade video editing capabilities to everyone. Whether you're creating a simple family video or working on a complex project, Kdenlive provides the tools you need to bring your vision to life.
+> **Status: milestone M1 — the rewrite has begun; the application is not usable as an
+> editor yet.** What exists today: the Rust workspace, the verified shared time
+> foundation, and a cloud build/test pipeline. The Edit / Effects / Color / Audio /
+> Export workspaces are built in the milestones that follow
+> ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Nothing is stubbed or faked: what is
+> not built yet is listed honestly as not built.
 
-For more information about Kdenlive's features, tutorials, and community, please visit our [official website](https://kdenlive.org).
+## One application, two engines
 
-There you can also find downloads for both stable releases and experimental daily builds for Kdenlive.
+| Engine | Provides | Upstream |
+|---|---|---|
+| FilmCraft (`filmcraft-*`) | project model, bins, multitrack timeline, frame-accurate trimming, colour, audio mixing, pure-Rust media codecs, export | [storytold/filmcraft](https://github.com/storytold/filmcraft) |
+| EffectCraft (`effectcraft-*`) | layers, keyframes, masks, the effects catalog, text and shapes, tracking, 3D, GPU compositing with CPU fallback | [storytold/effectcraft](https://github.com/storytold/effectcraft) |
 
-## Contributing to Kdenlive
+Both engines already share the exact same time representation — an integer `Tick` at
+254 016 000 000 per second — which is the property the whole integration stands on.
+`frameforge-core` owns that shared surface, cross-checks it against both engines
+(`verify_foundation`), and grows it as the integration proceeds.
 
-Kdenlive is a community-driven project, and we welcome contributions from everyone! There are many ways to contribute beyond coding:
+## Branches
 
-- Help translate Kdenlive into your language
-- Report and triage bugs
-- Write documentation
-- Create tutorials
-- Help other users on forums and bug trackers
+| Ref | What it is |
+|---|---|
+| `frameforge-dev` | The original C++/Qt/QML/MLT application (Kdenlive fork, GPL-3.0). **Preserved unchanged** as the recoverable pre-rewrite state. |
+| `frameforge-cpp-legacy` (tag) | Marks the last C++ commit (`2601eb5`) before the rewrite. |
+| `frameforge-rust-rewrite` (branch) | **This branch** — the active Rust rewrite. |
 
-Visit [kdenlive.org](https://kdenlive.org) to learn more about non-code contributions.
+The legacy application is not built, bundled, or hidden underneath anything here: it is
+gone from this working tree and remains fully recoverable on the refs above.
 
-## Developer Information
+## Development workflow — cloud builds only
 
-### Technology Stack
+All compilation and testing runs on GitHub Actions; the local machine needs only git
+(plus an optional minimal Rust toolchain for formatting).
 
-Kdenlive is written in C++ and is using these technologies and frameworks:
+1. Edit, commit, push to `frameforge-rust-rewrite`.
+2. CI (`windows-2025`) runs: rustfmt check, clippy (`-D warnings`), `cargo check`,
+   `cargo test`, `cargo build --release`, and the built binary's self-test.
+3. Fix what CI reports; iterate.
 
-- **Core Framework**: MLT for video editing functionality
-- **GUI Framework**: Qt and KDE Frameworks 6
-- **Additional Libraries**: frei0r (video effects), LADSPA (audio effects)
+No local Cargo builds. No Qt, no MSVC Build Tools, no LLVM, no KDE Craft, no CUDA.
 
-### Getting Started
+## License
 
-1. Check out our [build instructions](dev-docs/build.md) to set up your development environment
-2. Familiarize yourself with the [architecture](dev-docs/architecture.md) and [coding guidelines](dev-docs/coding.md)
-4. If the MLT library is new to you check out [MLT Introduction](dev-docs/mlt-intro.md)
-3. Join our Matrix channel `#kdenlive-dev:kde.org` for developer discussions and support
+MIT OR Apache-2.0 — see [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE),
+[NOTICE](NOTICE) and [docs/PROVENANCE.md](docs/PROVENANCE.md).
 
-### Contributing Code
-
-Kdenlive's primary development happens on [KDE Invent](https://invent.kde.org/multimedia/kdenlive). While we maintain a GitHub mirror, all code contributions should be submitted through KDE's GitLab instance. For more information about KDE's development infrastructure, visit the [KDE GitLab documentation](https://community.kde.org/Infrastructure/GitLab).
-
-### Finding Things to Work On
-
-- Browse open issues on [KDE Invent](https://invent.kde.org/multimedia/kdenlive/-/issues), for example those labeled with [First Task](https://invent.kde.org/multimedia/kdenlive/-/issues?label_name%5B%5D=First%20Task)
-- Check the [KDE Bug Tracker](https://bugs.kde.org) for reported issues
-- Look for issues tagged with "good first issue" or "help wanted"
-
-Need help getting started? Join our Matrix channel `#kdenlive-dev:kde.org` - our community is friendly and always ready to help new contributors!
-
-Please get in touch with us before working on a task, either by commenting in the issue or through our Matrix channel.
+No GPL code from the legacy application is included in this branch. FrameForge Pro is
+not affiliated with Adobe, KDE, or Blackmagic; no proprietary code or assets are
+included.

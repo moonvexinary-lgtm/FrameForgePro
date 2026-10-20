@@ -1,0 +1,15 @@
+[package]
+name = "frameforge-core"
+description = "Shared foundation of FrameForge Pro: the representations the FilmCraft editing engine and the EffectCraft compositing engine agree on"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+filmcraft-time = { workspace = true }
+effectcraft-time = { workspace = true }
+
+[lints]
+workspace = true
