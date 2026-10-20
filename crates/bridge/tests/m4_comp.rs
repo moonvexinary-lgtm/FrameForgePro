@@ -252,7 +252,8 @@ fn m4_relink_heals_missing_media() {
     assert!(peak < 0.01, "the offline slate is silent, got {peak}");
 
     // Relink to the real file: the media heals — same document, now audible.
-    doc.relink(item, wav.to_string_lossy().into_owned()).expect("relink");
+    let wav_path = wav.to_string_lossy().into_owned();
+    doc.relink(item, &wav_path).expect("relink");
     let healed_sources = ProjectSources::build(&doc).expect("healed build");
     let healed = healed_sources.source(item).expect("healed source").audio(0, 4800, 48_000).expect("decode");
     let peak = healed.channels.iter().flat_map(|c| c.iter()).fold(0.0f32, |m, v| m.max(v.abs()));
