@@ -40,7 +40,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
   `-D warnings`, `cargo check`, `cargo test`, release build, binary self-test,
   disk-space reports before and after. **All compilation is cloud-only.**
 
-## M2 — the integration layer (this commit, CI verdict pending)
+## M2 — the integration layer (✔ CI-verified, run 39371821743)
 
 - **`crates/bridge` (`frameforge-bridge`)**: the layer where the engines meet.
   - [`ComposedSource`] is a `MediaSource` whose frames pass through a chain of
@@ -65,7 +65,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 | # | Milestone | Status |
 |---|---|---|
 | M1 | shared time foundation + cloud CI | ✔ (CI-verified) |
-| M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | in review (this commit; CI verdict in Actions) |
+| M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | ✔ (CI-verified, run 39371821743) |
 | M3 | unified project format (`.ffproj`), media references, effect registry bridge | `.ffproj` v1 + composition model landed in M2; file media, registry audit pending |
 | M4 | unified engine: timeline items reference compositions; nested compositing in the timeline | planned |
 | M5 | application shell: egui workspaces over the unified session | planned |
