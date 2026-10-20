@@ -76,7 +76,7 @@ jobs:
       - name: Tests (cargo test)
         if: always()
         run: |
-          cargo test --workspace 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/test.log"
+          cargo test --workspace -- --show-output 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/test.log"
           exit $LASTEXITCODE
 
       - name: Release build (frameforge-pro)

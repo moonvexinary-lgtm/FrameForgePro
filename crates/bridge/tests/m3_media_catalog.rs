@@ -116,6 +116,7 @@ fn m3_file_media_offline_and_fcproj_import() {
     add_clips(&mut p, item, seq, 24);
     let plain = FrameForgeProject::new(p);
     let plain_sources = ProjectSources::build(&plain).expect("plain sources");
+    assert!(plain_sources.source(item).is_some(), "the file item must have a source");
     let plain_frame = frame6(&plain, seq, &plain_sources);
     let plain_edge = max_edge(&plain_frame);
     assert!(plain_edge > 0.3, "decoded bars must keep hard edges (linear light), got {plain_edge}");
