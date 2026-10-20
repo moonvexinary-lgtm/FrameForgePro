@@ -1,6 +1,8 @@
 # FrameForge Pro CI — all compilation and testing is cloud-only (windows-2025).
 # Storage policy: report disk space before and after, no target-dir caching,
 # incremental compilation off, small workspace so no job splitting is needed yet.
+# A problem matcher turns rustc/clippy/cargo error lines into check-run
+# annotations, so the exact failing lines are visible without log access.
 name: ci
 
 on:
@@ -31,6 +33,33 @@ jobs:
       - name: Toolchain
         run: rustc --version; cargo --version
 
+      - name: Register rust problem matcher
+        run: |
+          $json = @'
+          {
+            "problemMatcher": [
+              {
+                "owner": "rust",
+                "pattern": [
+                  {
+                    "regexp": "^error(?:\\[E\\d+\\])?: (.+)$",
+                    "severity": "error",
+                    "message": 1
+                  },
+                  {
+                    "regexp": "^\\s*-->\\s*([^:]+):(\\d+):(\\d+)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3
+                  }
+                ]
+              }
+            ]
+          }
+          '@
+          [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/rust-matcher.json", $json)
+          Write-Host "::add-matcher::$env:RUNNER_TEMP/rust-matcher.json"
+
       - name: Formatting (rustfmt --check)
         run: cargo fmt --all --check
 
@@ -38,15 +67,19 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Type-check (cargo check)
+        if: always()
         run: cargo check --workspace --all-targets
 
       - name: Tests (cargo test)
+        if: always()
         run: cargo test --workspace
 
       - name: Release build (frameforge-pro)
+        if: always()
         run: cargo build --release -p frameforge-pro
 
       - name: Binary self-test
+        if: always()
         run: ./target/release/frameforge-pro.exe
 
       - name: Disk space (after)
