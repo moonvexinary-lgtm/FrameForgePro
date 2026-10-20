@@ -24,9 +24,11 @@ filmcraft-codecs = { git = "https://github.com/storytold/filmcraft", rev = "6c39
 # The crates used here (time, keyframe, raster, effects) have no filmcraft
 # dependencies, so the two engine families meet only inside frameforge-bridge.
 effectcraft-time = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
+effectcraft-color = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
 effectcraft-keyframe = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
 effectcraft-raster = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
 effectcraft-project = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
+effectcraft-render = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
 effectcraft-effects = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
 
 # --- foundation ---------------------------------------------------------------

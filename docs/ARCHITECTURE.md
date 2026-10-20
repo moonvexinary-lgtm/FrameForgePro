@@ -80,6 +80,22 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
   real frame and is classified (runs / bridge-unsupported); none may panic.
   Counts are reported by the test run, not asserted from documentation.
 
+## M4 — compositions with real layers (in review)
+
+- **The deep integration**: a [`Composition`] can hold a full compositing-engine
+  project whose comp *is* the clip's picture on the timeline. Its source
+  footage layer reads this clip's media through the effect chain, served over
+  the compositing engine's own `FootageSource` seam — text, shapes, solids,
+  masks, blend modes and nested comps render over real footage with the
+  compositing engine's layer compositor, at the exact same ticks.
+- `.ffproj` schema 2: the compositing project serializes inside the document;
+  schema-1 files load unchanged (new fields default).
+- **Tone generators** reconstruct (audio-only media items play).
+- **Relink**: `FrameForgeProject::relink` repoints file media; the offline slate
+  heals the moment the file is back.
+- **`.ecproj` import**: a compositing project's first comp lands on the
+  timeline as an alpha-carrying media item (`import_ecproj`).
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -87,7 +103,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 | M1 | shared time foundation + cloud CI | ✔ (CI-verified, run 39371821743) |
 | M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | ✔ (CI-verified, run 39371821743) |
 | M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | ✔ (CI-verified, run 39379740235) |
-| M4 | unified engine: timeline items reference compositions; nested compositing in the timeline; tone generators; relink API | planned |
+| M4 | compositions with real layers inside the timeline (compositing-engine comps whose footage layer is backed by the editing engine's media); tone generators; relink + healing; `.ecproj` import | in review (this commit; CI verdict in Actions) |
 | M5 | application shell: egui workspaces over the unified session | planned |
 | M6 | feature parity + machine-readable effects/feature registry and audit | planned |
 | M7 | reliability: recovery, cancellation, missing media, audio sync, performance | planned |

@@ -180,7 +180,7 @@ fn m3_effects_registry_audit() {
     let mut ok = 0usize;
     let mut unsupported = 0usize;
     for s in ec {
-        let composition = Composition { effects: vec![EffectLink { effect: s.id.to_string(), enabled: true, params: HashMap::new() }] };
+        let composition = Composition { effects: vec![EffectLink { effect: s.id.to_string(), enabled: true, params: HashMap::new() }], ..Default::default() };
         let source = ComposedSource::new(generator.clone(), composition, 7);
         match source.video_frame(FrameRequest::full(Tick(TICKS_PER_SECOND / 2))) {
             Ok(f) => {

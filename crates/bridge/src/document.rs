@@ -1,6 +1,6 @@
 //! The FrameForge Pro project document (`.ffproj`).
 //!
-//! v1 is the FilmCraft editing project — the timeline, clips, tracks and every
+//! The FilmCraft editing project — the timeline, clips, tracks and every
 //! editing feature that project model carries — plus a compositing
 //! [`Composition`] for each media item that has one (see [`source`]). The
 //! document is plain serde JSON; saving is atomic and checks the text reads
@@ -9,31 +9,69 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use filmcraft_project::{ItemId, Project, keyframe::Param};
+use effectcraft_project::{ItemId as EcItemId, Project as EcProject};
+use filmcraft_media::Generator;
+use filmcraft_media::generators::GeneratorSource;
+use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project, keyframe::Param};
+use filmcraft_time::Tick;
 use serde::{Deserialize, Serialize};
 
 use crate::BridgeError;
 
 /// The schema this build writes. Bumped whenever a saved value changes meaning;
-/// older files get a migration path, newer files a clear refusal.
-pub const FFPROJ_SCHEMA: u32 = 1;
-
-/// A compositing composition attached to a media item: the frames of that item
-/// pass through this effect chain (in order) before the timeline reads them.
+/// files with an older schema still load (new fields carry defaults), newer
+/// files get a clear refusal.
 ///
-/// This is the first-class "open the clip in a compositing workspace" object of
-/// the unified application: the composition belongs to the media item, the way
-/// a composition belongs to a footage item in the compositing engine, while
-/// per-clip editing effects stay where the editing engine keeps them.
+/// * 1 — the FilmCraft editing project + per-item effect-chain compositions
+///   (M2).
+/// * 2 — compositions can also hold a full compositing-engine project with
+///   layers (M4); `ec_project`/`comp`/`source_item` default to `None`, so
+///   schema-1 files read unchanged.
+pub const FFPROJ_SCHEMA: u32 = 2;
+
+/// A compositing composition attached to a media item: what "open the clip in a
+/// compositing workspace" edits.
+///
+/// Two things compose here, in order:
+///
+/// 1. [`effects`](Composition::effects) — the M2 effect chain, applied to the
+///    clip's frames with the editing engine's keyframe system (media time);
+/// 2. the compositing-engine project ([`ec_project`](Composition::ec_project))
+///    — a real composition with layers (text, shapes, solids, nested comps), a
+///    footage layer of which ([`source_item`](Composition::source_item)) is
+///    backed by this clip's media *after* the effect chain, rendered by the
+///    compositing engine's layer compositor.
+///
+/// When a composition has a comp, the clip's frames are the comp's output (the
+/// comp is the picture); without one, the effect chain's output is.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Composition {
     pub effects: Vec<EffectLink>,
+    /// A full compositing-engine project whose layers draw over the clip
+    /// (present when the clip is opened in a compositing workspace).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ec_project: Option<EcProject>,
+    /// The composition inside [`ec_project`](Composition::ec_project) that
+    /// renders this clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comp: Option<EcItemId>,
+    /// The footage item inside [`ec_project`](Composition::ec_project) that
+    /// this clip's media backs: the "source layer" of the compositing
+    /// workspace. Other footage items of an imported project have no picture
+    /// here (they stay offline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_item: Option<EcItemId>,
 }
 
 impl Composition {
-    /// True when no enabled effect would change a frame (the source is used as is).
+    /// True when a compositing-engine composition renders this clip.
+    pub fn has_comp(&self) -> bool {
+        self.comp.is_some() && self.ec_project.is_some()
+    }
+    /// True when no enabled effect or composition would change a frame (the
+    /// source is used as is).
     pub fn is_noop(&self) -> bool {
-        self.effects.iter().all(|e| !e.enabled)
+        !self.effects.iter().any(|e| e.enabled) && !self.has_comp()
     }
 }
 
@@ -95,14 +133,15 @@ impl FrameForgeProject {
         Ok(())
     }
 
-    /// Read a `.ffproj`. A file with a schema this build does not know is a
-    /// clear error, never a silent misread.
+    /// Read a `.ffproj`. Older schemas load (their newer fields default); a file
+    /// with a schema this build does not know yet is a clear error, never a
+    /// silent misread.
     pub fn load(path: &Path) -> Result<Self, BridgeError> {
         let text = std::fs::read_to_string(path)?;
         let doc: Self = serde_json::from_str(&text).map_err(|e| BridgeError::Format(format!("{}: {e}", path.display())))?;
-        if doc.schema != FFPROJ_SCHEMA {
+        if doc.schema > FFPROJ_SCHEMA {
             return Err(BridgeError::Format(format!(
-                "{} was written with schema {} but this build reads and writes schema {FFPROJ_SCHEMA}",
+                "{} was written with schema {} but this build reads up to schema {FFPROJ_SCHEMA}",
                 path.display(),
                 doc.schema
             )));
@@ -119,5 +158,69 @@ impl FrameForgeProject {
         let text = std::fs::read_to_string(path)?;
         let project: Project = serde_json::from_str(&text).map_err(|e| BridgeError::Format(format!("{}: not a FilmCraft project: {e}", path.display())))?;
         Ok(Self::new(project))
+    }
+
+    /// Import an EffectCraft `.ecproj` (the compositing engine's own project
+    /// format). Its first composition becomes a composition attached to a new
+    /// transparent-video media item: the comp is content with alpha, so on the
+    /// timeline it overlays the tracks below it. Footage items inside the
+    /// imported project have no backing here and render offline (their frames
+    /// are not FilmCraft media); a clip opened in the compositing workspace
+    /// gets a proper source layer instead.
+    ///
+    /// Returns the new editing-engine media item that carries the composition.
+    pub fn import_ecproj(&mut self, path: &Path) -> Result<ItemId, BridgeError> {
+        let text = std::fs::read_to_string(path)?;
+        let ec_project = EcProject::from_json(&text).map_err(|e| BridgeError::Format(format!("{}: not an EffectCraft project: {e}", path.display())))?;
+        let Some((comp_id, comp)) = ec_project.items.iter().find_map(|(id, it)| it.as_comp().map(|c| (*id, c.clone()))) else {
+            return Err(BridgeError::Format(format!("{}: no composition to import", path.display())));
+        };
+        let info = GeneratorSource::new(
+            Generator::TransparentVideo,
+            comp.width,
+            comp.height,
+            filmcraft_time::FrameRate { num: comp.frame_rate.num, den: comp.frame_rate.den },
+            Tick(comp.duration.0),
+        )
+        .with_name("Imported Composition")
+        .info()
+        .clone();
+        let item = self.project.add_item(
+            "Imported Composition",
+            Label::Iris,
+            ItemKind::Media(MediaClip {
+                media: MediaRef::Generator(Generator::TransparentVideo),
+                info,
+                interpret: Default::default(),
+                mark_in: None,
+                mark_out: None,
+                markers: Vec::new(),
+                offline: false,
+                proxy: None,
+                identity: None,
+            }),
+            None,
+        );
+        let composition = self.composition_mut(item);
+        composition.ec_project = Some(ec_project);
+        composition.comp = Some(comp_id);
+        Ok(item)
+    }
+
+    /// Point media item `item` at `path` (relink after a file moved). The next
+    /// [`ProjectSources`](crate::ProjectSources) build opens the new path; a
+    /// file that is still missing keeps the offline slate.
+    pub fn relink(&mut self, item: ItemId, path: &str) -> Result<(), BridgeError> {
+        let it = self.project.items.get_mut(&item).ok_or_else(|| BridgeError::Format(format!("cannot relink: there is no item {item:?}")))?;
+        match &mut it.kind {
+            ItemKind::Media(clip) => match &clip.media {
+                MediaRef::File { .. } => {
+                    clip.media = MediaRef::File { path: path.to_string() };
+                    Ok(())
+                }
+                _ => Err(BridgeError::Format(format!("cannot relink: item {item:?} is not file media"))),
+            },
+            _ => Err(BridgeError::Format(format!("cannot relink: item {item:?} is not media"))),
+        }
     }
 }

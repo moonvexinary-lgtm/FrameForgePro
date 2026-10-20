@@ -16,9 +16,11 @@ filmcraft-project = { workspace = true }
 filmcraft-render = { workspace = true }
 filmcraft-export = { workspace = true }
 filmcraft-codecs = { workspace = true }
+effectcraft-color = { workspace = true }
 effectcraft-keyframe = { workspace = true }
 effectcraft-raster = { workspace = true }
 effectcraft-project = { workspace = true }
+effectcraft-render = { workspace = true }
 effectcraft-effects = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

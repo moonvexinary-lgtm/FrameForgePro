@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use effectcraft_effects as fx;
 use effectcraft_raster::Image as FxImage;
+use effectcraft_render::{FootageSource, RenderOpts, Renderer};
+use effectcraft_time::Tick as EcTick;
 use filmcraft_frame::VideoFrame;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_media::{FrameRequest, MediaError, MediaInfo, MediaSource, SharedSource};
@@ -78,24 +80,38 @@ impl MediaSource for ComposedSource {
     }
 
     fn video_frame(&self, req: FrameRequest) -> Result<Arc<VideoFrame>, MediaError> {
-        let frame = self.inner.video_frame(req)?;
         if self.composition.is_noop() {
-            return Ok(frame);
+            return self.inner.video_frame(req);
         }
-        let (w, h) = (frame.width, frame.height);
-        if w == 0 || h == 0 {
-            return Ok(frame);
-        }
-        // RGBA8 in, EffectCraft premultiplied f32, effects, RGBA8 back out.
-        let rgba = frame.to_rgba8();
-        let mut buf = fx::Buf { img: FxImage::from_rgba8(w, h, &rgba), offset: [0.0, 0.0], scale: 1.0 };
-        let layer_size = [f64::from(w), f64::from(h)];
         let rate = self.inner.info().frame_rate();
-        for (i, link) in self.composition.effects.iter().enumerate() {
-            if !link.enabled {
-                continue;
+        // A composition with a compositing-engine comp: the comp IS the picture.
+        // Its source footage layer reads this clip's media through the effect
+        // chain ([`ComposedFootage`]); every layer of the comp — text, shapes,
+        // solids, nested comps — renders over it with the compositing engine's
+        // own layer compositor.
+        if let (Some(project), Some(comp)) = (&self.composition.ec_project, self.composition.comp) {
+            let footage = ComposedFootage {
+                source_item: self.composition.source_item,
+                inner: self.inner.as_ref(),
+                chain: &self.composition.effects,
+                rate,
+                seed: self.seed,
+            };
+            let renderer = Renderer::new(project, &footage, RenderOpts::default());
+            // Both engines measure time in the same ticks, so the timeline time
+            // is the comp time, exactly.
+            let img = renderer.comp_frame(comp, EcTick(req.time.0));
+            let (w, h) = (img.width, img.height);
+            if w == 0 || h == 0 {
+                return self.inner.video_frame(req);
             }
-            buf = apply_link(link, req.time, rate, i, self.seed, layer_size, buf)?;
+            let out = img.to_rgba8();
+            return Ok(Arc::new(VideoFrame::rgba8(w, h, out).with_pts(req.time)));
+        }
+        // Effect-chain-only composition: the chain's output is the picture.
+        let (buf, w, h) = chain_buf(self.inner.as_ref(), &self.composition.effects, req.time, rate, self.seed)?;
+        if w == 0 || h == 0 {
+            return self.inner.video_frame(req);
         }
         let out = layer_rgba(&buf, w, h)?;
         Ok(Arc::new(VideoFrame::rgba8(w, h, out).with_pts(req.time)))
@@ -103,6 +119,57 @@ impl MediaSource for ComposedSource {
 
     fn audio(&self, start: i64, frames: usize, sample_rate: u32) -> Result<filmcraft_frame::AudioBuffer, MediaError> {
         self.inner.audio(start, frames, sample_rate)
+    }
+}
+
+/// Fetch the inner source's frame at editing time `t` and run the composition's
+/// effect chain over it. Returns the (possibly padded) buffer and the frame's
+/// pixel size — the layer rectangle [`layer_rgba`] crops back out.
+fn chain_buf(inner: &dyn MediaSource, effects: &[EffectLink], t: Tick, rate: FrameRate, seed: u32) -> Result<(fx::Buf, u32, u32), MediaError> {
+    let frame = inner.video_frame(FrameRequest::full(t))?;
+    let (w, h) = (frame.width, frame.height);
+    let mut buf = fx::Buf { img: FxImage::from_rgba8(w, h, &frame.to_rgba8()), offset: [0.0, 0.0], scale: 1.0 };
+    let layer_size = [f64::from(w), f64::from(h)];
+    for (i, link) in effects.iter().enumerate() {
+        if !link.enabled {
+            continue;
+        }
+        buf = apply_link(link, t, rate, i, seed, layer_size, buf)?;
+    }
+    Ok((buf, w, h))
+}
+
+/// Serves this clip's media — after its effect chain — to a compositing-engine
+/// project: the comp's source footage layer over the editing engine's decode
+/// pipeline. Other footage items of the project have no picture here (they
+/// stay offline); audio passes through interleaved, as the comp's layer audio
+/// requests it.
+struct ComposedFootage<'a> {
+    /// The compositing-engine footage item this clip's media backs.
+    source_item: Option<effectcraft_project::ItemId>,
+    inner: &'a dyn MediaSource,
+    chain: &'a [EffectLink],
+    rate: FrameRate,
+    seed: u32,
+}
+
+impl FootageSource for ComposedFootage<'_> {
+    fn frame(&self, item: effectcraft_project::ItemId, _footage: &effectcraft_project::Footage, t: EcTick) -> Option<Arc<FxImage>> {
+        if self.source_item != Some(item) {
+            return None;
+        }
+        let (buf, w, h) = chain_buf(self.inner, self.chain, Tick(t.0), self.rate, self.seed).ok()?;
+        let out = layer_rgba(&buf, w, h).ok()?;
+        Some(Arc::new(FxImage::from_rgba8(w, h, &out)))
+    }
+
+    fn audio(&self, item: effectcraft_project::ItemId, _footage: &effectcraft_project::Footage, t: EcTick, frames: usize, rate: u32) -> Option<Vec<f32>> {
+        if self.source_item != Some(item) {
+            return None;
+        }
+        let start = Tick(t.0).to_units_floor(i64::from(rate));
+        let buf = self.inner.audio(start, frames, rate).ok()?;
+        Some(buf.interleaved())
     }
 }
 
@@ -145,10 +212,8 @@ impl ProjectSources {
     }
 }
 
-/// The source of a media clip: a synthetic generator, or a file opened through
-/// the editing engine's codecs. Audio-only generators (Tone) have no video
-/// stream to reconstruct and return `None` until the engine integration opens
-/// them (M4).
+/// The source of a media clip: a synthetic generator (video or audio-only),
+/// or a file opened through the editing engine's codecs.
 fn media_source(clip: &MediaClip) -> Option<SharedSource> {
     match &clip.media {
         MediaRef::Generator(_) => generator_source(clip).map(|g| Arc::new(g) as SharedSource),
@@ -209,11 +274,14 @@ fn layer_rgba(buf: &fx::Buf, w: u32, h: u32) -> Result<Vec<u8>, MediaError> {
     Ok(out)
 }
 
-/// Reconstruct the generator source a media clip describes, when it describes
-/// one with a video stream (a tone-only generator has none; its audio is
-/// opened with file media in a later milestone).
+/// Reconstruct the generator source a media clip describes. Audio-only
+/// generators (Tone) have no video stream: the size and rate never stand for
+/// pixels there, so defaults fill them and the tone plays from the audio side.
 fn generator_source(clip: &MediaClip) -> Option<GeneratorSource> {
     let MediaRef::Generator(generator) = &clip.media else { return None };
-    let video = clip.info.video.as_ref()?;
-    Some(GeneratorSource::new(generator.clone(), video.width, video.height, video.frame_rate, clip.info.duration).with_name(clip.info.name.as_str()))
+    let (w, h, rate) = match clip.info.video.as_ref() {
+        Some(v) => (v.width, v.height, v.frame_rate),
+        None => (320, 240, clip.info.frame_rate()),
+    };
+    Some(GeneratorSource::new(generator.clone(), w, h, rate, clip.info.duration).with_name(clip.info.name.as_str()))
 }
