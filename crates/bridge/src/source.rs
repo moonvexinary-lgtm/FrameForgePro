@@ -97,7 +97,7 @@ impl MediaSource for ComposedSource {
             }
             buf = apply_link(link, req.time, rate, i, self.seed, layer_size, buf)?;
         }
-        let out = buf.img.to_rgba8();
+        let out = layer_rgba(&buf, w, h)?;
         Ok(Arc::new(VideoFrame::rgba8(w, h, out).with_pts(req.time)))
     }
 
@@ -142,6 +142,46 @@ impl ProjectSources {
         }
         Ok(Self { sources })
     }
+}
+
+/// Extracts the original `w` × `h` layer rectangle (layer pixels) from a buffer
+/// the effect chain may have grown or moved, as straight RGBA8.
+///
+/// Effects that keep the layer's geometry (blur, colour, stylize…) pad the
+/// buffer with transparent pixels so light can leave the picture and the edges
+/// soften correctly, the way the compositing engine composites the same
+/// buffer: the layer rectangle is then a sub-rectangle of the buffer, and this
+/// crops it back out — soft alpha edges included. Effects that change the
+/// geometry (`scale`, non-finite offsets, out-of-bounds rectangles) are
+/// reported as unsupported rather than rendered wrongly.
+fn layer_rgba(buf: &fx::Buf, w: u32, h: u32) -> Result<Vec<u8>, MediaError> {
+    let unsupported = |what: &str| Err(MediaError::Unsupported(format!("EffectCraft effect {what}; not supported by the composed-source bridge yet")));
+    if !buf.scale.is_finite() || buf.scale != 1.0 {
+        return unsupported("changed the layer scale");
+    }
+    if !buf.offset[0].is_finite() || !buf.offset[1].is_finite() {
+        return unsupported("moved the layer to a non-finite offset");
+    }
+    let (bw, bh) = (buf.img.width, buf.img.height);
+    let (x0, y0) = (buf.offset[0].round(), buf.offset[1].round());
+    let (x1, y1) = (x0 + f64::from(w), y0 + f64::from(h));
+    if x0 < 0.0 || y0 < 0.0 || x1 > f64::from(bw) || y1 > f64::from(bh) {
+        return unsupported("moved the layer rectangle outside the buffer");
+    }
+    let (x0, y0) = (x0 as usize, y0 as usize);
+    let full = buf.img.to_rgba8();
+    let stride = bw as usize * 4;
+    let row_bytes = w as usize * 4;
+    let mut out = vec![0u8; row_bytes * h as usize];
+    for row in 0..h as usize {
+        let src = (y0 + row) * stride + x0 * 4;
+        let dst = row * row_bytes;
+        let (Some(src_row), Some(dst_row)) = (full.get(src..src + row_bytes), out.get_mut(dst..dst + row_bytes)) else {
+            return unsupported("left the buffer smaller than the layer rectangle");
+        };
+        dst_row.copy_from_slice(src_row);
+    }
+    Ok(out)
 }
 
 /// Reconstruct the generator source a media clip describes, when it describes

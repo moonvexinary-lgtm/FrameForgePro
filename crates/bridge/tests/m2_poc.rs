@@ -19,6 +19,10 @@
 //!    duration, an audio track that is not silent, and a frame that really
 //!    carries the animated blur.
 
+// Tests fail loudly on purpose (the upstream convention): expects here name
+// the invariant that broke. The library keeps the strict never-crash lints.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
