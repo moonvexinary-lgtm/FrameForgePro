@@ -28,7 +28,7 @@ use filmcraft_media::generators::GeneratorSource;
 use filmcraft_media::{FrameRequest, Generator, MediaSource, open_bytes};
 use filmcraft_project::keyframe::{Param, ParamValue};
 use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project, SequenceSettings, TrackKind};
-use filmcraft_render::{Image, RenderOptions, render_sequence};
+use filmcraft_render::{Image, RenderOptions, SourceProvider, render_sequence};
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 use frameforge_bridge::{EffectLink, FrameForgeProject, ProjectSources};
 
@@ -48,8 +48,9 @@ fn build() -> (FrameForgeProject, ItemId, ItemId) {
     let mut project = Project::new("M2 integration proof");
     let generator = GeneratorSource::new(Generator::BarsAndTone, W, H, R, DURATION);
     let info = generator.info().clone();
+    let name = info.name.clone();
     let media = project.add_item(
-        info.name.as_str(),
+        name.as_str(),
         Label::Iris,
         ItemKind::Media(MediaClip {
             media: MediaRef::Generator(Generator::BarsAndTone),
