@@ -11,6 +11,7 @@ use std::path::Path;
 
 use effectcraft_project::{ItemId as EcItemId, Project as EcProject};
 use filmcraft_media::Generator;
+use filmcraft_media::MediaSource;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project, keyframe::Param};
 use filmcraft_time::Tick;

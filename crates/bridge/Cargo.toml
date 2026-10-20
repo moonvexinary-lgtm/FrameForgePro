@@ -16,6 +16,7 @@ filmcraft-project = { workspace = true }
 filmcraft-render = { workspace = true }
 filmcraft-export = { workspace = true }
 filmcraft-codecs = { workspace = true }
+effectcraft-time = { workspace = true }
 effectcraft-color = { workspace = true }
 effectcraft-keyframe = { workspace = true }
 effectcraft-raster = { workspace = true }
