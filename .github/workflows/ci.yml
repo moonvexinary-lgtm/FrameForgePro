@@ -14,6 +14,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
 
 jobs:
   windows:
@@ -33,32 +34,35 @@ jobs:
       - name: Toolchain
         run: rustc --version; cargo --version
 
-      - name: Register rust problem matcher
+      - name: Register rust problem matcher (diagnostic only; never fails)
         run: |
-          $json = @'
-          {
-            "problemMatcher": [
-              {
-                "owner": "rust",
-                "pattern": [
-                  {
-                    "regexp": "^error(?:\\[E\\d+\\])?: (.+)$",
-                    "severity": "error",
-                    "message": 1
-                  },
-                  {
-                    "regexp": "^\\s*-->\\s*([^:]+):(\\d+):(\\d+)$",
-                    "file": 1,
-                    "line": 2,
-                    "column": 3
-                  }
-                ]
-              }
-            ]
+          try {
+            $json = @'
+            {
+              "problemMatcher": [
+                {
+                  "owner": "rust",
+                  "pattern": [
+                    {
+                      "regexp": "^error(?:\\[E\\d+\\])?: (.+)$",
+                      "message": 1
+                    },
+                    {
+                      "regexp": "^\\s*-->\\s*([^:]+):(\\d+):(\\d+)$",
+                      "file": 1,
+                      "line": 2,
+                      "column": 3
+                    }
+                  ]
+                }
+              ]
+            }
+            '@
+            [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/rust-matcher.json", $json)
+            Write-Host "::add-matcher::$env:RUNNER_TEMP/rust-matcher.json"
+          } catch {
+            Write-Host "problem matcher registration failed (continuing without it)"
           }
-          '@
-          [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/rust-matcher.json", $json)
-          Write-Host "::add-matcher::$env:RUNNER_TEMP/rust-matcher.json"
 
       - name: Formatting (rustfmt --check)
         run: cargo fmt --all --check
