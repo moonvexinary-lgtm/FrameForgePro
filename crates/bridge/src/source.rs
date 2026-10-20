@@ -129,7 +129,7 @@ impl ProjectSources {
     /// file import lands (see `docs/ARCHITECTURE.md`, M3).
     pub fn build(doc: &FrameForgeProject) -> Result<Self, BridgeError> {
         let mut ids = Vec::new();
-        doc.project.all_items(&mut ids);
+        doc.project.root.all_items(&mut ids);
         let mut sources = HashMap::new();
         for id in ids {
             let Some((_, clip, _)) = doc.project.resolve_media(id) else { continue };
