@@ -19,7 +19,7 @@ use filmcraft_media::{FrameRequest, Generator, MediaSource, open_bytes};
 use filmcraft_project::keyframe::{Param, ParamValue};
 use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project, SequenceSettings, TrackKind};
 use filmcraft_render::{Image, RenderOptions, SourceProvider, render_sequence};
-use filmcraft_time::{FrameRate, Tick, TimeRange, TICKS_PER_SECOND};
+use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 use frameforge_bridge::{ComposedSource, Composition, EffectLink, FrameForgeProject, ProjectSources, catalog_report, name_collisions};
 
 const R: FrameRate = FrameRate::FPS_24;
@@ -175,12 +175,12 @@ fn m3_effects_registry_audit() {
     // composed-source path (the same code the renderer uses) on a real frame,
     // and is classified. No effect may panic (the test completing is the
     // proof); effects the bridge cannot yet place report a clear error.
-    let gen = Arc::new(GeneratorSource::new(Generator::BarsAndTone, 32, 32, R, Tick(TICKS_PER_SECOND)));
+    let generator = Arc::new(GeneratorSource::new(Generator::BarsAndTone, 32, 32, R, Tick(TICKS_PER_SECOND)));
     let mut ok = 0usize;
     let mut unsupported = 0usize;
     for s in ec {
         let composition = Composition { effects: vec![EffectLink { effect: s.id.to_string(), enabled: true, params: HashMap::new() }] };
-        let source = ComposedSource::new(gen.clone(), composition, 7);
+        let source = ComposedSource::new(generator.clone(), composition, 7);
         match source.video_frame(FrameRequest::full(Tick(TICKS_PER_SECOND / 2))) {
             Ok(f) => {
                 assert_eq!((f.width, f.height), (32, 32), "{} changed the frame size", s.id);
