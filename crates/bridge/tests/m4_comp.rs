@@ -79,20 +79,21 @@ fn comp_project() -> (ecp::Project, ecp::ItemId, ecp::ItemId) {
     };
     let fid = p.add_item("Source", EcLabel::Red, None, ecp::ItemKind::Footage(footage));
     // Top layer first (index 0): white text moving left → right across the clip.
+    // Sized so the whole glyph run stays inside one half at each end.
     let mut text = ecp::build::layer(&mut p, &comp, "Title", ecp::LayerSource::Text, (W, H), None);
     if let Some(pr) = text.props.prop_mut("text/sourceText") {
         pr.value = EcValue::Text(Box::new(TextDoc {
             text: "FrameForge".to_string(),
             font: "Inter".to_string(),
-            size: 40.0,
+            size: 18.0,
             fill: [1.0, 1.0, 1.0, 1.0],
             ..Default::default()
         }));
     }
     if let Some(pos) = text.props.prop_mut("transform/position") {
         pos.keys = vec![
-            Keyframe::new(EcTick::ZERO, EcValue::Vec3([40.0, f64::from(H) / 2.0, 0.0])),
-            Keyframe::new(EcTick(FRAMES * TICKS_PER_SECOND / 24), EcValue::Vec3([f64::from(W) - 40.0, f64::from(H) / 2.0, 0.0])),
+            Keyframe::new(EcTick::ZERO, EcValue::Vec3([20.0, f64::from(H) / 2.0, 0.0])),
+            Keyframe::new(EcTick(FRAMES * TICKS_PER_SECOND / 24), EcValue::Vec3([190.0, f64::from(H) / 2.0, 0.0])),
         ];
     }
     let source_layer = ecp::build::layer(&mut p, &comp, "Source", ecp::LayerSource::Footage { item: fid }, (W, H), None);
