@@ -97,32 +97,36 @@ fn frame(doc: &FrameForgeProject, seq: ItemId, sources: &ProjectSources, f: i64)
     render_sequence(&doc.project, seq, R.tick_of(f), RenderOptions::default(), sources)
 }
 
-/// Horizontal detail energy of the compositor's linear-light image: what a
-/// blur removes. Bars have hard vertical edges, so this is a sharp detector.
-fn sharpness(img: &Image) -> f64 {
-    let luma = |p: [f32; 4]| f64::from(0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]);
-    let mut s = 0.0;
-    for y in (0..img.h).step_by(16) {
-        for x in (0..img.w.saturating_sub(1)).step_by(16) {
-            s += (luma(img.get(x + 1, y)) - luma(img.get(x, y))).abs();
+/// The sharpest horizontal step in the picture: the quantity a blur provably
+/// removes. Raw bars have hard edges (~200 u8 luma per pixel); blur σ spreads
+/// the same step over ~2σ pixels, so the per-pixel maximum falls with σ.
+/// (A summed or sparsely sampled metric measures the wrong thing: total
+/// variation across an edge is blur-invariant, and sparse sampling mostly
+/// misses the few sharp edges it should count.)
+fn max_edge(img: &Image) -> f32 {
+    let luma = |p: [f32; 4]| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+    let mut m = 0.0f32;
+    for y in 0..img.h {
+        for x in 0..img.w.saturating_sub(1) {
+            m = m.max((luma(img.get(x + 1, y)) - luma(img.get(x, y))).abs());
         }
     }
-    s
+    m
 }
 
-/// Same metric on straight RGBA8 bytes (for decoded frames).
-fn sharpness_rgba(rgba: &[u8], w: u32, h: u32) -> f64 {
+/// The same metric on straight RGBA8 bytes (for decoded frames).
+fn max_edge_rgba(rgba: &[u8], w: u32, h: u32) -> f32 {
     let px = |x: u32, y: u32| {
         let i = ((y * w + x) * 4) as usize;
-        0.2126 * f64::from(rgba[i]) + 0.7152 * f64::from(rgba[i + 1]) + 0.0722 * f64::from(rgba[i + 2])
+        0.2126 * f32::from(rgba[i]) + 0.7152 * f32::from(rgba[i + 1]) + 0.0722 * f32::from(rgba[i + 2])
     };
-    let mut s = 0.0;
-    for y in (0..h).step_by(16) {
-        for x in (0..w.saturating_sub(1)).step_by(16) {
-            s += (px(x + 1, y) - px(x, y)).abs();
+    let mut m = 0.0f32;
+    for y in 0..h {
+        for x in 0..w.saturating_sub(1) {
+            m = m.max((px(x + 1, y) - px(x, y)).abs());
         }
     }
-    s
+    m
 }
 
 #[test]
@@ -139,7 +143,7 @@ fn m2_integration_proof() {
     let f12 = frame(&doc, seq, &sources, 12);
     let f36 = frame(&doc, seq, &sources, 36);
     let f60 = frame(&doc, seq, &sources, 60);
-    let (s12, s36, s60) = (sharpness(&f12), sharpness(&f36), sharpness(&f60));
+    let (s12, s36, s60) = (max_edge(&f12), max_edge(&f36), max_edge(&f60));
     assert!(s12 > s36 && s36 > s60, "the keyframed blur must soften the picture over time: {s12} -> {s36} -> {s60}");
 
     // --- 2. time is direction-independent: rendering backward is identical ---
@@ -221,7 +225,7 @@ fn m2_integration_proof() {
     let out_frame = src.video_frame(FrameRequest::full(Tick(3 * TICKS_PER_SECOND / 2))).expect("decode a frame");
     let raw_frame =
         GeneratorSource::new(Generator::BarsAndTone, W, H, R, DURATION).video_frame(FrameRequest::full(Tick(3 * TICKS_PER_SECOND / 2))).expect("raw frame");
-    let (out_s, raw_s) = (sharpness_rgba(&out_frame.to_rgba8(), W, H), sharpness_rgba(&raw_frame.to_rgba8(), W, H));
+    let (out_s, raw_s) = (max_edge_rgba(&out_frame.to_rgba8(), W, H), max_edge_rgba(&raw_frame.to_rgba8(), W, H));
     assert!(out_s < raw_s * 0.5, "the exported frame must carry the blur: {out_s} vs raw {raw_s}");
 
     // The audio decodes and is the tone, not silence.
