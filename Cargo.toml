@@ -11,16 +11,31 @@ repository = "https://github.com/moonvexinary-lgtm/FrameForgePro"
 
 [workspace.dependencies]
 # --- FilmCraft: the nonlinear editing engine --------------------------------
-# Pinned to the same revision the EffectCraft workspace builds against (see
-# effectcraft/Cargo.toml), so one copy of each filmcraft crate serves both
-# engines in this workspace.
-filmcraft-time = { git = "https://github.com/storytold/filmcraft", rev = "2c5ba7a72619935f0481f99d59409e0d1844b234" }
+# Pinned to the audited upstream revision (all filmcraft crates share one rev).
+filmcraft-time = { git = "https://github.com/storytold/filmcraft", rev = "6c3948a36c80e4996d924766ba7157eec4fca85e" }
+filmcraft-frame = { git = "https://github.com/storytold/filmcraft", rev = "6c3948a36c80e4996d924766ba7157eec4fca85e" }
+filmcraft-media = { git = "https://github.com/storytold/filmcraft", rev = "6c3948a36c80e4996d924766ba7157eec4fca85e" }
+filmcraft-project = { git = "https://github.com/storytold/filmcraft", rev = "6c3948a36c80e4996d924766ba7157eec4fca85e" }
+filmcraft-render = { git = "https://github.com/storytold/filmcraft", rev = "6c3948a36c80e4996d924766ba7157eec4fca85e" }
+filmcraft-export = { git = "https://github.com/storytold/filmcraft", rev = "6c3948a36c80e4996d924766ba7157eec4fca85e" }
+filmcraft-codecs = { git = "https://github.com/storytold/filmcraft", rev = "6c3948a36c80e4996d924766ba7157eec4fca85e" }
 
 # --- EffectCraft: the compositing / motion-graphics engine ------------------
+# The crates used here (time, keyframe, raster, effects) have no filmcraft
+# dependencies, so the two engine families meet only inside frameforge-bridge.
 effectcraft-time = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
+effectcraft-keyframe = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
+effectcraft-raster = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
+effectcraft-effects = { git = "https://github.com/storytold/effectcraft", rev = "ef74d82902ba486891b02afa87e42963cc9b84cc" }
 
-# --- FrameForge Pro ----------------------------------------------------------
+# --- foundation ---------------------------------------------------------------
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+thiserror = "2"
+
+# --- FrameForge Pro ------------------------------------------------------------
 frameforge-core = { path = "crates/core" }
+frameforge-bridge = { path = "crates/bridge" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

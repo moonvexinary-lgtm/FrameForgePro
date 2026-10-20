@@ -40,13 +40,33 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
   `-D warnings`, `cargo check`, `cargo test`, release build, binary self-test,
   disk-space reports before and after. **All compilation is cloud-only.**
 
+## M2 — the integration layer (this commit, CI verdict pending)
+
+- **`crates/bridge` (`frameforge-bridge`)**: the layer where the engines meet.
+  - [`ComposedSource`] is a `MediaSource` whose frames pass through a chain of
+    **real EffectCraft effects** (`ec.blur.gaussian` in the proof) before the
+    editing engine's renderer reads them — so preview and export share one
+    picture and there is no second renderer.
+  - Parameters are animated with the **editing engine's keyframe system**
+    (`filmcraft_project::Param`, media time, exact ticks); evaluation is a pure
+    function of time, and the acceptance test proves rendering backward
+    reproduces identical frames.
+  - [`FrameForgeProject`] (`.ffproj` v1): the FilmCraft editing project plus a
+    compositing `Composition` per media item; atomic, round-trip-checked JSON.
+  - Acceptance (`crates/bridge/tests/m2_poc.rs`, run by CI): registry ≥ 300
+    effects → build timeline (synthetic Bars-and-Tone video + audio clips) →
+    keyframed Gaussian Blur → monotonic softening → direction-independent
+    frames → blur-0 identity → save/reopen byte-identical frames → real H.264 +
+    AAC export → reopened and verified (resolution, frame rate, duration, tone
+    present, blur measurable in the decoded frames).
+
 ## Milestones
 
 | # | Milestone | Status |
 |---|---|---|
 | M1 | shared time foundation + cloud CI | ✔ (CI-verified) |
-| M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | next |
-| M3 | unified project format (`.ffproj`), media references, effect registry bridge | planned |
+| M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | in review (this commit; CI verdict in Actions) |
+| M3 | unified project format (`.ffproj`), media references, effect registry bridge | `.ffproj` v1 + composition model landed in M2; file media, registry audit pending |
 | M4 | unified engine: timeline items reference compositions; nested compositing in the timeline | planned |
 | M5 | application shell: egui workspaces over the unified session | planned |
 | M6 | feature parity + machine-readable effects/feature registry and audit | planned |
