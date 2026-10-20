@@ -60,7 +60,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
     AAC export → reopened and verified (resolution, frame rate, duration, tone
     present, blur measurable in the decoded frames).
 
-## M3 — file media, project import, the effects registry (in review)
+## M3 — file media, project import, the effects registry (✔ CI-verified, run 39379740235)
 
 - **File media** (`ProjectSources`): `MediaRef::File` items open through the
   editing engine's codec registry (`filmcraft-codecs` openers) — MP4/MOV/MKV/
@@ -86,7 +86,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 |---|---|---|
 | M1 | shared time foundation + cloud CI | ✔ (CI-verified, run 39371821743) |
 | M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | ✔ (CI-verified, run 39371821743) |
-| M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | in review (this commit; CI verdict in Actions) |
+| M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | ✔ (CI-verified, run 39379740235) |
 | M4 | unified engine: timeline items reference compositions; nested compositing in the timeline; tone generators; relink API | planned |
 | M5 | application shell: egui workspaces over the unified session | planned |
 | M6 | feature parity + machine-readable effects/feature registry and audit | planned |
