@@ -60,14 +60,34 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
     AAC export → reopened and verified (resolution, frame rate, duration, tone
     present, blur measurable in the decoded frames).
 
+## M3 — file media, project import, the effects registry (in review)
+
+- **File media** (`ProjectSources`): `MediaRef::File` items open through the
+  editing engine's codec registry (`filmcraft-codecs` openers) — MP4/MOV/MKV/
+  WAV/stills — and wrap in `ComposedSource` like generators do. A missing or
+  unreadable file is the **offline slate**, never a failure: the project opens,
+  renders, and heals when the file returns.
+- **`.fcproj` import** (`FrameForgeProject::import_fcproj`): a FilmCraft
+  project file is adopted as the editing half of a `.ffproj` (compositions
+  empty). `.ecproj` import (comps → compositions) is M4, with the nested-
+  composition model.
+- **Effects registry** (`catalog`): both engines' catalogs in one
+  machine-readable shape (engine, id, name, category, parameters with
+  defaults, GPU/32-bit badges), plus `name_collisions()` — the cross-engine
+  duplicate audit. `frameforge-pro catalog` prints it as JSON.
+- **Per-effect sweep** (test `m3_effects_registry_audit`, CI): every
+  compositing-engine effect runs through the real composed-source path on a
+  real frame and is classified (runs / bridge-unsupported); none may panic.
+  Counts are reported by the test run, not asserted from documentation.
+
 ## Milestones
 
 | # | Milestone | Status |
 |---|---|---|
-| M1 | shared time foundation + cloud CI | ✔ (CI-verified) |
+| M1 | shared time foundation + cloud CI | ✔ (CI-verified, run 39371821743) |
 | M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | ✔ (CI-verified, run 39371821743) |
-| M3 | unified project format (`.ffproj`), media references, effect registry bridge | `.ffproj` v1 + composition model landed in M2; file media, registry audit pending |
-| M4 | unified engine: timeline items reference compositions; nested compositing in the timeline | planned |
+| M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | in review (this commit; CI verdict in Actions) |
+| M4 | unified engine: timeline items reference compositions; nested compositing in the timeline; tone generators; relink API | planned |
 | M5 | application shell: egui workspaces over the unified session | planned |
 | M6 | feature parity + machine-readable effects/feature registry and audit | planned |
 | M7 | reliability: recovery, cancellation, missing media, audio sync, performance | planned |

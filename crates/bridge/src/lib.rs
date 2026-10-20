@@ -28,10 +28,12 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod catalog;
 pub mod convert;
 pub mod document;
 pub mod source;
 
+pub use catalog::{CatalogEntry, CatalogReport, catalog, catalog_report, name_collisions};
 pub use convert::param_to_value;
 pub use document::{Composition, EffectLink, FFPROJ_SCHEMA, FrameForgeProject};
 pub use source::{ComposedSource, ProjectSources};

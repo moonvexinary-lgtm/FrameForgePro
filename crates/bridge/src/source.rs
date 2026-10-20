@@ -123,24 +123,49 @@ impl ProjectSources {
     /// Build the sources of `doc`.
     ///
     /// Synthetic generator media is reconstructed from the project's own
-    /// `MediaInfo` (no files, nothing to download); an item with a composition
-    /// is wrapped in [`ComposedSource`]. File-based media is not opened at this
-    /// milestone: the renderer draws its offline slate for such items until
-    /// file import lands (see `docs/ARCHITECTURE.md`, M3).
+    /// `MediaInfo`; file media opens through the editing engine's codecs. A
+    /// missing or unreadable file becomes the offline slate — the renderer's
+    /// "media not found" picture — so a project whose media moved still opens
+    /// and renders, and the media plays again once the file is back. An item
+    /// with a composition is wrapped in [`ComposedSource`].
     pub fn build(doc: &FrameForgeProject) -> Result<Self, BridgeError> {
         let mut ids = Vec::new();
         doc.project.root.all_items(&mut ids);
         let mut sources = HashMap::new();
         for id in ids {
             let Some((_, clip, _)) = doc.project.resolve_media(id) else { continue };
-            let Some(inner) = generator_source(clip) else { continue };
+            let Some(inner) = media_source(clip) else { continue };
             let source: SharedSource = match doc.compositions.get(&id) {
-                Some(comp) if !comp.is_noop() => Arc::new(ComposedSource::new(Arc::new(inner), comp.clone(), id.0 as u32)),
-                _ => Arc::new(inner),
+                Some(comp) if !comp.is_noop() => Arc::new(ComposedSource::new(inner, comp.clone(), id.0 as u32)),
+                _ => inner,
             };
             sources.insert(id, source);
         }
         Ok(Self { sources })
+    }
+}
+
+/// The source of a media clip: a synthetic generator, or a file opened through
+/// the editing engine's codecs. Audio-only generators (Tone) have no video
+/// stream to reconstruct and return `None` until the engine integration opens
+/// them (M4).
+fn media_source(clip: &MediaClip) -> Option<SharedSource> {
+    match &clip.media {
+        MediaRef::Generator(_) => generator_source(clip).map(|g| Arc::new(g) as SharedSource),
+        MediaRef::File { path } => Some(file_source(clip, path)),
+    }
+}
+
+/// Open `path` through the editing engine's codecs, or the offline slate when
+/// the file is missing or cannot be opened.
+fn file_source(clip: &MediaClip, path: &str) -> SharedSource {
+    let Ok(bytes) = std::fs::read(std::path::Path::new(path)) else {
+        return Arc::new(filmcraft_media::OfflineSource { info: clip.info.clone() });
+    };
+    let name = std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
+    match filmcraft_media::open_bytes(&name, bytes.into(), &filmcraft_codecs::openers()) {
+        Ok(source) => source,
+        Err(_) => Arc::new(filmcraft_media::OfflineSource { info: clip.info.clone() }),
     }
 }
 

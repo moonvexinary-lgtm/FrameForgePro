@@ -109,4 +109,15 @@ impl FrameForgeProject {
         }
         Ok(doc)
     }
+
+    /// Import a FilmCraft `.fcproj` (the editing engine's own project format:
+    /// the serialized `Project`). The editing project is adopted as-is; the
+    /// document starts without compositing compositions, so a FilmCraft project
+    /// opens in FrameForge Pro with everything FilmCraft wrote and can then
+    /// gain compositions per media item.
+    pub fn import_fcproj(path: &Path) -> Result<Self, BridgeError> {
+        let text = std::fs::read_to_string(path)?;
+        let project: Project = serde_json::from_str(&text).map_err(|e| BridgeError::Format(format!("{}: not a FilmCraft project: {e}", path.display())))?;
+        Ok(Self::new(project))
+    }
 }
