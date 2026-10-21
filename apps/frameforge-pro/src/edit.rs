@@ -343,10 +343,12 @@ fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     // changed — through the same compositor export uses.
     let needs = app.monitor.as_ref().map_or(true, |m| m.frame != frame || m.revision != app.doc.revision || m.seq != seq_id);
     if needs {
-        let rendered = {
-            let sources = app.doc.sources();
-            render_sequence(&app.doc.doc.project, seq_id, app.playhead, RenderOptions::default(), sources)
-        };
+        let playhead = app.playhead;
+        let revision = app.doc.revision;
+        let rendered = app
+            .doc
+            .with_sources(|project, sources| render_sequence(project, seq_id, playhead, RenderOptions::default(), sources))
+            .unwrap_or_else(|| filmcraft_render::Image::new(SEQUENCE_W as usize, SEQUENCE_H as usize));
         let size = (rendered.w as u32, rendered.h as u32);
         let image = pixels::to_color_image(&rendered);
         if let Some(m) = app.monitor.as_mut().filter(|m| m.seq == seq_id) {

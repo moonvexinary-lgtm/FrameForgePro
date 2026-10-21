@@ -45,15 +45,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     let margin = 40.0;
     let inner = egui::Rect::from_min_max(body.min + egui::vec2(margin, margin), body.max - egui::vec2(margin, margin));
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(inner).id_salt("export"));
-    let state = &mut app.export;
     area.heading("Export");
     area.separator();
 
     // Format: only what this build can really encode.
-    let selected_label = FORMATS.get(state.format_index).map(|(_, label, _)| *label).unwrap_or("H.264 (MP4)");
+    let selected_label = FORMATS.get(app.export.format_index).map(|(_, label, _)| *label).unwrap_or("H.264 (MP4)");
     egui::ComboBox::from_id_salt("format").selected_text(selected_label).show_ui(&mut area, |ui| {
         for (index, (_, label, _)) in FORMATS.iter().enumerate() {
-            ui.selectable_value(&mut state.format_index, index, *label);
+            ui.selectable_value(&mut app.export.format_index, index, *label);
         }
     });
     area.label("Formats needing a hardware encoder (H.265, AV1) are not offered until one is registered.");
@@ -61,63 +60,65 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     area.separator();
     area.horizontal(|ui| {
         ui.label("Video bitrate");
-        ui.add(egui::DragValue::new(&mut state.bitrate_kbps).range(500..=100_000).suffix(" kbps"));
+        ui.add(egui::DragValue::new(&mut app.export.bitrate_kbps).range(500..=100_000).suffix(" kbps"));
     });
-    area.checkbox(&mut state.include_audio, "Include audio");
+    area.checkbox(&mut app.export.include_audio, "Include audio");
 
     area.separator();
     area.horizontal(|ui| {
         ui.label("Output file");
-        let mut text = state.path_text.clone();
+        let mut text = app.export.path_text.clone();
         let response = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 90.0));
         if response.changed() {
-            state.path_text = text;
+            app.export.path_text = text;
         }
         if ui.button("Browse…").clicked() {
-            let extension = FORMATS.get(state.format_index).map(|(_, _, e)| *e).unwrap_or("mp4");
+            let extension = FORMATS.get(app.export.format_index).map(|(_, _, e)| *e).unwrap_or("mp4");
             if let Some(path) = rfd::FileDialog::new().add_filter("Output", &[extension]).set_file_name(format!("export.{extension}")).save_file() {
-                state.path_text = path.display().to_string();
-                state.path = Some(path);
+                app.export.path_text = path.display().to_string();
+                app.export.path = Some(path);
             }
         }
     });
 
     area.separator();
-    let can_export = !state.path_text.is_empty() && state.running.is_none() && app.sequence_id().is_some();
+    let can_export = !app.export.path_text.is_empty() && app.export.running.is_none() && app.sequence_id().is_some();
     if area.add_enabled(can_export, egui::Button::new("Export")).clicked() {
         start(app);
     }
 
-    if let Some(running) = &state.running {
+    // Poll the running export (draw first, then take the finished result).
+    let mut finished = None;
+    if let Some(running) = &app.export.running {
         let fraction = running.progress.fraction();
         let rect = area.available_rect_before_wrap();
         let bar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction, 14.0));
         area.painter().rect_filled(bar, 3.0, ui.visuals().selection.bg_fill);
         area.label(format!("Rendering… {:.0}%", fraction * 100.0));
         area.ctx().request_repaint();
-        let finished = running.done.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some(result) = finished {
-            match result {
-                Ok(report) => {
-                    state.result = Some(report);
-                    state.error = None;
-                    app.status = "Export finished".to_string();
-                }
-                Err(e) => {
-                    state.error = Some(e);
-                    app.status = "Export failed".to_string();
-                }
+        finished = running.done.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+    if let Some(result) = finished {
+        match result {
+            Ok(report) => {
+                app.export.result = Some(report);
+                app.export.error = None;
+                app.status = "Export finished".to_string();
             }
-            state.running = None;
+            Err(e) => {
+                app.export.error = Some(e);
+                app.status = "Export failed".to_string();
+            }
         }
+        app.export.running = None;
     }
 
-    if let Some(result) = &state.result {
+    if let Some(result) = &app.export.result {
         area.separator();
         area.label(egui::RichText::new("Done").strong());
         area.label(result);
     }
-    if let Some(error) = &state.error {
+    if let Some(error) = &app.export.error {
         area.separator();
         area.colored_label(egui::Color32::LIGHT_RED, error);
     }
@@ -158,7 +159,8 @@ fn start(app: &mut App) {
     std::thread::spawn(move || {
         let result = match ProjectSources::build(&doc) {
             Ok(sources) => export(&Arc::new(doc.project.clone()), seq, &settings, &sources, &worker_progress)
-                .map(|report| format!("{}\n{} frames, {:.2} s, {:.2} MB", report.path, report.frames, report.seconds, report.bytes as f64 / 1_000_000.0)),
+                .map(|report| format!("{}\n{} frames, {:.2} s, {:.2} MB", report.path, report.frames, report.seconds, report.bytes as f64 / 1_000_000.0))
+                .map_err(|e| e.to_string()),
             Err(e) => Err(format!("{e}")),
         };
         *worker_done.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);

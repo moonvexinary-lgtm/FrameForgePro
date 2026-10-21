@@ -12,7 +12,7 @@ use crate::app::App;
 
 /// The param kinds the shell can edit. The rest are shown read-only — never
 /// faked.
-fn edit_scalar(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
+fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
     let current = |app: &App| -> Option<f64> { app.doc.doc.compositions.get(&item)?.effects.get(effect)?.params.get(&param.id)?.value.as_f64() };
     let mut value = current(app).unwrap_or_else(|| param.default.as_f64());
 
@@ -38,7 +38,7 @@ fn edit_scalar(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge
     }
 }
 
-fn edit_bool(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
+fn edit_bool(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
     let current = app
         .doc
         .doc
@@ -60,7 +60,7 @@ fn edit_bool(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge::
     }
 }
 
-fn edit_choice(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
+fn edit_choice(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
     let EffectParamUi::Popup { options } = &param.ui else { return };
     let current = app
         .doc
@@ -107,18 +107,22 @@ fn edit_color(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge:
         })
         .unwrap_or([1.0, 1.0, 1.0, 1.0]);
     let mut rgb = [current[0], current[1], current[2]];
+    let mut changed = false;
     ui.horizontal(|ui| {
         ui.label(&param.name);
         if ui.color_edit_button_rgb(&mut rgb).changed() {
-            let mut c = current;
-            c[0] = rgb[0];
-            c[1] = rgb[1];
-            c[2] = rgb[2];
-            if let Some(link) = app.doc.doc.composition_mut(item).effects.get_mut(effect) {
-                link.params.insert(param.id.clone(), Param::new(ParamValue::Color(c)));
-            }
+            changed = true;
         }
     });
+    if changed {
+        let mut c = current;
+        c[0] = rgb[0];
+        c[1] = rgb[1];
+        c[2] = rgb[2];
+        if let Some(link) = app.doc.doc.composition_mut(item).effects.get_mut(effect) {
+            link.params.insert(param.id.clone(), Param::new(ParamValue::Color(c)));
+        }
+    }
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {

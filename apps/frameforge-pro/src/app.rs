@@ -32,11 +32,14 @@ pub struct DocState {
 }
 
 impl DocState {
-    pub fn sources(&mut self) -> &ProjectSources {
+    /// The active sequence, read-only, and the built sources together: the
+    /// render path needs both, and this keeps the borrow in one place.
+    pub fn with_sources<R>(&mut self, f: impl FnOnce(&Project, &ProjectSources) -> R) -> Option<R> {
         if self.sources.is_none() {
             self.sources = ProjectSources::build(&self.doc).ok();
         }
-        self.sources.as_ref().expect("sources")
+        let Some(sources) = &self.sources else { return None };
+        Some(f(&self.doc.project, sources))
     }
 
     pub fn mark_dirty(&mut self) {
@@ -93,6 +96,7 @@ impl App {
     }
 
     pub fn from_project(doc: FrameForgeProject, path: Option<PathBuf>) -> App {
+        let seq = doc.project.sequences().next().map(|it| it.id);
         App {
             workspace: Workspace::Edit,
             playhead: Tick::ZERO,
@@ -100,7 +104,7 @@ impl App {
             last: None,
             zoom: 120.0,
             selection: None,
-            seq: doc.project.sequences().next().map(|it| it.id),
+            seq,
             status: "Ready".to_string(),
             export: crate::export::ExportState { include_audio: true, ..Default::default() },
             monitor: None,
