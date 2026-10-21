@@ -1,0 +1,7 @@
+asset:        frameforgepro-icon.ico
+title:        FrameForge Pro application icon
+author:       moonvexinary-lgtm
+source:       original work
+license:      MIT OR Apache-2.0
+added:        2026-10-20 by moonvexinary-lgtm
+notes:        The project owner's icon for FrameForge Pro. Multi-size ICO (9 embedded images); embedded into the Windows executable resource by apps/frameforge-pro/build.rs and decoded at startup for the window icon.

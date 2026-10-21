@@ -107,6 +107,30 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
   two wrong test-side assumptions (centre-position semantics, white-on-white
   measurement), never an engine fault.
 
+## M5 — the application shell (in review)
+
+One native window (egui/wgpu, the stack both engines ship with), the user's
+own icon in the window and the executable, and real workspaces over the
+verified engine — no fake controls:
+
+- **Edit** — the project panel (import: Bars & Tone, Tone, files through the
+  codecs), double-click places a real clip on the timeline, the program
+  monitor renders through the same compositor export uses, the timeline draws
+  real tracks/clips with a scrubbable playhead, clip selection, Delete removes
+  a clip, wall-clock playback (silent — the audio clock arrives with the
+  engine session, M6).
+- **Effects** — the selected clip's composition: the real effect chain with
+  enabled toggles, a searchable catalog of every compositing-engine effect,
+  and live parameter editing (sliders, checkboxes, popups, colors) writing the
+  same document the renderer reads; the comp's layer list, read-only until the
+  compositing workspace (M6).
+- **Export** — only formats with built-in encoders (H.264, ProRes, DNxHR,
+  Motion-JPEG, WAV); a real render on a worker thread with the pipeline's own
+  progress bar; the report shows the written file.
+- Color and Audio appear as clearly-marked planned entries, never fake panels.
+- Trimming, drag edits, undo and keyframing UIs are honestly deferred to M6
+  (the engine session), and the UI says so where it matters.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -115,9 +139,9 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 | M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | ✔ (CI-verified, run 39371821743) |
 | M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | ✔ (CI-verified, run 39379740235) |
 | M4 | compositions with real layers inside the timeline (compositing-engine comps whose footage layer is backed by the editing engine's media); tone generators; relink + healing; `.ecproj` import | ✔ (CI-verified, run 39542160028) |
-| M5 | application shell: egui workspaces over the unified session | planned |
-| M6 | feature parity + machine-readable effects/feature registry and audit | planned |
-| M7 | reliability: recovery, cancellation, missing media, audio sync, performance | planned |
+| M5 | the application shell: an egui window with the user's icon, real workspaces (Edit: project panel, timeline, program monitor; Effects: composition editor with live parameters; Export: real renders with progress), `.ffproj` open/save, media import and clip placement | in review (this commit; CI verdict in Actions) |
+| M6 | full editing engine session: undo, trimming, drag edits, audio playback, keyframing UI, Color and Audio workspaces, panic hook | planned |
+| M7 | feature parity + machine-readable effects/feature registry and audit; reliability: recovery, cancellation, missing media, audio sync, performance | planned |
 | M8 | packaging: Windows release on CI, downloadable artifacts | planned |
 
 ## Dependency policy

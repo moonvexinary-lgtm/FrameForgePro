@@ -33,7 +33,12 @@ pub mod convert;
 pub mod document;
 pub mod source;
 
-pub use catalog::{CatalogEntry, CatalogReport, catalog, catalog_report, name_collisions};
+pub use catalog::{CatalogEntry, CatalogReport, ParamInfo, catalog, catalog_report, effect_name, effect_params, name_collisions};
+/// The compositing engine's value and parameter-UI types, for shells that edit
+/// effect parameters without depending on the engine crates directly.
+pub use effectcraft_keyframe::Value as EffectValue;
+pub use effectcraft_project::ParamUi as EffectParamUi;
+
 pub use convert::param_to_value;
 pub use document::{Composition, EffectLink, FFPROJ_SCHEMA, FrameForgeProject};
 pub use source::{ComposedSource, ProjectSources};

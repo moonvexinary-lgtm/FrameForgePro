@@ -126,3 +126,24 @@ pub struct CatalogReport {
 pub fn catalog_report() -> CatalogReport {
     CatalogReport { collisions: name_collisions(), catalog: catalog() }
 }
+
+/// A parameter of a compositing-engine effect in an ownable form, for the
+/// Effects workspace's parameter editor.
+#[derive(Clone, Debug)]
+pub struct ParamInfo {
+    pub id: String,
+    pub name: String,
+    pub default: Value,
+    pub ui: ParamUi,
+}
+
+/// The display name of a compositing-engine effect by registry id.
+pub fn effect_name(effect: &str) -> Option<&'static str> {
+    fx::find(effect).map(|s| s.name)
+}
+
+/// The parameters of a compositing-engine effect by registry id.
+pub fn effect_params(effect: &str) -> Option<Vec<ParamInfo>> {
+    fx::find(effect)
+        .map(|s| s.params.iter().map(|p| ParamInfo { id: p.id.to_string(), name: p.name.to_string(), default: p.default.clone(), ui: p.ui.clone() }).collect())
+}

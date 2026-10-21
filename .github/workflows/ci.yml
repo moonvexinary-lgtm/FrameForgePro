@@ -87,7 +87,7 @@ jobs:
 
       - name: Binary self-test
         if: always()
-        run: ./target/release/frameforge-pro.exe
+        run: ./target/release/frameforge-pro.exe selftest
 
       - name: Disk space (after)
         if: always()

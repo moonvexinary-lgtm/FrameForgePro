@@ -1,24 +1,71 @@
-//! FrameForge Pro.
+//! FrameForge Pro — the unified desktop application.
 //!
-//! Milestone M3 (see `docs/ARCHITECTURE.md`): the application binary is still
-//! its own self-test, and gains its first real tool command:
+//! One native window over one document: the FilmCraft editing project and the
+//! EffectCraft compositing compositions of a `.ffproj`, with the workspaces
+//! the milestones add one by one (see `docs/ARCHITECTURE.md`).
 //!
-//! * `frameforge-pro` — runs the foundation self-test (real checks, exit code
-//!   reflects them).
-//! * `frameforge-pro catalog` — prints the machine-readable effects registry:
-//!   both engines' catalogs (id, name, category, parameters, GPU/32-bit
-//!   support) and the cross-engine duplicate audit, as JSON.
+//! Command line:
 //!
-//! The desktop workspaces (Edit, Effects, Color, Audio, Export) are built on
-//! this foundation in the following milestones; nothing in this binary is a
-//! placeholder.
+//! * `frameforge-pro` — the application window;
+//! * `frameforge-pro catalog` — the machine-readable effects registry (JSON);
+//! * `frameforge-pro selftest` — the foundation self-test (CI runs this).
+
+mod app;
+mod edit;
+mod effects;
+mod export;
+mod pixels;
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    match std::env::args().nth(1).unwrap_or_default().as_str() {
-        "catalog" => print_catalog(),
-        _ => self_test(),
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("catalog") => print_catalog(),
+        Some("selftest") => self_test(),
+        _ => run_gui(),
+    }
+}
+
+/// The window, taskbar and app-switcher icon: the project's own ICO, decoded
+/// at startup (Explorer's executable icon is embedded by `build.rs`).
+fn app_icon() -> egui::IconData {
+    let ico: &[u8] = include_bytes!("../../assets/frameforgepro-icon.ico");
+    let Ok(decoded) = image::load_from_memory_with_format(ico, image::ImageFormat::Ico) else {
+        return egui::IconData::default();
+    };
+    let rgba = decoded.to_rgba8();
+    egui::IconData { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() }
+}
+
+fn run_gui() -> ExitCode {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("FrameForge Pro")
+            .with_inner_size([1440.0, 900.0])
+            .with_min_inner_size([1000.0, 620.0])
+            .with_icon(app_icon()),
+        ..eframe::NativeOptions::default()
+    };
+    match eframe::run_native("FrameForge Pro", options, Box::new(|_cc| Ok(Box::new(app::App::new())))) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("FrameForge Pro could not open a window: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn print_catalog() -> ExitCode {
+    match serde_json::to_string_pretty(&frameforge_bridge::catalog_report()) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("catalog serialization failed: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -36,19 +83,6 @@ fn self_test() -> ExitCode {
             for f in failures {
                 eprintln!("foundation FAILURE: {f}");
             }
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn print_catalog() -> ExitCode {
-    match serde_json::to_string_pretty(&frameforge_bridge::catalog_report()) {
-        Ok(json) => {
-            println!("{json}");
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("catalog serialization failed: {e}");
             ExitCode::FAILURE
         }
     }
