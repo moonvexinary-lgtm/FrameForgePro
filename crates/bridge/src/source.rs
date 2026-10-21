@@ -97,12 +97,7 @@ impl MediaSource for ComposedSource {
                 rate,
                 seed: self.seed,
             };
-            // Motion blur is off until it is verified against the footage-serving
-            // path (see docs/ARCHITECTURE.md, known limitations): a keyframed
-            // layer over a served footage layer must always render, and blur is
-            // a per-render option, not a correctness property.
-            let opts = RenderOpts { motion_blur: false, ..RenderOpts::default() };
-            let renderer = Renderer::new(project, &footage, opts);
+            let renderer = Renderer::new(project, &footage, RenderOpts::default());
             // Both engines measure time in the same ticks, so the timeline time
             // is the comp time, exactly.
             let img = renderer.comp_frame(comp, EcTick(req.time.0));
