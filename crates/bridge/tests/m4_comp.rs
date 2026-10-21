@@ -206,15 +206,16 @@ fn m4_text_visibility_matrix() {
                 None => pos.value = EcValue::Vec3([75.0, 90.0, 0.0]),
             }
         }
+        let source_layer = fid.map(|fid| ecp::build::layer(&mut ec, &comp, "Source", ecp::LayerSource::Footage { item: fid }, (W, H), None));
         let c = ec.comp_mut(cid).expect("comp");
         c.layers.push(l);
-        if let Some(fid) = fid {
-            c.layers.push(ecp::build::layer(&mut ec, &comp, "Source", ecp::LayerSource::Footage { item: fid }, (W, H), None));
+        if let Some(sl) = source_layer {
+            c.layers.push(sl);
         }
 
         let mut p = Project::new(name);
         let generator = if with_footage { Generator::BarsAndTone } else { Generator::TransparentVideo };
-        let g = GeneratorSource::new(generator, W, H, R, Tick(FRAMES * TICKS_PER_SECOND / 24));
+        let g = GeneratorSource::new(generator.clone(), W, H, R, Tick(FRAMES * TICKS_PER_SECOND / 24));
         let info = g.info().clone();
         let media = add_media(&mut p, MediaRef::Generator(generator), info);
         let seq = p.new_sequence("Main", SequenceSettings { width: W, height: H, frame_rate: R, ..Default::default() }, 1, 0, None);
