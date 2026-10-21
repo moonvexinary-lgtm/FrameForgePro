@@ -1,15 +1,19 @@
-//! The application state: one open document, the workspaces over it, and the
-//! transport. This egui generation has no panel helpers, so the shell lays
-//! out its regions by rect and builds child Uis over them — the same approach
-//! both upstream engines use.
+//! The application state: the editing engine's session owns the editing
+//! project (every edit is a real, undoable engine command), the compositing
+//! compositions live beside it, and the workspaces sit on top. Playback runs
+//! on the audio clock when a sound device exists, the wall clock otherwise.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
+use filmcraft_engine::Session;
 use filmcraft_project::{ClipId, ItemId, Project, SequenceSettings};
 use filmcraft_time::{FrameRate, Tick};
-use frameforge_bridge::{FrameForgeProject, ProjectSources};
+use frameforge_bridge::{Composition, FFPROJ_SCHEMA, FrameForgeProject, ProjectSources};
 
+use crate::audio::Player;
 use crate::export::ExportState;
 
 /// The workspaces. Color and Audio are not built yet: they appear in the bar
@@ -21,60 +25,46 @@ pub enum Workspace {
     Export,
 }
 
-/// The open document and everything derived from it.
-pub struct DocState {
-    pub doc: FrameForgeProject,
+pub const TOP_H: f32 = 38.0;
+pub const STATUS_H: f32 = 22.0;
+
+pub const SEQUENCE_RATE: FrameRate = FrameRate::FPS_24;
+pub const SEQUENCE_W: u32 = 1280;
+pub const SEQUENCE_H: u32 = 720;
+
+pub struct App {
+    /// The editing engine session: owns the editing project, the command
+    /// registry, and the undo history. Every project-changing action the
+    /// shell performs goes through [`Session::execute`].
+    pub session: Session,
+    /// The compositing compositions, keyed by media item — the bridge's half
+    /// of the document (`.ffproj`).
+    pub compositions: HashMap<ItemId, Composition>,
     pub path: Option<PathBuf>,
     pub dirty: bool,
     /// Bumped on every edit; the monitor cache keys on it.
     pub revision: u64,
     sources: Option<ProjectSources>,
-}
 
-impl DocState {
-    /// The active sequence, read-only, and the built sources together: the
-    /// render path needs both, and this keeps the borrow in one place.
-    pub fn with_sources<R>(&mut self, f: impl FnOnce(&Project, &ProjectSources) -> R) -> Option<R> {
-        if self.sources.is_none() {
-            self.sources = ProjectSources::build(&self.doc).ok();
-        }
-        let Some(sources) = &self.sources else { return None };
-        Some(f(&self.doc.project, sources))
-    }
-
-    pub fn mark_dirty(&mut self) {
-        self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
-        self.sources = None;
-    }
-}
-
-pub const TOP_H: f32 = 38.0;
-pub const STATUS_H: f32 = 22.0;
-
-pub struct App {
-    pub doc: DocState,
     pub workspace: Workspace,
     pub playhead: Tick,
     pub playing: bool,
+    /// Wall-clock playback (no audio device, or playback not started yet).
     pub last: Option<Instant>,
-    /// Timeline zoom: pixels per second.
     pub zoom: f32,
     pub selection: Option<ClipId>,
     pub seq: Option<ItemId>,
     pub status: String,
     pub export: ExportState,
     pub monitor: Option<Monitor>,
-    /// The Effects workspace's fallback media item (when no clip is selected).
     pub effects_item: Option<ItemId>,
-    /// The selected effect of that item's composition.
     pub selected_effect: Option<usize>,
-    /// The add-effect search text.
     pub effect_search: String,
-    /// The Edit workspace's left panel width (draggable gutter).
     pub project_w: f32,
-    /// The Edit workspace's timeline height (draggable gutter).
     pub timeline_h: f32,
+    pub player: Player,
+    /// The wall-clock position when audio playback fell back.
+    pub wall_start: Option<Tick>,
 }
 
 /// The cached program-monitor texture and what it was rendered from.
@@ -86,18 +76,24 @@ pub struct Monitor {
     pub size: (u32, u32),
 }
 
-pub const SEQUENCE_RATE: FrameRate = FrameRate::FPS_24;
-pub const SEQUENCE_W: u32 = 1280;
-pub const SEQUENCE_H: u32 = 720;
-
 impl App {
     pub fn new() -> App {
-        App::from_project(FrameForgeProject::new(Project::new("Untitled")), None)
+        App::from_parts(Project::new("Untitled"), HashMap::new(), None, "Ready")
     }
 
-    pub fn from_project(doc: FrameForgeProject, path: Option<PathBuf>) -> App {
-        let seq = doc.project.sequences().next().map(|it| it.id);
+    /// Build the app around an editing project (from a `.ffproj` or fresh).
+    pub fn from_parts(project: Project, compositions: HashMap<ItemId, Composition>, path: Option<PathBuf>, status: &str) -> App {
+        let mut session = Session::default();
+        session.project = Arc::new(project);
+        let seq = session.project.sequences().next().map(|it| it.id);
+        session.state.active_sequence = seq;
         App {
+            session,
+            compositions,
+            path,
+            dirty: false,
+            revision: 0,
+            sources: None,
             workspace: Workspace::Edit,
             playhead: Tick::ZERO,
             playing: false,
@@ -105,48 +101,95 @@ impl App {
             zoom: 120.0,
             selection: None,
             seq,
-            status: "Ready".to_string(),
-            export: crate::export::ExportState { include_audio: true, ..Default::default() },
+            status: status.to_string(),
+            export: ExportState { include_audio: true, ..Default::default() },
             monitor: None,
             effects_item: None,
             selected_effect: None,
             effect_search: String::new(),
             project_w: 250.0,
             timeline_h: 220.0,
-            doc: DocState { doc, path, dirty: false, revision: 0, sources: None },
+            player: Player::new(),
+            wall_start: None,
         }
     }
 
-    /// New project: a sequence at 720p/24 with two video and two audio tracks.
+    /// The whole document (editing project + compositions), for save, export
+    /// and the bridge builders.
+    pub fn document(&self) -> FrameForgeProject {
+        FrameForgeProject { schema: FFPROJ_SCHEMA, project: (*self.session.project).clone(), compositions: self.compositions.clone() }
+    }
+
+    /// Run an engine command; on success the document changed (the monitor
+    /// and sources rebuild).
+    pub fn execute(&mut self, id: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+        let result = self.session.execute(id, params).map_err(|e| e.to_string())?;
+        self.mark_dirty();
+        Ok(result)
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+        self.sources = None;
+    }
+
+    /// The project and the built sources together: the render path needs
+    /// both, and this keeps the borrow in one place.
+    pub fn with_sources<R>(&mut self, f: impl FnOnce(&Project, &ProjectSources) -> R) -> Option<R> {
+        if self.sources.is_none() {
+            self.sources = ProjectSources::build_from(&self.session.project, &self.compositions).ok();
+        }
+        let Some(sources) = &self.sources else { return None };
+        Some(f(&self.session.project, sources))
+    }
+
+    /// A clone of the built sources, for the audio worker.
+    pub fn built_sources(&mut self) -> Option<ProjectSources> {
+        if self.sources.is_none() {
+            self.sources = ProjectSources::build_from(&self.session.project, &self.compositions).ok();
+        }
+        self.sources.clone()
+    }
+
     pub fn new_project(&mut self) {
-        let mut project = Project::new("Untitled");
-        project.new_sequence("Main", SequenceSettings { width: SEQUENCE_W, height: SEQUENCE_H, frame_rate: SEQUENCE_RATE, ..Default::default() }, 2, 2, None);
-        *self = App::from_project(FrameForgeProject::new(project), None);
-        self.status = "New project".to_string();
+        let mut app = App::from_parts(Project::new("Untitled"), HashMap::new(), None, "New project");
+        if let Err(e) =
+            app.execute("file.newSequence", serde_json::json!({"name": "Main", "width": SEQUENCE_W, "height": SEQUENCE_H, "fps": 24, "video": 2, "audio": 2}))
+        {
+            app.status = e;
+        }
+        *self = app;
     }
 
     pub fn open(&mut self, path: PathBuf) {
         match FrameForgeProject::load(&path) {
             Ok(doc) => {
-                *self = App::from_project(doc, Some(path));
-                self.status = "Project opened".to_string();
+                let project = doc.project;
+                let compositions = doc.compositions;
+                *self = App::from_parts(project, compositions, Some(path), "Project opened");
             }
             Err(e) => self.status = format!("{e}"),
         }
     }
 
     pub fn save(&mut self) {
-        let Some(path) = self.doc.path.clone().or_else(|| self.pick_save_path()) else {
-            return;
-        };
-        match self.doc.doc.save(&path) {
+        let Some(path) = self.doc_path_or_pick() else { return };
+        match self.document().save(&path) {
             Ok(()) => {
-                self.doc.path = Some(path);
-                self.doc.dirty = false;
+                self.path = Some(path);
+                self.dirty = false;
                 self.status = "Project saved".to_string();
             }
             Err(e) => self.status = format!("{e}"),
         }
+    }
+
+    fn doc_path_or_pick(&mut self) -> Option<PathBuf> {
+        if let Some(path) = self.path.clone() {
+            return Some(path);
+        }
+        self.pick_save_path()
     }
 
     fn pick_save_path(&mut self) -> Option<PathBuf> {
@@ -155,10 +198,10 @@ impl App {
 
     pub fn save_as(&mut self) {
         let Some(path) = self.pick_save_path() else { return };
-        match self.doc.doc.save(&path) {
+        match self.document().save(&path) {
             Ok(()) => {
-                self.doc.path = Some(path);
-                self.doc.dirty = false;
+                self.path = Some(path);
+                self.dirty = false;
                 self.status = "Project saved".to_string();
             }
             Err(e) => self.status = format!("{e}"),
@@ -167,13 +210,13 @@ impl App {
 
     /// The active sequence, if the project has one.
     pub fn sequence_id(&self) -> Option<ItemId> {
-        self.seq.or_else(|| self.doc.doc.project.sequences().next().map(|it| it.id))
+        self.seq.or_else(|| self.session.project.sequences().next().map(|it| it.id))
     }
 
     /// The active sequence, read-only.
     pub fn sequence(&self) -> Option<&filmcraft_project::Sequence> {
         let id = self.sequence_id()?;
-        self.doc.doc.project.items.get(&id).and_then(|it| it.as_sequence())
+        self.session.project.items.get(&id).and_then(|it| it.as_sequence())
     }
 
     /// The sequence's duration (its last clip's end), or zero.
@@ -213,20 +256,74 @@ impl App {
         None
     }
 
+    /// Delete the selected clip through the engine (undoable), naming the
+    /// clip explicitly so no selection state is needed.
     pub fn delete_selected_clip(&mut self) {
         let Some((clip, _)) = self.selected_clip() else { return };
-        let seq = self.sequence_id();
-        if let Some(seq) = seq
-            && let Some(s) = self.doc.doc.project.sequence_mut(seq)
-        {
-            for track in s.video_tracks.iter_mut().chain(s.audio_tracks.iter_mut()) {
-                track.items.retain(|it| it.id != clip);
-                track.sort();
-            }
+        match self.execute("edit.clear", serde_json::json!({"clips": [clip.0]})) {
+            Ok(_) => self.status = "Clip removed".to_string(),
+            Err(e) => self.status = e,
         }
         self.selection = None;
-        self.doc.mark_dirty();
-        self.status = "Clip removed".to_string();
+    }
+
+    /// Undo / redo through the engine's history.
+    pub fn undo(&mut self) {
+        match self.execute("edit.undo", serde_json::json!({})) {
+            Ok(_) => self.status = "Undo".to_string(),
+            Err(e) => self.status = e,
+        }
+        self.selection = None;
+    }
+
+    pub fn redo(&mut self) {
+        match self.execute("edit.redo", serde_json::json!({})) {
+            Ok(_) => self.status = "Redo".to_string(),
+            Err(e) => self.status = e,
+        }
+        self.selection = None;
+    }
+
+    /// Razor every track at the playhead (Add Edit, All Tracks).
+    pub fn add_edit_all_tracks(&mut self) {
+        match self.execute("sequence.addEditAllTracks", serde_json::json!({"time": self.playhead.0})) {
+            Ok(_) => self.status = "Add Edit (all tracks)".to_string(),
+            Err(e) => self.status = e,
+        }
+    }
+
+    fn start_playback(&mut self) {
+        let Some(seq) = self.sequence_id() else { return };
+        let Some(sources) = self.built_sources() else {
+            self.status = "Cannot build media sources".to_string();
+            return;
+        };
+        let project = Arc::clone(&self.session.project);
+        let start = self.playhead;
+        let end = self.sequence_end();
+        if end <= start {
+            self.playhead = Tick::ZERO;
+            return;
+        }
+        match self.player.play(project, sources, seq, start, end) {
+            Ok(()) => {
+                self.wall_start = None;
+                self.status = "Playing".to_string();
+            }
+            Err(why) => {
+                // No usable device: wall-clock playback, silently.
+                self.wall_start = Some(self.playhead);
+                self.status = format!("Playing (silent — {why})");
+            }
+        }
+    }
+
+    fn stop_playback(&mut self) {
+        self.player.stop();
+        self.playing = false;
+        self.last = None;
+        self.wall_start = None;
+        self.status = "Stopped".to_string();
     }
 }
 
@@ -238,32 +335,62 @@ impl Default for App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Playback advances the playhead by wall-clock time, quantized to the
-        // sequence's frames. Silent (video preview only) until the engine
-        // session brings the audio clock (M6) — the monitor says so.
+        // Playback: the audio clock drives the playhead when a stream runs;
+        // otherwise the wall clock does.
         if self.playing {
-            let now = Instant::now();
-            if let Some(last) = self.last.replace(now) {
-                let nanos = now.duration_since(last).as_nanos();
-                let nanos = i64::try_from(nanos).unwrap_or(i64::MAX / 4);
-                self.playhead += Tick::from_units(nanos.min(i64::MAX / 8), 1_000_000_000);
-            }
-            let end = self.sequence_end();
-            if self.playhead >= end {
-                self.playhead = end;
-                self.playing = false;
-                self.last = None;
+            if let Some(start) = self.wall_start {
+                let now = Instant::now();
+                if let Some(last) = self.last.replace(now) {
+                    let nanos = i64::try_from(now.duration_since(last).as_nanos()).unwrap_or(i64::MAX / 4);
+                    self.playhead += Tick::from_units(nanos.min(i64::MAX / 8), 1_000_000_000);
+                }
+                let end = self.sequence_end();
+                if self.playhead >= end {
+                    self.playhead = end;
+                    self.stop_playback();
+                }
+            } else {
+                self.playhead = self.player.position();
+                if self.playhead >= self.sequence_end() || self.player.is_finished() {
+                    self.playhead = self.sequence_end();
+                    self.stop_playback();
+                }
             }
             ui.ctx().request_repaint();
         }
 
-        // The transport keys work everywhere.
-        if ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && self.sequence().is_some() {
-            self.playing = !self.playing;
-            self.last = None;
+        // Transport keys everywhere: Space, Ctrl+Z / Ctrl+Shift+Z, Delete,
+        // Ctrl+K (add edit on all tracks).
+        let (space, undo_key, redo_key, delete, add_edit) = ui.ctx().input(|i| {
+            let cmd = i.modifiers.command;
+            (
+                i.key_pressed(egui::Key::Space),
+                cmd && i.key_pressed(egui::Key::Z) && !i.modifiers.shift,
+                (cmd && i.key_pressed(egui::Key::Z) && i.modifiers.shift) || (cmd && i.key_pressed(egui::Key::Y)),
+                i.key_pressed(egui::Key::Delete),
+                cmd && i.key_pressed(egui::Key::K),
+            )
+        });
+        if space && self.sequence().is_some() {
+            if self.playing {
+                self.stop_playback();
+            } else {
+                self.playing = true;
+                self.last = None;
+                self.start_playback();
+            }
         }
-        if ui.ctx().input(|i| i.key_pressed(egui::Key::Delete)) {
+        if undo_key {
+            self.undo();
+        }
+        if redo_key {
+            self.redo();
+        }
+        if delete {
             self.delete_selected_clip();
+        }
+        if add_edit {
+            self.add_edit_all_tracks();
         }
 
         let full = ui.max_rect();
@@ -310,22 +437,35 @@ impl App {
         bar.selectable_value(&mut self.workspace, Workspace::Edit, "Edit");
         bar.selectable_value(&mut self.workspace, Workspace::Effects, "Effects");
         bar.selectable_value(&mut self.workspace, Workspace::Export, "Export");
-        bar.add_enabled(false, egui::Button::new("Color")).on_disabled_hover_text("The Color workspace is planned but not built yet (M6)");
-        bar.add_enabled(false, egui::Button::new("Audio")).on_disabled_hover_text("The Audio workspace is planned but not built yet (M6)");
+        bar.add_enabled(false, egui::Button::new("Color")).on_disabled_hover_text("The Color workspace is planned but not built yet (M7)");
+        bar.add_enabled(false, egui::Button::new("Audio")).on_disabled_hover_text("The Audio workspace is planned but not built yet (M7)");
 
         bar.separator();
 
-        let playing = self.playing;
-        if bar.button(if playing { "Pause" } else { "Play" }).clicked() && self.sequence().is_some() {
-            self.playing = !self.playing;
-            self.last = None;
+        if bar.add_enabled(self.session.history.can_undo(), egui::Button::new("Undo")).clicked() {
+            self.undo();
+        }
+        if bar.add_enabled(self.session.history.can_redo(), egui::Button::new("Redo")).clicked() {
+            self.redo();
+        }
+
+        bar.separator();
+
+        if bar.button(if self.playing { "Pause" } else { "Play" }).clicked() && self.sequence().is_some() {
+            if self.playing {
+                self.stop_playback();
+            } else {
+                self.playing = true;
+                self.last = None;
+                self.start_playback();
+            }
         }
         if bar.button("|<").clicked() {
             self.playhead = Tick::ZERO;
         }
         bar.label(egui::RichText::new(self.timecode()).monospace());
 
-        if let Some(path) = &self.doc.path {
+        if let Some(path) = &self.path {
             bar.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new(path.display().to_string()).weak());
             });
@@ -337,13 +477,13 @@ impl App {
         ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
         let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.add_space(8.0);
-        bar.label(format!("{}{}", if self.doc.dirty { "• " } else { "" }, self.doc.doc.project.name));
+        bar.label(format!("{}{}", if self.dirty { "• " } else { "" }, self.session.project.name));
         bar.separator();
         bar.colored_label(egui::Color32::GRAY, &self.status);
     }
 }
 
-/// A draggable vertical gutter between two regions: returns the new offset.
+/// A draggable vertical gutter between two regions.
 pub fn gutter_v(ui: &mut egui::Ui, x: f32, y0: f32, y1: f32, value: &mut f32) {
     let grab = 6.0;
     let rect = egui::Rect::from_min_max(egui::pos2(x - grab / 2.0, y0), egui::pos2(x + grab / 2.0, y1));
@@ -358,7 +498,7 @@ pub fn gutter_v(ui: &mut egui::Ui, x: f32, y0: f32, y1: f32, value: &mut f32) {
     }
 }
 
-/// A draggable horizontal gutter between two regions: returns the new offset.
+/// A draggable horizontal gutter between two regions.
 pub fn gutter_h(ui: &mut egui::Ui, y: f32, x0: f32, x1: f32, value: &mut f32) {
     let grab = 6.0;
     let rect = egui::Rect::from_min_max(egui::pos2(x0, y - grab / 2.0), egui::pos2(x1, y + grab / 2.0));

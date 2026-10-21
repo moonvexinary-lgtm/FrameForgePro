@@ -1,19 +1,20 @@
 //! The Edit workspace: the project panel (media items), the program monitor
 //! (real frames through the engine) and the timeline (real clips, real
-//! playhead). Laid out by rect — this egui generation has no panel helpers.
+//! playhead, real engine commands). Laid out by rect — this egui generation
+//! has no panel helpers.
 
+use filmcraft_media::Generator;
 use filmcraft_media::generators::GeneratorSource;
-use filmcraft_media::{Generator, MediaSource};
-use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, TrackKind};
-use filmcraft_render::{RenderOptions, render_sequence};
-use filmcraft_time::{TICKS_PER_SECOND, Tick, TimeRange};
+use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef};
+use filmcraft_time::TICKS_PER_SECOND;
+use filmcraft_time::Tick;
 
 use crate::app::{App, Monitor, SEQUENCE_H, SEQUENCE_RATE, SEQUENCE_W};
 use crate::pixels;
 
 const ROW_H: f32 = 34.0;
 const RULER_H: f32 = 18.0;
-const GENERATOR_SECONDS: i64 = 10;
+const GENERATOR_SECONDS: f64 = 10.0;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     let project_w = app.project_w.clamp(180.0, body.width() - 260.0);
@@ -31,83 +32,70 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     timeline_panel(app, ui, timeline);
 }
 
-/// One media item's import: mirror the generator in both the MediaRef and the
-/// source's own info, the way the editing engine does.
-fn add_generator(app: &mut App, generator: Generator) {
-    let source = GeneratorSource::new(generator.clone(), SEQUENCE_W, SEQUENCE_H, SEQUENCE_RATE, Tick(GENERATOR_SECONDS * TICKS_PER_SECOND));
-    let info = source.info().clone();
-    let name = info.name.clone();
-    app.doc.doc.project.add_item(
-        name.as_str(),
-        Label::Iris,
-        ItemKind::Media(MediaClip {
-            media: MediaRef::Generator(generator),
-            info,
-            interpret: Default::default(),
-            mark_in: None,
-            mark_out: None,
-            markers: Vec::new(),
-            offline: false,
-            proxy: None,
-            identity: None,
-        }),
-        None,
-    );
-    app.doc.mark_dirty();
-    app.status = "Media added".to_string();
-}
-
-fn add_file(app: &mut App, path: std::path::PathBuf) {
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            app.status = format!("Could not read {}: {e}", path.display());
-            return;
-        }
-    };
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
-    match filmcraft_media::open_bytes(&name, bytes.into(), &filmcraft_codecs::openers()) {
-        Ok(source) => {
-            let info = source.info().clone();
-            app.doc.doc.project.add_item(
-                name.as_str(),
-                Label::Iris,
-                ItemKind::Media(MediaClip {
-                    media: MediaRef::File { path: path.display().to_string() },
-                    info,
-                    interpret: Default::default(),
-                    mark_in: None,
-                    mark_out: None,
-                    markers: Vec::new(),
-                    offline: false,
-                    proxy: None,
-                    identity: None,
-                }),
-                None,
-            );
-            app.doc.mark_dirty();
-            app.status = format!("Imported {name}");
-        }
-        Err(e) => app.status = format!("{name}: {e}"),
+/// Generators the engine has commands for (undoable, with the registry's
+/// validation and defaults).
+fn add_generator(app: &mut App, command: &str) {
+    match app.execute(command, serde_json::json!({"seconds": GENERATOR_SECONDS})) {
+        Ok(_) => app.status = "Media added".to_string(),
+        Err(e) => app.status = e,
     }
 }
 
-/// Place `media` at the end of the timeline, as the editing engine's place
-/// command does: a video clip on V1 and an audio clip on A1, both real
-/// `make_track_item` edits.
+/// Tone has no engine command yet: a real, undoable `Session::edit` closure —
+/// the engine's own pattern for custom edits.
+fn add_tone(app: &mut App) {
+    let hz = 440.0_f32;
+    let db = -6.0_f32;
+    let result = app.session.edit("New Tone", |project, state| {
+        let source = GeneratorSource::new(Generator::Tone { hz, db }, SEQUENCE_W, SEQUENCE_H, SEQUENCE_RATE, Tick(10 * TICKS_PER_SECOND));
+        let info = source.info().clone();
+        let name = info.name.clone();
+        let id = project.add_item(
+            name.as_str(),
+            Label::Iris,
+            ItemKind::Media(MediaClip {
+                media: MediaRef::Generator(Generator::Tone { hz, db }),
+                info,
+                interpret: Default::default(),
+                mark_in: None,
+                mark_out: None,
+                markers: Vec::new(),
+                offline: false,
+                proxy: None,
+                identity: None,
+            }),
+            None,
+        );
+        state.project_selection = vec![id];
+        Ok(id)
+    });
+    match result {
+        Ok(_) => {
+            app.mark_dirty();
+            app.status = "Media added".to_string();
+        }
+        Err(e) => app.status = e.to_string(),
+    }
+}
+
+fn add_file(app: &mut App, path: std::path::PathBuf) {
+    match app.execute("file.import", serde_json::json!({"paths": [path.display().to_string()]})) {
+        Ok(_) => app.status = "Imported".to_string(),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Place `media` at the end of the timeline through the engine's place
+/// command (undoable, with its validation): a picture goes to V1 with its
+/// sound on A1; audio-only media goes to A1 alone.
 fn place_media(app: &mut App, media: ItemId) {
     let Some(seq_id) = app.sequence_id() else {
         app.status = "No sequence".to_string();
         return;
     };
-    // Read what the media is, then drop the borrow before mutating.
-    let Some((_, clip, _)) = app.doc.doc.project.resolve_media(media) else { return };
-    let name = clip.info.name.clone();
+    let Some((_, clip, _)) = app.session.project.resolve_media(media) else { return };
     let has_video = clip.info.video.is_some();
     let has_audio = clip.info.has_audio();
-    let duration = clip.info.duration;
-    let rate = app.sequence().map(|s| s.settings.frame_rate).unwrap_or(SEQUENCE_RATE);
-
     let (mut v_end, mut a_end) = (Tick::ZERO, Tick::ZERO);
     if let Some(s) = app.sequence() {
         if let Some(t) = s.video_tracks.first() {
@@ -121,51 +109,43 @@ fn place_media(app: &mut App, media: ItemId) {
             }
         }
     }
-    let start = v_end.max(a_end);
-    let source = TimeRange::new(Tick::ZERO, duration);
-
-    let mut placed = 0;
-    if has_video
-        && let Some(mut item) = app.doc.doc.project.make_track_item(media, TrackKind::Video, start, source, rate)
-        && let Some(s) = app.doc.doc.project.sequence_mut(seq_id)
-        && let Some(track) = s.video_tracks.first_mut()
-    {
-        item.name = name.clone();
-        track.items.push(item);
-        track.sort();
-        placed += 1;
-    }
-    if has_audio
-        && let Some(mut item) = app.doc.doc.project.make_track_item(media, TrackKind::Audio, start, source, rate)
-        && let Some(s) = app.doc.doc.project.sequence_mut(seq_id)
-        && let Some(track) = s.audio_tracks.first_mut()
-    {
-        item.name = name;
-        track.items.push(item);
-        track.sort();
-        placed += 1;
-    }
-    if placed > 0 {
-        app.doc.mark_dirty();
-        app.status = format!("Placed {placed} clip(s)");
+    let at = v_end.max(a_end).0;
+    let params = if has_video {
+        serde_json::json!({"item": media.0, "track": "V1", "audioTrack": if has_audio { "A1" } else { "" }, "time": at, "sequence": seq_id.0})
+    } else if has_audio {
+        serde_json::json!({"item": media.0, "track": "A1", "time": at, "sequence": seq_id.0})
     } else {
         app.status = "Nothing to place: the media has no streams".to_string();
+        return;
+    };
+    match app.execute("timeline.place", params) {
+        Ok(_) => app.status = "Placed clip".to_string(),
+        Err(e) => app.status = e,
     }
 }
 
+/// Remove `media` and its clips (undoable). Its composition stays keyed: an
+/// undo restores the item under the same id, and the composition with it.
 fn remove_media(app: &mut App, media: ItemId) {
-    if let Some(seq) = app.sequence_id()
-        && let Some(s) = app.doc.doc.project.sequence_mut(seq)
-    {
-        for track in s.video_tracks.iter_mut().chain(s.audio_tracks.iter_mut()) {
-            track.items.retain(|it| it.item != media);
-            track.sort();
+    let result = app.session.edit("Remove Media", |project, _| {
+        for seq in project.items.values_mut() {
+            if let ItemKind::Sequence(s) = &mut seq.kind {
+                for track in s.video_tracks.iter_mut().chain(s.audio_tracks.iter_mut()) {
+                    track.items.retain(|it| it.item != media);
+                    track.sort();
+                }
+            }
         }
+        project.root.remove_item(media);
+        Ok(())
+    });
+    match result {
+        Ok(()) => {
+            app.mark_dirty();
+            app.status = "Media removed".to_string();
+        }
+        Err(e) => app.status = e.to_string(),
     }
-    app.doc.doc.compositions.remove(&media);
-    app.doc.doc.project.root.remove_item(media);
-    app.doc.mark_dirty();
-    app.status = "Media removed".to_string();
 }
 
 fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -175,12 +155,15 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     panel.heading("Project");
     panel.horizontal(|ui| {
         if ui.button("+ Bars & Tone").clicked() {
-            add_generator(app, Generator::BarsAndTone);
+            add_generator(app, "file.newBarsAndTone");
+        }
+        if ui.button("+ Color Matte").clicked() {
+            add_generator(app, "file.newColorMatte");
         }
     });
-    ui.horizontal(|ui| {
+    panel.horizontal(|ui| {
         if ui.button("+ Tone").clicked() {
-            add_generator(app, Generator::Tone { hz: 440.0, db: -6.0 });
+            add_tone(app);
         }
         if ui.button("+ File…").clicked()
             && let Some(path) = rfd::FileDialog::new()
@@ -193,18 +176,18 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     panel.separator();
 
     let mut ids = Vec::new();
-    app.doc.doc.project.root.all_items(&mut ids);
+    app.session.project.root.all_items(&mut ids);
     let mut clicks = Vec::new();
     egui::ScrollArea::vertical().show(&mut panel, |ui| {
         for id in ids {
-            let Some(item) = app.doc.doc.project.items.get(&id) else { continue };
+            let Some(item) = app.session.project.items.get(&id) else { continue };
             let ItemKind::Media(clip) = &item.kind else { continue };
             let name = item.name.clone();
             let kind = match &clip.media {
                 MediaRef::Generator(_) => "generator",
                 MediaRef::File { .. } => "file",
             };
-            let has_comp = app.doc.doc.compositions.contains_key(&id);
+            let has_comp = app.compositions.contains_key(&id);
             let label = format!("{name} [{kind}]{}", if has_comp { " ●" } else { "" });
             let response = ui.selectable_label(false, label).on_hover_text(if has_comp {
                 "Has a compositing composition. Double-click: place on the timeline. Right-click: remove."
@@ -226,7 +209,7 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
     }
     panel.separator();
-    panel.colored_label(egui::Color32::GRAY, "Double-click media to place it. Select a clip, then open the Effects workspace.");
+    panel.colored_label(egui::Color32::GRAY, "Double-click media to place it (undoable). Select a clip, then the Effects workspace.");
 }
 
 fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -238,12 +221,13 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     header.horizontal(|ui| {
         ui.label("Timeline");
         ui.separator();
+        if ui.button("Razor (all tracks)").clicked() {
+            app.add_edit_all_tracks();
+        }
+        ui.separator();
         ui.add(egui::Slider::new(&mut app.zoom, 20.0..=400.0).text("px / s"));
         ui.separator();
-        ui.colored_label(
-            egui::Color32::GRAY,
-            "Click: playhead · Click a clip: select · Del: remove · Trimming and drag edits arrive with the engine session (M6)",
-        );
+        ui.colored_label(egui::Color32::GRAY, "Click: playhead · Click a clip: select · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit");
     });
 
     let Some(s) = app.sequence() else {
@@ -340,12 +324,11 @@ fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
     // Render only when the shown frame, the document revision or the sequence
     // changed — through the same compositor export uses.
-    let needs = app.monitor.as_ref().is_none_or(|m| m.frame != frame || m.revision != app.doc.revision || m.seq != seq_id);
+    let needs = app.monitor.as_ref().is_none_or(|m| m.frame != frame || m.revision != app.revision || m.seq != seq_id);
     if needs {
         let playhead = app.playhead;
         let rendered = app
-            .doc
-            .with_sources(|project, sources| render_sequence(project, seq_id, playhead, RenderOptions::default(), sources))
+            .with_sources(|project, sources| filmcraft_render::render_sequence(project, seq_id, playhead, filmcraft_render::RenderOptions::default(), sources))
             .unwrap_or_else(|| filmcraft_render::Image::new(SEQUENCE_W as usize, SEQUENCE_H as usize));
         let size = (rendered.w as u32, rendered.h as u32);
         let image = pixels::to_color_image(&rendered);
@@ -353,11 +336,11 @@ fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             m.texture.set(image, egui::TextureOptions::default());
         } else {
             let texture = ui.ctx().load_texture("program-monitor", image, egui::TextureOptions::default());
-            app.monitor = Some(Monitor { texture, frame, revision: app.doc.revision, seq: seq_id, size });
+            app.monitor = Some(Monitor { texture, frame, revision: app.revision, seq: seq_id, size });
         }
         if let Some(m) = app.monitor.as_mut() {
             m.frame = frame;
-            m.revision = app.doc.revision;
+            m.revision = app.revision;
         }
     }
 
@@ -371,7 +354,7 @@ fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         ui.painter().image(m.texture.id(), dest, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
     }
     area.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        ui.colored_label(egui::Color32::GRAY, "silent preview — audio playback arrives with the engine session (M6)");
+        ui.colored_label(egui::Color32::GRAY, if app.wall_start.is_some() && app.playing { "wall clock (no audio device)" } else { "audio clock" });
         ui.label(format!(
             "{} × {} · frame {}",
             app.monitor.as_ref().map(|m| m.size.0).unwrap_or(0),

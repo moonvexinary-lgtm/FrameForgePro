@@ -176,6 +176,7 @@ impl FootageSource for ComposedFootage<'_> {
 /// The sources of a whole project: one [`MediaSource`] per media item the
 /// document can supply. Feeds the editing engine's renderer and exporter
 /// through their `SourceProvider` seam.
+#[derive(Clone)]
 pub struct ProjectSources {
     sources: HashMap<ItemId, SharedSource>,
 }
@@ -196,13 +197,20 @@ impl ProjectSources {
     /// and renders, and the media plays again once the file is back. An item
     /// with a composition is wrapped in [`ComposedSource`].
     pub fn build(doc: &FrameForgeProject) -> Result<Self, BridgeError> {
+        ProjectSources::build_from(&doc.project, &doc.compositions)
+    }
+
+    /// [`ProjectSources::build`] over an editing project and its composition
+    /// map directly — for hosts that keep the editing project inside the
+    /// engine's session.
+    pub fn build_from(project: &filmcraft_project::Project, compositions: &std::collections::HashMap<ItemId, Composition>) -> Result<Self, BridgeError> {
         let mut ids = Vec::new();
-        doc.project.root.all_items(&mut ids);
+        project.root.all_items(&mut ids);
         let mut sources = HashMap::new();
         for id in ids {
-            let Some((_, clip, _)) = doc.project.resolve_media(id) else { continue };
+            let Some((_, clip, _)) = project.resolve_media(id) else { continue };
             let Some(inner) = media_source(clip) else { continue };
-            let source: SharedSource = match doc.compositions.get(&id) {
+            let source: SharedSource = match compositions.get(&id) {
                 Some(comp) if !comp.is_noop() => Arc::new(ComposedSource::new(inner, comp.clone(), id.0 as u32)),
                 _ => inner,
             };

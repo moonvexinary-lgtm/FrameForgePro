@@ -140,7 +140,7 @@ fn start(app: &mut App) {
         app.export.path_text = path.clone();
     }
 
-    let doc: FrameForgeProject = app.doc.doc.clone();
+    let doc: FrameForgeProject = app.document();
     let settings = ExportSettings {
         format,
         path: path.clone(),

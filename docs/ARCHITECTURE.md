@@ -131,6 +131,28 @@ verified engine — no fake controls:
 - Trimming, drag edits, undo and keyframing UIs are honestly deferred to M6
   (the engine session), and the UI says so where it matters.
 
+## M6 — the editing engine session (in review)
+
+The shell no longer edits the project model directly: the FilmCraft `Session`
+owns the editing project, and every project-changing action runs through
+[`Session::execute`] — the same command registry, validation and undo history
+the upstream editor uses. The `.ffproj` document is assembled from the
+session's project and the bridge's compositions on save, and disassembled on
+open; undo restores items under the same ids, so compositions follow.
+
+- **Commands wired**: `file.newSequence`, `file.newBarsAndTone`,
+  `file.newColorMatte`, `file.import`, `timeline.place` (V1/A1 with the
+  engine's validation), `edit.clear` (named-clip delete), `sequence.addEditAllTracks`
+  (razor at the playhead), `edit.undo`, `edit.redo` — plus a `Session::edit`
+  closure for the Tone generator (no command yet) and media removal.
+- **Undo/redo**: toolbar buttons with real enable state from the history,
+  Ctrl+Z / Ctrl+Shift+Z.
+- **The audio clock**: a cpal output stream (48 kHz stereo f32 requested) fed
+  by a worker thread that renders the timeline mix through the engine's mixer
+  graph in 100 ms chunks; the playhead is exactly the audio the device
+  consumed (`Tick::from_units`). No usable device → honest wall-clock fallback
+  with the reason in the status bar.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -140,8 +162,8 @@ verified engine — no fake controls:
 | M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | ✔ (CI-verified, run 39379740235) |
 | M4 | compositions with real layers inside the timeline (compositing-engine comps whose footage layer is backed by the editing engine's media); tone generators; relink + healing; `.ecproj` import | ✔ (CI-verified, run 39542160028) |
 | M5 | the application shell: an egui window with the user's icon, real workspaces (Edit: project panel, timeline, program monitor; Effects: composition editor with live parameters; Export: real renders with progress), `.ffproj` open/save, media import and clip placement | ✔ (CI-verified, run 39561711515) |
-| M6 | full editing engine session: undo, trimming, drag edits, audio playback, keyframing UI, Color and Audio workspaces, panic hook | planned |
-| M7 | feature parity + machine-readable effects/feature registry and audit; reliability: recovery, cancellation, missing media, audio sync, performance | planned |
+| M6 | the editing engine session: every edit an undoable engine command, the audio clock, razor, undo/redo in the UI | in review (this commit; CI verdict in Actions) |
+| M7 | keyframing UI, Color and Audio workspaces, panic hook, media relink UI | planned |
 | M8 | packaging: Windows release on CI, downloadable artifacts | planned |
 
 ## Dependency policy

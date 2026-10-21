@@ -17,10 +17,12 @@ filmcraft-project = { workspace = true }
 filmcraft-render = { workspace = true }
 filmcraft-export = { workspace = true }
 filmcraft-codecs = { workspace = true }
+filmcraft-engine = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
 rfd = { workspace = true }
 image = { workspace = true }
+cpal = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(windows)'.build-dependencies]

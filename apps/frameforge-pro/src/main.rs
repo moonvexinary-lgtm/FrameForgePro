@@ -11,6 +11,7 @@
 //! * `frameforge-pro selftest` — the foundation self-test (CI runs this).
 
 mod app;
+mod audio;
 mod edit;
 mod effects;
 mod export;
