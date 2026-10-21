@@ -277,7 +277,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 egui::Align2::LEFT_TOP,
                 format!("{tick}s"),
                 egui::FontId::monospace(10.0),
-                ui.visuals().text_color_weak(),
+                ui.visuals().text_color(),
             );
         }
     }
@@ -289,7 +289,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         let row_rect = egui::Rect::from_min_max(egui::pos2(alloc.left(), y), egui::pos2(alloc.right(), y + ROW_H));
         painter.rect_filled(row_rect, 2.0, ui.visuals().faint_bg_color);
         let name = if is_video { format!("V{}", row + 1) } else { format!("A{}", row + 1 - s.video_tracks.len()) };
-        painter.text(egui::pos2(alloc.left() + 6.0, y + ROW_H / 2.0), egui::Align2::LEFT_CENTER, name, egui::FontId::default(), ui.visuals().text_color_weak());
+        painter.text(egui::pos2(alloc.left() + 6.0, y + ROW_H / 2.0), egui::Align2::LEFT_CENTER, name, egui::FontId::default(), ui.visuals().text_color());
         for item in &track.items {
             let clip_rect = egui::Rect::from_min_max(egui::pos2(to_x(item.start), y + 3.0), egui::pos2(to_x(item.start + item.duration), y + ROW_H - 3.0));
             let selected = app.selection == Some(item.id);
@@ -301,7 +301,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 egui::Color32::from_rgb(88, 120, 88)
             };
             painter.rect_filled(clip_rect, 3.0, fill);
-            painter.rect_stroke(clip_rect, 3.0, egui::Stroke::new(1.0, ui.visuals().widgets.active.bg_stroke.color));
+            painter.rect_stroke(clip_rect, 3.0, egui::Stroke::new(1.0, ui.visuals().widgets.active.bg_stroke.color), egui::StrokeKind::Inside);
             painter.text(
                 clip_rect.left_top() + egui::vec2(6.0, 4.0),
                 egui::Align2::LEFT_TOP,
@@ -363,7 +363,7 @@ fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor"));
     if let Some(m) = &app.monitor {
-        let avail = area.available_rect();
+        let avail = area.available_rect_before_wrap();
         let scale = (avail.width() / m.size.0 as f32).min((avail.height() - 24.0) / m.size.1 as f32);
         let shown = egui::vec2(m.size.0 as f32 * scale, m.size.1 as f32 * scale);
         let at = egui::pos2(avail.left() + (avail.width() - shown.x) / 2.0, avail.top() + (avail.height() - shown.y) / 2.0);

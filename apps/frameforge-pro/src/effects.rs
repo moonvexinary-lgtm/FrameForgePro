@@ -80,7 +80,7 @@ fn edit_choice(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge
         .unwrap_or(0);
     let selected = options.get(current as usize).cloned().unwrap_or_else(|| "?".to_string());
     let mut new_index = current;
-    egui::ComboBox::from_id_salt(&param.id).selected_text(selected).show_ui(ui, 8, |ui| {
+    egui::ComboBox::from_id_salt(&param.id).selected_text(selected).show_ui(ui, |ui| {
         for (i, option) in options.iter().enumerate() {
             ui.selectable_value(&mut new_index, i as u32, option.as_str());
         }
@@ -102,7 +102,7 @@ fn edit_color(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge:
         .and_then(|l| l.params.get(&param.id))
         .and_then(|p| p.value.as_color())
         .or_else(|| match &param.default {
-            EffectValue::Color(c) => Some([c[0], c[1], c[2], c[3]]),
+            EffectValue::Color(c) => Some([c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32]),
             _ => None,
         })
         .unwrap_or([1.0, 1.0, 1.0, 1.0]);
@@ -191,10 +191,9 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
         });
     }
     if let Some(index) = to_remove {
-        if let Some(composition) = app.doc.doc.composition_mut(item) {
-            if index < composition.effects.len() {
-                composition.effects.remove(index);
-            }
+        let composition = app.doc.doc.composition_mut(item);
+        if index < composition.effects.len() {
+            composition.effects.remove(index);
         }
         if app.selected_effect == Some(index) {
             app.selected_effect = None;
@@ -219,14 +218,7 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
             if ui.small_button(&label).on_hover_text(format!("id {}", entry.id)).clicked() {
                 let composition = app.doc.doc.composition_mut(item);
                 let index = composition.effects.len();
-                composition.effects.push(frameforge_bridge::EffectLink {
-                    effect: entry.id.clone(),
-                    enabled: true,
-                    params: HashMap::new(),
-                    ec_project: None,
-                    comp: None,
-                    source_item: None,
-                });
+                composition.effects.push(frameforge_bridge::EffectLink { effect: entry.id.clone(), enabled: true, params: HashMap::new() });
                 app.selected_effect = Some(index);
                 app.doc.mark_dirty();
                 app.status = format!("Added {}", entry.name);

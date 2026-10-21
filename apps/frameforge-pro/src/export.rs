@@ -51,7 +51,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
 
     // Format: only what this build can really encode.
     let selected_label = FORMATS.get(state.format_index).map(|(_, label, _)| *label).unwrap_or("H.264 (MP4)");
-    egui::ComboBox::from_id_salt("format").selected_text(selected_label).show_ui(&mut area, 6, |ui| {
+    egui::ComboBox::from_id_salt("format").selected_text(selected_label).show_ui(&mut area, |ui| {
         for (index, (_, label, _)) in FORMATS.iter().enumerate() {
             ui.selectable_value(&mut state.format_index, index, *label);
         }
@@ -90,7 +90,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
 
     if let Some(running) = &state.running {
         let fraction = running.progress.fraction();
-        let rect = area.available_rect();
+        let rect = area.available_rect_before_wrap();
         let bar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction, 14.0));
         area.painter().rect_filled(bar, 3.0, ui.visuals().selection.bg_fill);
         area.label(format!("Rendering… {:.0}%", fraction * 100.0));
