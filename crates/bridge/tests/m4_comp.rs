@@ -125,6 +125,47 @@ fn bright_halves(img: &Image) -> (usize, usize) {
     (left, right)
 }
 
+/// The minimal text case — their renderer test's exact comp ("HI", size 60,
+/// static position), rendered through the bridge's comp path over a
+/// transparent carrier. Isolates text-through-the-bridge from the bigger
+/// timeline test.
+#[test]
+fn m4_text_minimal_repro() {
+    let mut ec = ecp::Project::default();
+    ec.settings.bit_depth = ecp::BitDepth::Bpc32;
+    let comp = ecp::Comp::new(200, 100, EcFrameRate { num: 24, den: 1 }, EcTick(TICKS_PER_SECOND));
+    let cid = ec.add_item("Comp", EcLabel::Sandstone, None, ecp::ItemKind::Comp(comp.clone().into()));
+    let mut l = ecp::build::layer(&mut ec, &comp, "Text", ecp::LayerSource::Text, (200, 100), None);
+    if let Some(pr) = l.props.prop_mut("text/sourceText") {
+        pr.value = EcValue::Text(Box::new(TextDoc { text: "HI".to_string(), size: 60.0, ..Default::default() }));
+    }
+    if let Some(pos) = l.props.prop_mut("transform/position") {
+        pos.value = EcValue::Vec3([60.0, 80.0, 0.0]);
+    }
+    ec.comp_mut(cid).expect("comp").layers.push(l);
+
+    let mut p = Project::new("text repro");
+    let g = GeneratorSource::new(Generator::TransparentVideo, 200, 100, R, Tick(TICKS_PER_SECOND));
+    let info = g.info().clone();
+    let media = add_media(&mut p, MediaRef::Generator(Generator::TransparentVideo), info);
+    let seq = p.new_sequence("Main", SequenceSettings { width: 200, height: 100, frame_rate: R, ..Default::default() }, 1, 0, None);
+    let video = p.make_track_item(media, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, R.tick_of(24)), R).expect("clip");
+    let s = p.sequence_mut(seq).expect("sequence");
+    s.video_tracks[0].items.push(video);
+    s.video_tracks[0].sort();
+
+    let mut doc = FrameForgeProject::new(p);
+    let composition = doc.composition_mut(media);
+    composition.ec_project = Some(ec);
+    composition.comp = Some(cid);
+    let sources = ProjectSources::build(&doc).expect("sources");
+    let img = render_sequence(&doc.project, seq, R.tick_of(6), RenderOptions::default(), &sources);
+
+    let covered = img.px.chunks(4).filter(|px| px[3] > 0.5).count();
+    println!("diagnostic text repro: covered {covered}, size {}x{}", img.w, img.h);
+    assert!(covered > 300, "the text comp must render through the bridge: {covered} covered pixels");
+}
+
 #[test]
 fn m4_comp_layers_over_footage_in_the_timeline() {
     let (mut doc, seq, media) = bars_project();
@@ -140,6 +181,24 @@ fn m4_comp_layers_over_footage_in_the_timeline() {
     // over the footage by the compositing engine's layer compositor.
     let early = frame_at(&doc, seq, &sources, 6); // 0.25 s
     let late = frame_at(&doc, seq, &sources, 42); // 1.75 s
+
+    // Diagnostics: where bright pixels actually are (the whole frame, not just
+    // the measured band), so a wrong assumption shows up in the log.
+    for (name, img) in [("early", &early), ("late", &late)] {
+        let mut whole = 0;
+        for y in 0..img.h {
+            for x in 0..img.w {
+                let p = img.get(x, y);
+                if p[0] > 0.85 && p[1] > 0.85 && p[2] > 0.85 && p[3] > 0.9 {
+                    whole += 1;
+                }
+            }
+        }
+        println!("diagnostic {name}: whole-frame bright {whole}, band halves {:?}, size {}x{}", bright_halves(img), img.w, img.h);
+    }
+
+    // The animation really runs: the text starts left and ends right, drawn
+    // over the footage by the compositing engine's layer compositor.
     let (el, er) = bright_halves(&early);
     let (ll, lr) = bright_halves(&late);
     assert!(el > 100 && er < el / 4, "the text must start on the left: {el} left vs {er} right");
