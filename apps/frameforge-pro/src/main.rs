@@ -30,7 +30,7 @@ fn main() -> ExitCode {
 /// The window, taskbar and app-switcher icon: the project's own ICO, decoded
 /// at startup (Explorer's executable icon is embedded by `build.rs`).
 fn app_icon() -> egui::IconData {
-    let ico: &[u8] = include_bytes!("../../assets/frameforgepro-icon.ico");
+    let ico: &[u8] = include_bytes!("../../../assets/frameforgepro-icon.ico");
     let Ok(decoded) = image::load_from_memory_with_format(ico, image::ImageFormat::Ico) else {
         return egui::IconData::default();
     };

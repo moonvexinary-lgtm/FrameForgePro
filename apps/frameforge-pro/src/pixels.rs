@@ -6,7 +6,7 @@
 pub fn to_color_image(img: &filmcraft_render::Image) -> egui::ColorImage {
     let srgb = |v: f32| {
         let c = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
-        if c <= 0.003_1308 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+        if c <= 0.003_130_8 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
     };
     let mut rgba = Vec::with_capacity(img.px.len());
     for px in img.px.chunks(4) {

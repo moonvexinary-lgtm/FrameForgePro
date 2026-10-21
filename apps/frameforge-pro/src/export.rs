@@ -40,29 +40,33 @@ pub struct ExportState {
     pub error: Option<String>,
 }
 
-pub fn show(app: &mut App, ui: &mut egui::Ui) {
+pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
+    ui.painter().rect_filled(body, 0.0, ui.visuals().panel_fill);
+    let margin = 40.0;
+    let inner = egui::Rect::from_min_max(body.min + egui::vec2(margin, margin), body.max - egui::vec2(margin, margin));
+    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(inner).id_salt("export"));
     let state = &mut app.export;
-    ui.heading("Export");
-    ui.separator();
+    area.heading("Export");
+    area.separator();
 
     // Format: only what this build can really encode.
     let selected_label = FORMATS.get(state.format_index).map(|(_, label, _)| *label).unwrap_or("H.264 (MP4)");
-    egui::ComboBox::from_id_salt("format").selected_text(selected_label).show_ui(ui, 6, |ui| {
+    egui::ComboBox::from_id_salt("format").selected_text(selected_label).show_ui(&mut area, 6, |ui| {
         for (index, (_, label, _)) in FORMATS.iter().enumerate() {
             ui.selectable_value(&mut state.format_index, index, *label);
         }
     });
-    ui.label("Formats needing a hardware encoder (H.265, AV1) are not offered until one is registered.");
+    area.label("Formats needing a hardware encoder (H.265, AV1) are not offered until one is registered.");
 
-    ui.separator();
-    ui.horizontal(|ui| {
+    area.separator();
+    area.horizontal(|ui| {
         ui.label("Video bitrate");
         ui.add(egui::DragValue::new(&mut state.bitrate_kbps).range(500..=100_000).suffix(" kbps"));
     });
-    ui.checkbox(&mut state.include_audio, "Include audio");
+    area.checkbox(&mut state.include_audio, "Include audio");
 
-    ui.separator();
-    ui.horizontal(|ui| {
+    area.separator();
+    area.horizontal(|ui| {
         ui.label("Output file");
         let mut text = state.path_text.clone();
         let response = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 90.0));
@@ -78,16 +82,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
-    ui.separator();
+    area.separator();
     let can_export = !state.path_text.is_empty() && state.running.is_none() && app.sequence_id().is_some();
-    if ui.add_enabled(can_export, egui::Button::new("Export")).clicked() {
+    if area.add_enabled(can_export, egui::Button::new("Export")).clicked() {
         start(app);
     }
 
     if let Some(running) = &state.running {
         let fraction = running.progress.fraction();
-        ui.add(egui::ProgressBar::new(fraction).show_percentage());
-        ui.ctx().request_repaint();
+        let rect = area.available_rect();
+        let bar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction, 14.0));
+        area.painter().rect_filled(bar, 3.0, ui.visuals().selection.bg_fill);
+        area.label(format!("Rendering… {:.0}%", fraction * 100.0));
+        area.ctx().request_repaint();
         let finished = running.done.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(result) = finished {
             match result {
@@ -106,17 +113,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     if let Some(result) = &state.result {
-        ui.separator();
-        ui.label(egui::RichText::new("Done").strong());
-        ui.label(result);
+        area.separator();
+        area.label(egui::RichText::new("Done").strong());
+        area.label(result);
     }
     if let Some(error) = &state.error {
-        ui.separator();
-        ui.colored_label(egui::Color32::LIGHT_RED, error);
+        area.separator();
+        area.colored_label(egui::Color32::LIGHT_RED, error);
     }
 
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-        ui.colored_label(egui::Color32::GRAY, "The export runs the same CPU reference renderer the program monitor shows — one picture, no surprises. Progress and cancellation are the pipeline's own.");
+    area.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+        ui.colored_label(egui::Color32::GRAY, "The export runs the same CPU reference renderer the program monitor shows — one picture, no surprises.");
     });
 }
 

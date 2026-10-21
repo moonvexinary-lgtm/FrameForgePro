@@ -121,17 +121,19 @@ fn edit_color(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge:
     });
 }
 
-pub fn show(app: &mut App, ui: &mut egui::Ui) {
+pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     // What the workspace edits: the selected clip's media item, or one picked
     // by hand.
     let effective_item = app.selected_clip().map(|(_, item)| item).or(app.effects_item);
     let Some(item) = effective_item else {
-        ui.heading("Effects");
-        ui.label("Select a clip in the Edit timeline, or choose a media item:");
-        ui.separator();
+        let mut area = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("fx-pick"));
+        area.add_space(12.0);
+        area.heading("Effects");
+        area.label("Select a clip in the Edit timeline, or choose a media item:");
+        area.separator();
         let mut ids = Vec::new();
         app.doc.doc.project.root.all_items(&mut ids);
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::ScrollArea::vertical().show(&mut area, |ui| {
             for id in ids {
                 let Some(it) = app.doc.doc.project.items.get(&id) else { continue };
                 if !matches!(&it.kind, filmcraft_project::ItemKind::Media(_)) {
@@ -146,15 +148,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     };
 
-    egui::SidePanel::left("effect-list").min_width(240.0).resizable(true).show_inside(ui, |ui| effect_list(app, ui, item));
-    egui::CentralPanel::default().show_inside(ui, |ui| parameters(app, ui, item));
+    let list_w = 300.0_f32.clamp(220.0, body.width() - 300.0);
+    let list = egui::Rect::from_min_max(body.min, egui::pos2(body.min.x + list_w, body.max.y));
+    let params = egui::Rect::from_min_max(egui::pos2(body.min.x + list_w, body.min.y), body.max);
+    effect_list(app, ui, list, item);
+    parameters(app, ui, params, item);
 }
 
-fn effect_list(app: &mut App, ui: &mut egui::Ui, item: ItemId) {
-    ui.heading("Composition");
+fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) {
+    ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
+    ui.painter().line_segment([rect.right_top(), rect.right_bottom()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+    let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("fx-list"));
+    panel.add_space(8.0);
+    panel.heading("Composition");
     let media_name = app.doc.doc.project.items.get(&item).map(|it| it.name.clone()).unwrap_or_default();
-    ui.label(format!("Clip: {media_name}"));
-    ui.separator();
+    panel.label(format!("Clip: {media_name}"));
+    panel.separator();
 
     // The effect chain.
     let count = app.doc.doc.compositions.get(&item).map(|c| c.effects.len()).unwrap_or(0);
@@ -165,7 +174,7 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, item: ItemId) {
             (effect_name(&link.effect).map(str::to_string).unwrap_or_else(|| link.effect.clone()), link.enabled)
         };
         let selected = app.selected_effect == Some(index);
-        ui.horizontal(|ui| {
+        panel.horizontal(|ui| {
             let mut toggle = enabled;
             if ui.checkbox(&mut toggle, "").changed() {
                 if let Some(link) = app.doc.doc.composition_mut(item).effects.get_mut(index) {
@@ -194,11 +203,11 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, item: ItemId) {
         app.status = "Effect removed".to_string();
     }
 
-    ui.separator();
-    ui.label(egui::RichText::new("Add effect").strong());
-    ui.text_edit_singleline(&mut app.effect_search);
+    panel.separator();
+    panel.label(egui::RichText::new("Add effect").strong());
+    panel.add(egui::TextEdit::singleline(&mut app.effect_search).hint_text("Search the effect catalog…"));
     let needle = app.effect_search.to_lowercase();
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    egui::ScrollArea::vertical().show(&mut panel, |ui| {
         for entry in frameforge_bridge::catalog() {
             if entry.engine != "effectcraft" {
                 continue;
@@ -224,14 +233,14 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, item: ItemId) {
             }
         }
     });
-    ui.separator();
-    ui.colored_label(egui::Color32::GRAY, "Parameters apply at once; keyframing arrives with the engine session (M6).");
+    panel.separator();
+    panel.colored_label(egui::Color32::GRAY, "Parameters apply at once; keyframing arrives with the engine session (M6).");
 
     // The compositing comp, if the clip has one.
     let has_comp = app.doc.doc.compositions.get(&item).map(|c| c.has_comp()).unwrap_or(false);
     if has_comp {
-        ui.separator();
-        ui.label(egui::RichText::new("Compositing comp layers").strong());
+        panel.separator();
+        panel.label(egui::RichText::new("Compositing comp layers").strong());
         let mut names: Vec<String> = Vec::new();
         if let Some(composition) = app.doc.doc.compositions.get(&item)
             && let Some(project) = &composition.ec_project
@@ -242,35 +251,37 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, item: ItemId) {
                 names.push(layer.name.clone());
             }
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::ScrollArea::vertical().show(&mut panel, |ui| {
             for name in names {
                 ui.label(format!("  {name}"));
             }
         });
-        ui.colored_label(egui::Color32::GRAY, "Layer editing arrives with the compositing workspace (M6).");
+        panel.colored_label(egui::Color32::GRAY, "Layer editing arrives with the compositing workspace (M6).");
     }
 }
 
-fn parameters(app: &mut App, ui: &mut egui::Ui, item: ItemId) {
+fn parameters(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) {
+    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("fx-params"));
+    area.add_space(12.0);
     let Some(effect) = app.selected_effect else {
-        ui.centered_and_justified(|ui| ui.label("Select an effect on the left to edit its parameters."));
+        area.label("Select an effect on the left to edit its parameters.");
         return;
     };
     let Some(effect_id) = app.doc.doc.compositions.get(&item).and_then(|c| c.effects.get(effect)).map(|l| l.effect.clone()) else {
-        ui.label("The effect is gone");
+        area.label("The effect is gone");
         return;
     };
     let Some(name) = effect_name(&effect_id) else {
-        ui.label(format!("Unknown effect {effect_id}"));
+        area.label(format!("Unknown effect {effect_id}"));
         return;
     };
-    ui.heading(name);
+    area.heading(name);
     let Some(params) = effect_params(&effect_id) else { return };
     if params.is_empty() {
-        ui.label("This effect has no parameters.");
+        area.label("This effect has no parameters.");
         return;
     }
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    egui::ScrollArea::vertical().show(&mut area, |ui| {
         egui::Grid::new("params").num_columns(1).spacing([8.0, 6.0]).show(ui, |ui| {
             for param in &params {
                 ui.vertical(|ui| match &param.ui {

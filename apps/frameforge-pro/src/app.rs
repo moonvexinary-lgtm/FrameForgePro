@@ -1,8 +1,9 @@
 //! The application state: one open document, the workspaces over it, and the
-//! transport.
+//! transport. This egui generation has no panel helpers, so the shell lays
+//! out its regions by rect and builds child Uis over them — the same approach
+//! both upstream engines use.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
 
 use filmcraft_project::{ClipId, ItemId, Project, SequenceSettings};
@@ -45,6 +46,9 @@ impl DocState {
     }
 }
 
+pub const TOP_H: f32 = 38.0;
+pub const STATUS_H: f32 = 22.0;
+
 pub struct App {
     pub doc: DocState,
     pub workspace: Workspace,
@@ -64,6 +68,10 @@ pub struct App {
     pub selected_effect: Option<usize>,
     /// The add-effect search text.
     pub effect_search: String,
+    /// The Edit workspace's left panel width (draggable gutter).
+    pub project_w: f32,
+    /// The Edit workspace's timeline height (draggable gutter).
+    pub timeline_h: f32,
 }
 
 /// The cached program-monitor texture and what it was rendered from.
@@ -99,6 +107,8 @@ impl App {
             effects_item: None,
             selected_effect: None,
             effect_search: String::new(),
+            project_w: 250.0,
+            timeline_h: 220.0,
             doc: DocState { doc, path, dirty: false, revision: 0, sources: None },
         }
     }
@@ -136,8 +146,7 @@ impl App {
     }
 
     fn pick_save_path(&mut self) -> Option<PathBuf> {
-        let path = rfd::FileDialog::new().add_filter("FrameForge Pro project", &["ffproj"]).set_file_name("project.ffproj").save_file()?;
-        Some(path)
+        rfd::FileDialog::new().add_filter("FrameForge Pro project", &["ffproj"]).set_file_name("project.ffproj").save_file()
     }
 
     pub fn save_as(&mut self) {
@@ -199,6 +208,7 @@ impl App {
         }
         None
     }
+
     pub fn delete_selected_clip(&mut self) {
         let Some((clip, _)) = self.selected_clip() else { return };
         let seq = self.sequence_id();
@@ -223,7 +233,7 @@ impl Default for App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Playback advances the playhead by wall-clock time, quantized to the
         // sequence's frames. Silent (video preview only) until the engine
         // session brings the audio clock (M6) — the monitor says so.
@@ -240,82 +250,121 @@ impl eframe::App for App {
                 self.playing = false;
                 self.last = None;
             }
-            ctx.request_repaint();
+            ui.ctx().request_repaint();
         }
 
         // The transport keys work everywhere.
-        if ctx.input(|i| i.key_pressed(egui::Key::Space)) && self.sequence().is_some() {
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && self.sequence().is_some() {
             self.playing = !self.playing;
             self.last = None;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Delete)) {
             self.delete_selected_clip();
         }
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| self.top_bar(ui));
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!("{}{}", if self.doc.dirty { "• " } else { "" }, self.doc.doc.project.name));
-                ui.separator();
-                ui.colored_label(egui::Color32::GRAY, &self.status);
-            });
-        });
-        egui::CentralPanel::default().show(ctx, |ui| match self.workspace {
-            Workspace::Edit => crate::edit::show(self, ui),
-            Workspace::Effects => crate::effects::show(self, ui),
-            Workspace::Export => crate::export::show(self, ui),
-        });
+        let full = ui.max_rect();
+        let top = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), TOP_H));
+        let status = egui::Rect::from_min_max(egui::pos2(full.min.x, full.max.y - STATUS_H), full.max);
+        let body = egui::Rect::from_min_max(egui::pos2(full.min.x, top.max.y), egui::pos2(full.max.x, status.min.y));
+
+        self.top_bar(ui, top);
+        match self.workspace {
+            Workspace::Edit => crate::edit::show(self, ui, body),
+            Workspace::Effects => crate::effects::show(self, ui, body),
+            Workspace::Export => crate::export::show(self, ui, body),
+        }
+        self.status_bar(ui, status);
     }
 }
 
 impl App {
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("FrameForge Pro").strong());
-            ui.separator();
+    fn top_bar(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
+        ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+        let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        bar.add_space(10.0);
+        bar.label(egui::RichText::new("FrameForge Pro").strong());
+        bar.separator();
 
-            if ui.button("New").clicked() {
-                self.new_project();
+        if bar.button("New").clicked() {
+            self.new_project();
+        }
+        if bar.button("Open…").clicked() {
+            if let Some(path) = rfd::FileDialog::new().add_filter("FrameForge Pro project", &["ffproj"]).pick_file() {
+                self.open(path);
             }
-            if ui.button("Open…").clicked() {
-                if let Some(path) = rfd::FileDialog::new().add_filter("FrameForge Pro project", &["ffproj"]).pick_file() {
-                    self.open(path);
-                }
-            }
-            if ui.button("Save").clicked() {
-                self.save();
-            }
-            if ui.button("Save As…").clicked() {
-                self.save_as();
-            }
+        }
+        if bar.button("Save").clicked() {
+            self.save();
+        }
+        if bar.button("Save As…").clicked() {
+            self.save_as();
+        }
 
-            ui.separator();
+        bar.separator();
 
-            ui.selectable_value(&mut self.workspace, Workspace::Edit, "Edit");
-            ui.selectable_value(&mut self.workspace, Workspace::Effects, "Effects");
-            ui.selectable_value(&mut self.workspace, Workspace::Export, "Export");
-            ui.add_enabled(false, egui::Button::new("Color"))
-                .on_disabled_hover_text("The Color workspace is planned but not built yet (see docs/ARCHITECTURE.md, M6)");
-            ui.add_enabled(false, egui::Button::new("Audio"))
-                .on_disabled_hover_text("The Audio workspace is planned but not built yet (see docs/ARCHITECTURE.md, M6)");
+        bar.selectable_value(&mut self.workspace, Workspace::Edit, "Edit");
+        bar.selectable_value(&mut self.workspace, Workspace::Effects, "Effects");
+        bar.selectable_value(&mut self.workspace, Workspace::Export, "Export");
+        bar.add_enabled(false, egui::Button::new("Color")).on_disabled_hover_text("The Color workspace is planned but not built yet (M6)");
+        bar.add_enabled(false, egui::Button::new("Audio")).on_disabled_hover_text("The Audio workspace is planned but not built yet (M6)");
 
-            ui.separator();
+        bar.separator();
 
-            let playing = self.playing;
-            if ui.button(if playing { "⏸ Pause" } else { "▶ Play" }).clicked() && self.sequence().is_some() {
-                self.playing = !self.playing;
-                self.last = None;
-            }
-            if ui.button("⏮ Start").clicked() {
-                self.playhead = Tick::ZERO;
-            }
-            ui.monospace(self.timecode());
+        let playing = self.playing;
+        if bar.button(if playing { "Pause" } else { "Play" }).clicked() && self.sequence().is_some() {
+            self.playing = !self.playing;
+            self.last = None;
+        }
+        if bar.button("|<").clicked() {
+            self.playhead = Tick::ZERO;
+        }
+        bar.label(egui::RichText::new(self.timecode()).monospace());
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some(path) = &self.doc.path {
-                    ui.label(egui::RichText::new(path.display().to_string()).weak());
-                }
+        if let Some(path) = &self.doc.path {
+            bar.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new(path.display().to_string()).weak());
             });
-        });
+        }
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
+        ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+        let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        bar.add_space(8.0);
+        bar.label(format!("{}{}", if self.doc.dirty { "• " } else { "" }, self.doc.doc.project.name));
+        bar.separator();
+        bar.colored_label(egui::Color32::GRAY, &self.status);
+    }
+}
+
+/// A draggable vertical gutter between two regions: returns the new offset.
+pub fn gutter_v(ui: &mut egui::Ui, x: f32, y0: f32, y1: f32, value: &mut f32) {
+    let grab = 6.0;
+    let rect = egui::Rect::from_min_max(egui::pos2(x - grab / 2.0, y0), egui::pos2(x + grab / 2.0, y1));
+    let response = ui.interact(rect, egui::Id::new("gutter-v"), egui::Sense::click_and_drag());
+    if response.hovered() || response.dragged() {
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+    }
+    if let Some(pos) = response.interact_pointer_pos() {
+        if response.dragged() {
+            *value = pos.x;
+        }
+    }
+}
+
+/// A draggable horizontal gutter between two regions: returns the new offset.
+pub fn gutter_h(ui: &mut egui::Ui, y: f32, x0: f32, x1: f32, value: &mut f32) {
+    let grab = 6.0;
+    let rect = egui::Rect::from_min_max(egui::pos2(x0, y - grab / 2.0), egui::pos2(x1, y + grab / 2.0));
+    let response = ui.interact(rect, egui::Id::new("gutter-h"), egui::Sense::click_and_drag());
+    if response.hovered() || response.dragged() {
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+    }
+    if let Some(pos) = response.interact_pointer_pos() {
+        if response.dragged() {
+            *value = pos.y;
+        }
     }
 }
