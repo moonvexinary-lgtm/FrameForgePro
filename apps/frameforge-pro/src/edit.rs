@@ -344,7 +344,6 @@ fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let needs = app.monitor.as_ref().map_or(true, |m| m.frame != frame || m.revision != app.doc.revision || m.seq != seq_id);
     if needs {
         let playhead = app.playhead;
-        let revision = app.doc.revision;
         let rendered = app
             .doc
             .with_sources(|project, sources| render_sequence(project, seq_id, playhead, RenderOptions::default(), sources))

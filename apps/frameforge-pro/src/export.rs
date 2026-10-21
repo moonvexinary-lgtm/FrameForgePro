@@ -139,7 +139,7 @@ fn start(app: &mut App) {
     }
     if !path.to_lowercase().ends_with(extension) {
         path = format!("{path}.{extension}");
-        app.export.path_text = path;
+        app.export.path_text = path.clone();
     }
 
     let doc: FrameForgeProject = app.doc.doc.clone();

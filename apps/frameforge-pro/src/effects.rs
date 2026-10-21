@@ -92,7 +92,7 @@ fn edit_choice(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
     }
 }
 
-fn edit_color(app: &App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
+fn edit_color(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
     let current = app
         .doc
         .doc
