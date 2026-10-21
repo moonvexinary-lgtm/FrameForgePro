@@ -107,7 +107,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
   two wrong test-side assumptions (centre-position semantics, white-on-white
   measurement), never an engine fault.
 
-## M5 — the application shell (in review)
+## M5 — the application shell (✔ CI-verified, run 39561711515)
 
 One native window (egui/wgpu, the stack both engines ship with), the user's
 own icon in the window and the executable, and real workspaces over the
@@ -139,7 +139,7 @@ verified engine — no fake controls:
 | M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | ✔ (CI-verified, run 39371821743) |
 | M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | ✔ (CI-verified, run 39379740235) |
 | M4 | compositions with real layers inside the timeline (compositing-engine comps whose footage layer is backed by the editing engine's media); tone generators; relink + healing; `.ecproj` import | ✔ (CI-verified, run 39542160028) |
-| M5 | the application shell: an egui window with the user's icon, real workspaces (Edit: project panel, timeline, program monitor; Effects: composition editor with live parameters; Export: real renders with progress), `.ffproj` open/save, media import and clip placement | in review (this commit; CI verdict in Actions) |
+| M5 | the application shell: an egui window with the user's icon, real workspaces (Edit: project panel, timeline, program monitor; Effects: composition editor with live parameters; Export: real renders with progress), `.ffproj` open/save, media import and clip placement | ✔ (CI-verified, run 39561711515) |
 | M6 | full editing engine session: undo, trimming, drag edits, audio playback, keyframing UI, Color and Audio workspaces, panic hook | planned |
 | M7 | feature parity + machine-readable effects/feature registry and audit; reliability: recovery, cancellation, missing media, audio sync, performance | planned |
 | M8 | packaging: Windows release on CI, downloadable artifacts | planned |
