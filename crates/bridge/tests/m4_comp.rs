@@ -166,6 +166,88 @@ fn m4_text_minimal_repro() {
     assert!(covered > 300, "the text comp must render through the bridge: {covered} covered pixels");
 }
 
+/// One controlled experiment over the suspected factors: does the text render
+/// (a) "HI" at size 60, static position, over the footage layer;
+/// (b) "FrameForge" at size 18, static, over the footage;
+/// (c) "FrameForge" at size 18, keyframed, over the footage;
+/// (d) "FrameForge" at size 18, keyframed, with NO footage layer.
+/// Prints each frame's bright grid so one CI run shows which factor hides
+/// the text.
+#[test]
+fn m4_text_visibility_matrix() {
+    let make = |text: &str, size: f64, keys: Option<([f64; 3], [f64; 3])>, with_footage: bool, name: &str| {
+        let mut ec = ecp::Project::default();
+        ec.settings.bit_depth = ecp::BitDepth::Bpc32;
+        let comp = ecp::Comp::new(W, H, EcFrameRate { num: 24, den: 1 }, EcTick(FRAMES * TICKS_PER_SECOND / 24));
+        let cid = ec.add_item("Comp", EcLabel::Sandstone, None, ecp::ItemKind::Comp(comp.clone().into()));
+        let mut fid = None;
+        if with_footage {
+            let footage = ecp::Footage {
+                path: "frameforge://source".to_string(),
+                width: W,
+                height: H,
+                frame_rate: EcFrameRate { num: 24, den: 1 },
+                duration: EcTick(FRAMES * TICKS_PER_SECOND / 24),
+                has_video: true,
+                has_audio: false,
+                ..Default::default()
+            };
+            fid = Some(ec.add_item("Source", EcLabel::Red, None, ecp::ItemKind::Footage(footage)));
+        }
+        let mut l = ecp::build::layer(&mut ec, &comp, "Title", ecp::LayerSource::Text, (W, H), None);
+        if let Some(pr) = l.props.prop_mut("text/sourceText") {
+            pr.value = EcValue::Text(Box::new(TextDoc { text: text.to_string(), size, ..Default::default() }));
+        }
+        if let Some(pos) = l.props.prop_mut("transform/position") {
+            match keys {
+                Some((a, b)) => {
+                    pos.keys = vec![Keyframe::new(EcTick::ZERO, EcValue::Vec3(a)), Keyframe::new(EcTick(40 * TICKS_PER_SECOND / 24), EcValue::Vec3(b))];
+                }
+                None => pos.value = EcValue::Vec3([75.0, 90.0, 0.0]),
+            }
+        }
+        let c = ec.comp_mut(cid).expect("comp");
+        c.layers.push(l);
+        if let Some(fid) = fid {
+            c.layers.push(ecp::build::layer(&mut ec, &comp, "Source", ecp::LayerSource::Footage { item: fid }, (W, H), None));
+        }
+
+        let mut p = Project::new(name);
+        let generator = if with_footage { Generator::BarsAndTone } else { Generator::TransparentVideo };
+        let g = GeneratorSource::new(generator, W, H, R, Tick(FRAMES * TICKS_PER_SECOND / 24));
+        let info = g.info().clone();
+        let media = add_media(&mut p, MediaRef::Generator(generator), info);
+        let seq = p.new_sequence("Main", SequenceSettings { width: W, height: H, frame_rate: R, ..Default::default() }, 1, 0, None);
+        let video = p.make_track_item(media, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, R.tick_of(FRAMES)), R).expect("clip");
+        let s = p.sequence_mut(seq).expect("sequence");
+        s.video_tracks[0].items.push(video);
+        s.video_tracks[0].sort();
+
+        let mut doc = FrameForgeProject::new(p);
+        let composition = doc.composition_mut(media);
+        composition.ec_project = Some(ec);
+        composition.comp = Some(cid);
+        composition.source_item = fid;
+        let sources = ProjectSources::build(&doc).expect("sources");
+        let img = render_sequence(&doc.project, seq, R.tick_of(6), RenderOptions::default(), &sources);
+        let mut cells = [[0usize; 4]; 4];
+        for y in 0..img.h {
+            for x in 0..img.w {
+                let q = img.get(x, y);
+                if q[0] > 0.85 && q[1] > 0.85 && q[2] > 0.85 && q[3] > 0.9 {
+                    cells[y * 4 / img.h][x * 4 / img.w] += 1;
+                }
+            }
+        }
+        println!("diagnostic matrix {name}: grid {cells:?}");
+    };
+
+    make("HI", 60.0, None, true, "a: HI 60 static over footage");
+    make("FrameForge", 18.0, None, true, "b: FrameForge 18 static over footage");
+    make("FrameForge", 18.0, Some(([75.0, 150.0, 0.0], [215.0, 150.0, 0.0])), true, "c: FrameForge 18 keys over footage");
+    make("FrameForge", 18.0, Some(([75.0, 150.0, 0.0], [215.0, 150.0, 0.0])), false, "d: FrameForge 18 keys no footage");
+}
+
 #[test]
 fn m4_comp_layers_over_footage_in_the_timeline() {
     let (mut doc, seq, media) = bars_project();
