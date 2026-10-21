@@ -2,10 +2,15 @@
 //!
 //! A compositing-engine composition (text, shapes, solids, nested comps) now
 //! renders *inside* the timeline: its source footage layer is backed by the
-//! editing engine's media through the effect chain, served through the same
-//! `FootageSource` seam the compositing engine's own media uses. Also covered:
-//! audio-only generators (Tone), relinking file media (the healing path), and
-//! importing `.ecproj` compositions onto the timeline.
+//! editing engine's media through the effect chain, served over the
+//! compositing engine's own `FootageSource` seam. Also covered: audio-only
+//! generators (Tone), relinking file media (the healing path), and importing
+//! `.ecproj` compositions onto the timeline.
+//!
+//! Every case is built through the one [`build_case`] construction path: the
+//! moving-text investigation (see `m4_text_visibility_matrix`) showed that two
+//! near-identical builders diverged mysteriously, so the duplication was
+//! removed rather than the difference trusted.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
@@ -46,85 +51,177 @@ fn add_media(p: &mut Project, media: MediaRef, info: filmcraft_media::MediaInfo)
     p.add_item(name.as_str(), Label::Iris, media_clip(media, info), None)
 }
 
-fn bars_project() -> (FrameForgeProject, ItemId, ItemId) {
-    let mut p = Project::new("M4 comp proof");
-    let g = GeneratorSource::new(Generator::BarsAndTone, W, H, R, Tick(FRAMES * TICKS_PER_SECOND / 24));
-    let info = g.info().clone();
-    let media = add_media(&mut p, MediaRef::Generator(Generator::BarsAndTone), info);
-    let seq = p.new_sequence("Main", SequenceSettings { width: W, height: H, frame_rate: R, ..Default::default() }, 1, 0, None);
-    let source = TimeRange::new(Tick::ZERO, R.tick_of(FRAMES));
-    let video = p.make_track_item(media, TrackKind::Video, Tick::ZERO, source, R).expect("video item");
+fn add_video_clip(p: &mut Project, seq: ItemId, media: ItemId) {
+    let video = p.make_track_item(media, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, R.tick_of(FRAMES)), R).expect("video item");
     let s = p.sequence_mut(seq).expect("sequence");
     s.video_tracks[0].items.push(video);
     s.video_tracks[0].sort();
-    (FrameForgeProject::new(p), seq, media)
 }
 
-/// A compositing-engine project: one comp holding a text layer (animated
-/// position) over a footage layer backed by the clip's media.
-fn comp_project() -> (ecp::Project, ecp::ItemId, ecp::ItemId) {
-    let mut p = ecp::Project::default();
-    p.settings.bit_depth = ecp::BitDepth::Bpc32;
+/// The one construction path of the moving-text cases: a compositing project
+/// whose comp holds a text layer — `keys` animate its position from key to key
+/// by frame 40, `None` leaves it static — over an optional footage layer
+/// backed by the clip's media, on a timeline whose media is a Bars-and-Tone
+/// generator (`with_footage`) or a transparent carrier.
+fn build_case(text: &str, size: f64, keys: Option<([f64; 3], [f64; 3])>, with_footage: bool) -> (FrameForgeProject, ItemId) {
+    let mut ec = ecp::Project::default();
+    ec.settings.bit_depth = ecp::BitDepth::Bpc32;
     let comp = ecp::Comp::new(W, H, EcFrameRate { num: 24, den: 1 }, EcTick(FRAMES * TICKS_PER_SECOND / 24));
-    let comp_id = p.add_item("Comp", EcLabel::Sandstone, None, ecp::ItemKind::Comp(comp.clone().into()));
-    let footage = ecp::Footage {
-        path: "frameforge://source".to_string(),
-        width: W,
-        height: H,
-        frame_rate: EcFrameRate { num: 24, den: 1 },
-        duration: EcTick(FRAMES * TICKS_PER_SECOND / 24),
-        has_video: true,
-        has_audio: false,
-        ..Default::default()
-    };
-    let fid = p.add_item("Source", EcLabel::Red, None, ecp::ItemKind::Footage(footage));
-    // Top layer first (index 0): white text moving left → right across the clip,
-    // in the clean top region of the bars footage (the bottom half carries its
-    // own bright white block and patch, and white-on-white is invisible to any
-    // brightness measurement).
-    let mut text = ecp::build::layer(&mut p, &comp, "Title", ecp::LayerSource::Text, (W, H), None);
-    if let Some(pr) = text.props.prop_mut("text/sourceText") {
-        pr.value = EcValue::Text(Box::new(TextDoc { text: "FrameForge".to_string(), size: 24.0, fill: [1.0, 1.0, 1.0, 1.0], ..Default::default() }));
+    let cid = ec.add_item("Comp", EcLabel::Sandstone, None, ecp::ItemKind::Comp(comp.clone().into()));
+    let fid = with_footage.then(|| {
+        ec.add_item(
+            "Source",
+            EcLabel::Red,
+            None,
+            ecp::ItemKind::Footage(ecp::Footage {
+                path: "frameforge://source".to_string(),
+                width: W,
+                height: H,
+                frame_rate: EcFrameRate { num: 24, den: 1 },
+                duration: EcTick(FRAMES * TICKS_PER_SECOND / 24),
+                has_video: true,
+                has_audio: false,
+                ..Default::default()
+            }),
+        )
+    });
+    // Top layer first (index 0): the text. White-on-white is invisible to any
+    // brightness measurement, so animated cases keep clear of the footage's
+    // own bright block (bottom half) — see the visibility matrix.
+    let mut l = ecp::build::layer(&mut ec, &comp, "Title", ecp::LayerSource::Text, (W, H), None);
+    if let Some(pr) = l.props.prop_mut("text/sourceText") {
+        pr.value = EcValue::Text(Box::new(TextDoc { text: text.to_string(), size, ..Default::default() }));
     }
-    if let Some(pos) = text.props.prop_mut("transform/position") {
-        // The move completes by frame 40, so the sampled late frame (42) sits
-        // past the last key: the whole run is in the right half.
-        pos.keys = vec![
-            Keyframe::new(EcTick::ZERO, EcValue::Vec3([75.0, 60.0, 0.0])),
-            Keyframe::new(EcTick(40 * TICKS_PER_SECOND / 24), EcValue::Vec3([225.0, 60.0, 0.0])),
-        ];
+    if let Some(pos) = l.props.prop_mut("transform/position") {
+        match keys {
+            Some((a, b)) => {
+                pos.keys = vec![Keyframe::new(EcTick::ZERO, EcValue::Vec3(a)), Keyframe::new(EcTick(40 * TICKS_PER_SECOND / 24), EcValue::Vec3(b))];
+            }
+            None => pos.value = EcValue::Vec3([75.0, 60.0, 0.0]),
+        }
     }
-    let source_layer = ecp::build::layer(&mut p, &comp, "Source", ecp::LayerSource::Footage { item: fid }, (W, H), None);
-    let c = p.comp_mut(comp_id).expect("comp");
-    c.layers.push(text);
-    c.layers.push(source_layer);
-    (p, comp_id, fid)
+    let source_layer = fid.map(|fid| ecp::build::layer(&mut ec, &comp, "Source", ecp::LayerSource::Footage { item: fid }, (W, H), None));
+    let c = ec.comp_mut(cid).expect("comp");
+    c.layers.push(l);
+    if let Some(sl) = source_layer {
+        c.layers.push(sl);
+    }
+
+    let generator = if with_footage { Generator::BarsAndTone } else { Generator::TransparentVideo };
+    let mut p = Project::new("M4");
+    let g = GeneratorSource::new(generator.clone(), W, H, R, Tick(FRAMES * TICKS_PER_SECOND / 24));
+    let info = g.info().clone();
+    let media = add_media(&mut p, MediaRef::Generator(generator), info);
+    let seq = p.new_sequence("Main", SequenceSettings { width: W, height: H, frame_rate: R, ..Default::default() }, 1, 0, None);
+    add_video_clip(&mut p, seq, media);
+
+    let mut doc = FrameForgeProject::new(p);
+    let composition = doc.composition_mut(media);
+    composition.ec_project = Some(ec);
+    composition.comp = Some(cid);
+    composition.source_item = fid;
+    (doc, seq)
 }
 
 fn frame_at(doc: &FrameForgeProject, seq: ItemId, sources: &ProjectSources, f: i64) -> Image {
     render_sequence(&doc.project, seq, R.tick_of(f), RenderOptions::default(), sources)
 }
 
-/// Bright (text) pixels per horizontal half of the top band of the picture —
-/// the region of the bars footage with no bright features of its own, so only
-/// the moving white text counts.
-fn bright_halves(img: &Image) -> (usize, usize) {
-    let (mut left, mut right) = (0, 0);
+/// The clean top band of the bars footage (rows 40..90) holds none of the
+/// footage's own bright pixels, so every bright pixel there is the white text.
+/// Returns the count and the x-centroid of their mass.
+fn band_stats(img: &Image) -> (usize, Option<f64>) {
+    let (mut n, mut sum) = (0usize, 0.0f64);
     for y in 40..img.h.min(90) {
         for x in 0..img.w {
             let p = img.get(x, y);
             if p[0] > 0.85 && p[1] > 0.85 && p[2] > 0.85 && p[3] > 0.9 {
-                if x < img.w / 2 { left += 1 } else { right += 1 }
+                n += 1;
+                sum += x as f64 + 0.5;
             }
         }
     }
-    (left, right)
+    (n, if n > 0 { Some(sum / n as f64) } else { None })
 }
 
-/// The minimal text case — their renderer test's exact comp ("HI", size 60,
-/// static position), rendered through the bridge's comp path over a
-/// transparent carrier. Isolates text-through-the-bridge from the bigger
-/// timeline test.
+/// The record of how the moving-text case was understood: (c) keys at y=150
+/// over footage "disappeared" while (d) the same keys without footage and
+/// (e)/(f) keys in the clean band rendered — because the footage's own bright
+/// white block sits exactly under y=150, and white text on a white block is
+/// invisible to any brightness measurement. The engine was rendering
+/// correctly the whole time.
+#[test]
+fn m4_text_visibility_matrix() {
+    let show = |text: &str, size: f64, keys: Option<([f64; 3], [f64; 3])>, with_footage: bool, name: &str| {
+        let (doc, seq) = build_case(text, size, keys, with_footage);
+        let sources = ProjectSources::build(&doc).expect("sources");
+        let img = frame_at(&doc, seq, &sources, 6);
+        let (n, centroid) = band_stats(&img);
+        println!("diagnostic matrix {name}: band {n} px, centroid {centroid:?}");
+    };
+
+    show("HI", 60.0, None, true, "a: HI 60 static over footage");
+    show("FrameForge", 24.0, None, true, "b: FrameForge 24 static over footage");
+    show("FrameForge", 24.0, Some(([75.0, 150.0, 0.0], [215.0, 150.0, 0.0])), true, "c: FrameForge 24 keys at y=150 (over the footage's white block)");
+    show("FrameForge", 24.0, Some(([75.0, 150.0, 0.0], [215.0, 150.0, 0.0])), false, "d: FrameForge 24 keys at y=150, no footage");
+    show("FrameForge", 24.0, Some(([75.0, 60.0, 0.0], [215.0, 60.0, 0.0])), true, "e: FrameForge 24 keys at y=60 over footage");
+    show("HI", 60.0, Some(([75.0, 60.0, 0.0], [215.0, 60.0, 0.0])), true, "f: HI 60 keys at y=60 over footage");
+}
+
+#[test]
+fn m4_comp_layers_over_footage_in_the_timeline() {
+    let (doc, seq) = build_case("FrameForge", 24.0, Some(([75.0, 60.0, 0.0], [225.0, 60.0, 0.0])), true);
+    let sources = ProjectSources::build(&doc).expect("sources");
+
+    let early = frame_at(&doc, seq, &sources, 6); // 0.25 s: the text is near its left key
+    let late = frame_at(&doc, seq, &sources, 42); // past the last key: the text holds at its right key
+
+    // The animation really runs: the text's mass centre travels from the left
+    // key (~97) to the right key (225); the static default position would sit
+    // at the comp centre (160) at both times.
+    let (n_early, c_early) = band_stats(&early);
+    let (n_late, c_late) = band_stats(&late);
+    let (ce, cl) = (c_early.expect("text pixels in the early band"), c_late.expect("text pixels in the late band"));
+    assert!(n_early > 20, "the text must render over the footage: {n_early} band pixels");
+    assert!(ce < 130.0, "the text must start near the left key: centroid {ce}");
+    assert!(cl > 180.0, "the text must end near the right key: centroid {cl}");
+    assert!(cl - ce > 60.0, "the keyframed position must animate: centroid {ce} -> {cl}");
+
+    // Time is direction-independent: rendering the late frame first changes nothing.
+    let late_first = frame_at(&doc, seq, &sources, 42);
+    let early_again = frame_at(&doc, seq, &sources, 6);
+    assert_eq!(late_first, late, "backward scrubbing must reproduce the frame");
+    assert_eq!(early_again, early, "backward scrubbing must reproduce the frame");
+
+    // The footage shows through where the text is not: bars keep a hard edge
+    // far from the text.
+    let mut max_edge = 0.0f32;
+    for y in 0..early.h {
+        for x in 0..early.w.saturating_sub(1) {
+            let a = early.get(x, y);
+            let b = early.get(x + 1, y);
+            let (l1, l2) = (0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2], 0.2126 * b[0] + 0.7152 * b[1] + 0.0722 * b[2]);
+            max_edge = max_edge.max((l2 - l1).abs());
+        }
+    }
+    assert!(max_edge > 0.3, "the bars under the text must stay sharp, got {max_edge}");
+
+    // Save, drop everything, reopen: the composition survives the round-trip
+    // (the compositing project serializes inside the .ffproj) and renders
+    // byte-identically.
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("frameforge-m4-{}.ffproj", std::process::id()));
+    doc.save(&path).expect("save");
+    let reopened = FrameForgeProject::load(&path).expect("reopen");
+    assert!(reopened.compositions.len() == 1 && reopened.compositions.values().next().unwrap().has_comp(), "the comp must survive the round-trip");
+    let reopened_sources = ProjectSources::build(&reopened).expect("reopened sources");
+    assert_eq!(frame_at(&reopened, seq, &reopened_sources, 6), early, "frame 6 must be unchanged after save + reopen");
+    assert_eq!(frame_at(&reopened, seq, &reopened_sources, 42), late, "frame 42 must be unchanged after save + reopen");
+}
+
+/// The minimal text case — the compositing engine's own renderer test comp
+/// ("HI", size 60, static), rendered through the bridge's comp path over a
+/// transparent carrier.
 #[test]
 fn m4_text_minimal_repro() {
     let mut ec = ecp::Project::default();
@@ -162,144 +259,6 @@ fn m4_text_minimal_repro() {
     assert!(covered > 300, "the text comp must render through the bridge: {covered} covered pixels");
 }
 
-/// One controlled experiment over the suspected factors of the moving-text
-/// case, kept as the record of how it was understood: (c) keys at y=150 over
-/// footage "disappeared" while (d) the same keys without footage rendered and
-/// (e)/(f) keys at y=90 rendered — because the footage's own bright white
-/// block sits exactly under y=150, and white text on a white block is
-/// invisible to any brightness measurement. The engine was rendering
-/// correctly the whole time; the acceptance test now measures the clean top
-/// band instead.
-#[test]
-fn m4_text_visibility_matrix() {
-    let make = |text: &str, size: f64, keys: Option<([f64; 3], [f64; 3])>, with_footage: bool, name: &str| {
-        let mut ec = ecp::Project::default();
-        ec.settings.bit_depth = ecp::BitDepth::Bpc32;
-        let comp = ecp::Comp::new(W, H, EcFrameRate { num: 24, den: 1 }, EcTick(FRAMES * TICKS_PER_SECOND / 24));
-        let cid = ec.add_item("Comp", EcLabel::Sandstone, None, ecp::ItemKind::Comp(comp.clone().into()));
-        let mut fid = None;
-        if with_footage {
-            let footage = ecp::Footage {
-                path: "frameforge://source".to_string(),
-                width: W,
-                height: H,
-                frame_rate: EcFrameRate { num: 24, den: 1 },
-                duration: EcTick(FRAMES * TICKS_PER_SECOND / 24),
-                has_video: true,
-                has_audio: false,
-                ..Default::default()
-            };
-            fid = Some(ec.add_item("Source", EcLabel::Red, None, ecp::ItemKind::Footage(footage)));
-        }
-        let mut l = ecp::build::layer(&mut ec, &comp, "Title", ecp::LayerSource::Text, (W, H), None);
-        if let Some(pr) = l.props.prop_mut("text/sourceText") {
-            pr.value = EcValue::Text(Box::new(TextDoc { text: text.to_string(), size, ..Default::default() }));
-        }
-        if let Some(pos) = l.props.prop_mut("transform/position") {
-            match keys {
-                Some((a, b)) => {
-                    pos.keys = vec![Keyframe::new(EcTick::ZERO, EcValue::Vec3(a)), Keyframe::new(EcTick(40 * TICKS_PER_SECOND / 24), EcValue::Vec3(b))];
-                }
-                None => pos.value = EcValue::Vec3([75.0, 90.0, 0.0]),
-            }
-        }
-        let source_layer = fid.map(|fid| ecp::build::layer(&mut ec, &comp, "Source", ecp::LayerSource::Footage { item: fid }, (W, H), None));
-        let c = ec.comp_mut(cid).expect("comp");
-        c.layers.push(l);
-        if let Some(sl) = source_layer {
-            c.layers.push(sl);
-        }
-
-        let mut p = Project::new(name);
-        let generator = if with_footage { Generator::BarsAndTone } else { Generator::TransparentVideo };
-        let g = GeneratorSource::new(generator.clone(), W, H, R, Tick(FRAMES * TICKS_PER_SECOND / 24));
-        let info = g.info().clone();
-        let media = add_media(&mut p, MediaRef::Generator(generator), info);
-        let seq = p.new_sequence("Main", SequenceSettings { width: W, height: H, frame_rate: R, ..Default::default() }, 1, 0, None);
-        let video = p.make_track_item(media, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, R.tick_of(FRAMES)), R).expect("clip");
-        let s = p.sequence_mut(seq).expect("sequence");
-        s.video_tracks[0].items.push(video);
-        s.video_tracks[0].sort();
-
-        let mut doc = FrameForgeProject::new(p);
-        let composition = doc.composition_mut(media);
-        composition.ec_project = Some(ec);
-        composition.comp = Some(cid);
-        composition.source_item = fid;
-        let sources = ProjectSources::build(&doc).expect("sources");
-        let img = render_sequence(&doc.project, seq, R.tick_of(6), RenderOptions::default(), &sources);
-        let mut cells = [[0usize; 4]; 4];
-        for y in 0..img.h {
-            for x in 0..img.w {
-                let q = img.get(x, y);
-                if q[0] > 0.85 && q[1] > 0.85 && q[2] > 0.85 && q[3] > 0.9 {
-                    cells[y * 4 / img.h][x * 4 / img.w] += 1;
-                }
-            }
-        }
-        println!("diagnostic matrix {name}: grid {cells:?}");
-    };
-
-    make("HI", 60.0, None, true, "a: HI 60 static over footage");
-    make("FrameForge", 18.0, None, true, "b: FrameForge 18 static over footage");
-    make("FrameForge", 18.0, Some(([75.0, 150.0, 0.0], [215.0, 150.0, 0.0])), true, "c: FrameForge 18 keys over footage");
-    make("FrameForge", 18.0, Some(([75.0, 150.0, 0.0], [215.0, 150.0, 0.0])), false, "d: FrameForge 18 keys no footage");
-    make("FrameForge", 18.0, Some(([75.0, 90.0, 0.0], [215.0, 90.0, 0.0])), true, "e: keys at y=90 over footage (same y as static b)");
-    make("HI", 60.0, Some(([75.0, 90.0, 0.0], [215.0, 90.0, 0.0])), true, "f: HI 60 keys over footage");
-}
-
-#[test]
-fn m4_comp_layers_over_footage_in_the_timeline() {
-    let (mut doc, seq, media) = bars_project();
-    let (ec_project, comp_id, fid) = comp_project();
-    let composition = doc.composition_mut(media);
-    composition.ec_project = Some(ec_project);
-    composition.comp = Some(comp_id);
-    composition.source_item = Some(fid);
-
-    let sources = ProjectSources::build(&doc).expect("sources");
-
-    // The animation really runs: the text starts left and ends right, drawn
-    // over the footage by the compositing engine's layer compositor.
-    let early = frame_at(&doc, seq, &sources, 6); // 0.25 s
-    let late = frame_at(&doc, seq, &sources, 42); // 1.75 s
-    let (el, er) = bright_halves(&early);
-    let (ll, lr) = bright_halves(&late);
-    assert!(el > 20 && er < el / 4, "the text must start on the left: {el} left vs {er} right");
-    assert!(lr > 20 && ll < lr / 4, "the text must end on the right: {ll} left vs {lr} right");
-
-    // The footage shows through where the text is not: bars keep a hard edge
-    // far from the text.
-    let mut max_edge = 0.0f32;
-    for y in 0..early.h {
-        for x in 0..early.w.saturating_sub(1) {
-            let a = early.get(x, y);
-            let b = early.get(x + 1, y);
-            let (l1, l2) = (0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2], 0.2126 * b[0] + 0.7152 * b[1] + 0.0722 * b[2]);
-            max_edge = max_edge.max((l2 - l1).abs());
-        }
-    }
-    assert!(max_edge > 0.3, "the bars under the text must stay sharp, got {max_edge}");
-
-    // Time is direction-independent: rendering the late frame first changes nothing.
-    let late_first = frame_at(&doc, seq, &sources, 42);
-    let early_again = frame_at(&doc, seq, &sources, 6);
-    assert_eq!(late_first, late, "backward scrubbing must reproduce the frame");
-    assert_eq!(early_again, early, "backward scrubbing must reproduce the frame");
-
-    // Save, drop everything, reopen: the composition survives the round-trip
-    // (the compositing project serializes inside the .ffproj) and renders
-    // byte-identically.
-    let dir = std::env::temp_dir();
-    let path = dir.join(format!("frameforge-m4-{}.ffproj", std::process::id()));
-    doc.save(&path).expect("save");
-    let reopened = FrameForgeProject::load(&path).expect("reopen");
-    assert!(reopened.compositions.len() == 1 && reopened.compositions.values().next().unwrap().has_comp(), "the comp must survive the round-trip");
-    let reopened_sources = ProjectSources::build(&reopened).expect("reopened sources");
-    assert_eq!(frame_at(&reopened, seq, &reopened_sources, 6), early, "frame 6 must be unchanged after save + reopen");
-    assert_eq!(frame_at(&reopened, seq, &reopened_sources, 42), late, "frame 42 must be unchanged after save + reopen");
-}
-
 #[test]
 fn m4_tone_generator_plays() {
     let mut p = Project::new("tone");
@@ -308,8 +267,7 @@ fn m4_tone_generator_plays() {
     assert!(info.video.is_none() && info.has_audio(), "a tone generator is audio-only");
     let media = add_media(&mut p, MediaRef::Generator(Generator::Tone { hz: 440.0, db: -6.0 }), info);
     let seq = p.new_sequence("Main", SequenceSettings { width: W, height: H, frame_rate: R, ..Default::default() }, 0, 1, None);
-    let source = TimeRange::new(Tick::ZERO, R.tick_of(24));
-    let audio = p.make_track_item(media, TrackKind::Audio, Tick::ZERO, source, R).expect("audio item");
+    let audio = p.make_track_item(media, TrackKind::Audio, Tick::ZERO, TimeRange::new(Tick::ZERO, R.tick_of(24)), R).expect("audio item");
     let s = p.sequence_mut(seq).expect("sequence");
     s.audio_tracks[0].items.push(audio);
     s.audio_tracks[0].sort();
@@ -365,8 +323,7 @@ fn m4_relink_heals_missing_media() {
     let bogus = dir.join("frameforge-m4-missing.wav");
     let item = add_media(&mut p, MediaRef::File { path: bogus.to_string_lossy().into_owned() }, info);
     let seq = p.new_sequence("Main", SequenceSettings { width: W, height: H, frame_rate: R, ..Default::default() }, 0, 1, None);
-    let source = TimeRange::new(Tick::ZERO, Tick(TICKS_PER_SECOND / 2));
-    let audio = p.make_track_item(item, TrackKind::Audio, Tick::ZERO, source, R).expect("audio item");
+    let audio = p.make_track_item(item, TrackKind::Audio, Tick::ZERO, TimeRange::new(Tick::ZERO, Tick(TICKS_PER_SECOND / 2)), R).expect("audio item");
     let s = p.sequence_mut(seq).expect("sequence");
     s.audio_tracks[0].items.push(audio);
     s.audio_tracks[0].sort();
@@ -408,8 +365,7 @@ fn m4_import_ecproj_onto_the_timeline() {
     let seq = p.new_sequence("Main", SequenceSettings { width: W, height: H, frame_rate: R, ..Default::default() }, 1, 0, None);
     let mut doc = FrameForgeProject::new(p);
     let item = doc.import_ecproj(&path).expect("import ecproj");
-    let source = TimeRange::new(Tick::ZERO, R.tick_of(24));
-    let video = doc.project.make_track_item(item, TrackKind::Video, Tick::ZERO, source, R).expect("clip");
+    let video = doc.project.make_track_item(item, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, R.tick_of(24)), R).expect("clip");
     let s = doc.project.sequence_mut(seq).expect("sequence");
     s.video_tracks[0].items.push(video);
     s.video_tracks[0].sort();
@@ -418,6 +374,4 @@ fn m4_import_ecproj_onto_the_timeline() {
     let img = render_sequence(&doc.project, seq, R.tick_of(12), RenderOptions::default(), &sources);
     let c = img.get(W as usize / 2, H as usize / 2);
     assert!(c[0] > 0.9 && c[1] < 0.1 && c[2] < 0.1 && c[3] > 0.9, "the imported comp must paint its solid red, got {c:?}");
-    // The comp is alpha-carrying content over a transparent carrier: where its
-    // layers do not reach, the timeline below shows through.
 }
