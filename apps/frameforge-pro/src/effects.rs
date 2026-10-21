@@ -26,7 +26,7 @@ fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
             ui.add(slider).changed()
         }
         EffectParamUi::Number | EffectParamUi::Percent | EffectParamUi::Angle | EffectParamUi::Pixels => {
-            ui.add(egui::DragValue::new(&mut value).speed(0.1).prefix(&format!("{} ", param.name))).changed()
+            ui.add(egui::DragValue::new(&mut value).speed(0.1).prefix(format!("{} ", param.name))).changed()
         }
         _ => {
             ui.label(format!("{} — not editable in the shell yet", param.name));
@@ -47,7 +47,7 @@ fn edit_bool(app: &mut App, item: ItemId, effect: usize, param: &frameforge_brid
         .and_then(|c| c.effects.get(effect))
         .and_then(|l| l.params.get(&param.id))
         .and_then(|p| p.value.as_bool())
-        .or_else(|| match &param.default {
+        .or(match &param.default {
             EffectValue::Bool(b) => Some(*b),
             _ => None,
         })
@@ -73,7 +73,7 @@ fn edit_choice(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
             ParamValue::Choice(c) => Some(*c),
             _ => None,
         })
-        .or_else(|| match &param.default {
+        .or(match &param.default {
             EffectValue::Enum(i) => Some(*i),
             _ => None,
         })
@@ -101,7 +101,7 @@ fn edit_color(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bri
         .and_then(|c| c.effects.get(effect))
         .and_then(|l| l.params.get(&param.id))
         .and_then(|p| p.value.as_color())
-        .or_else(|| match &param.default {
+        .or(match &param.default {
             EffectValue::Color(c) => Some([c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32]),
             _ => None,
         })

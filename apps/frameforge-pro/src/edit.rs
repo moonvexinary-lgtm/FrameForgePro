@@ -182,13 +182,12 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         if ui.button("+ Tone").clicked() {
             add_generator(app, Generator::Tone { hz: 440.0, db: -6.0 });
         }
-        if ui.button("+ File…").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
+        if ui.button("+ File…").clicked()
+            && let Some(path) = rfd::FileDialog::new()
                 .add_filter("Media", &["mp4", "mov", "mkv", "webm", "wav", "mp3", "flac", "png", "jpg", "jpeg", "tiff", "bmp", "tga"])
                 .pick_file()
-            {
-                add_file(app, path);
-            }
+        {
+            add_file(app, path);
         }
     });
     panel.separator();
@@ -316,15 +315,15 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let px = to_x(app.playhead);
     painter.line_segment([egui::pos2(px, alloc.top()), egui::pos2(px, alloc.bottom())], egui::Stroke::new(2.0, egui::Color32::LIGHT_RED));
 
-    if response.clicked() || response.dragged() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            match hit_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
-                Some(id) if response.clicked() => app.selection = Some(id),
-                _ => {
-                    let secs = ((pos.x - alloc.left()) / app.zoom).max(0.0) as f64;
-                    app.playhead = Tick((secs * TICKS_PER_SECOND as f64) as i64);
-                    app.selection = None;
-                }
+    if (response.clicked() || response.dragged())
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        match hit_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
+            Some(id) if response.clicked() => app.selection = Some(id),
+            _ => {
+                let secs = ((pos.x - alloc.left()) / app.zoom).max(0.0) as f64;
+                app.playhead = Tick((secs * TICKS_PER_SECOND as f64) as i64);
+                app.selection = None;
             }
         }
     }
@@ -341,7 +340,7 @@ fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
     // Render only when the shown frame, the document revision or the sequence
     // changed — through the same compositor export uses.
-    let needs = app.monitor.as_ref().map_or(true, |m| m.frame != frame || m.revision != app.doc.revision || m.seq != seq_id);
+    let needs = app.monitor.as_ref().is_none_or(|m| m.frame != frame || m.revision != app.doc.revision || m.seq != seq_id);
     if needs {
         let playhead = app.playhead;
         let rendered = app

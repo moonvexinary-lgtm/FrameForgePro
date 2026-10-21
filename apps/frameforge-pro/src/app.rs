@@ -246,7 +246,7 @@ impl eframe::App for App {
             if let Some(last) = self.last.replace(now) {
                 let nanos = now.duration_since(last).as_nanos();
                 let nanos = i64::try_from(nanos).unwrap_or(i64::MAX / 4);
-                self.playhead = self.playhead + Tick::from_units(nanos.min(i64::MAX / 8), 1_000_000_000);
+                self.playhead += Tick::from_units(nanos.min(i64::MAX / 8), 1_000_000_000);
             }
             let end = self.sequence_end();
             if self.playhead >= end {
@@ -293,10 +293,10 @@ impl App {
         if bar.button("New").clicked() {
             self.new_project();
         }
-        if bar.button("Open…").clicked() {
-            if let Some(path) = rfd::FileDialog::new().add_filter("FrameForge Pro project", &["ffproj"]).pick_file() {
-                self.open(path);
-            }
+        if bar.button("Open…").clicked()
+            && let Some(path) = rfd::FileDialog::new().add_filter("FrameForge Pro project", &["ffproj"]).pick_file()
+        {
+            self.open(path);
         }
         if bar.button("Save").clicked() {
             self.save();
@@ -351,10 +351,10 @@ pub fn gutter_v(ui: &mut egui::Ui, x: f32, y0: f32, y1: f32, value: &mut f32) {
     if response.hovered() || response.dragged() {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
     }
-    if let Some(pos) = response.interact_pointer_pos() {
-        if response.dragged() {
-            *value = pos.x;
-        }
+    if response.dragged()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        *value = pos.x;
     }
 }
 
@@ -366,9 +366,9 @@ pub fn gutter_h(ui: &mut egui::Ui, y: f32, x0: f32, x1: f32, value: &mut f32) {
     if response.hovered() || response.dragged() {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
     }
-    if let Some(pos) = response.interact_pointer_pos() {
-        if response.dragged() {
-            *value = pos.y;
-        }
+    if response.dragged()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        *value = pos.y;
     }
 }

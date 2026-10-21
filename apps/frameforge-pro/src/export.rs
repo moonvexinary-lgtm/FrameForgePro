@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use filmcraft_export::{ExportSettings, Format, Progress, export};
-use filmcraft_project::ItemId;
 use frameforge_bridge::{FrameForgeProject, ProjectSources};
 
 use crate::app::App;
@@ -24,7 +23,6 @@ const FORMATS: &[(Format, &str, &str)] = &[
 
 pub struct RunningExport {
     pub progress: Arc<Progress>,
-    pub seq: ItemId,
     pub done: Arc<Mutex<Option<Result<String, String>>>>,
 }
 
@@ -166,7 +164,7 @@ fn start(app: &mut App) {
         *worker_done.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
     });
 
-    app.export.running = Some(RunningExport { progress, seq, done });
+    app.export.running = Some(RunningExport { progress, done });
     app.export.result = None;
     app.export.error = None;
     app.status = format!("Exporting to {path}…");
