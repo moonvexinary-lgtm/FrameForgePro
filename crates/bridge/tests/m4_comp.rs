@@ -247,6 +247,8 @@ fn m4_text_visibility_matrix() {
     make("FrameForge", 18.0, None, true, "b: FrameForge 18 static over footage");
     make("FrameForge", 18.0, Some(([75.0, 150.0, 0.0], [215.0, 150.0, 0.0])), true, "c: FrameForge 18 keys over footage");
     make("FrameForge", 18.0, Some(([75.0, 150.0, 0.0], [215.0, 150.0, 0.0])), false, "d: FrameForge 18 keys no footage");
+    make("FrameForge", 18.0, Some(([75.0, 90.0, 0.0], [215.0, 90.0, 0.0])), true, "e: keys at y=90 over footage (same y as static b)");
+    make("HI", 60.0, Some(([75.0, 90.0, 0.0], [215.0, 90.0, 0.0])), true, "f: HI 60 keys over footage");
 }
 
 #[test]
