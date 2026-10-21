@@ -190,6 +190,7 @@ fn m4_comp_layers_over_footage_in_the_timeline() {
     let (n_late, c_late) = band_stats(&late);
     let (ce, cl) = (c_early.expect("text pixels in the early band"), c_late.expect("text pixels in the late band"));
     assert!(n_early > 20, "the text must render over the footage: {n_early} band pixels");
+    assert!(n_late > 20, "the text must render over the footage late too: {n_late} band pixels");
     assert!(ce < 130.0, "the text must start near the left key: centroid {ce}");
     assert!(cl > 180.0, "the text must end near the right key: centroid {cl}");
     assert!(cl - ce > 60.0, "the keyframed position must animate: centroid {ce} -> {cl}");
