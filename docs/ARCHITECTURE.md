@@ -80,7 +80,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
   real frame and is classified (runs / bridge-unsupported); none may panic.
   Counts are reported by the test run, not asserted from documentation.
 
-## M4 — compositions with real layers (in review)
+## M4 — compositions with real layers (✔ CI-verified, run 39542160028)
 
 - **The deep integration**: a [`Composition`] can hold a full compositing-engine
   project whose comp *is* the clip's picture on the timeline. Its source
@@ -95,6 +95,17 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
   heals the moment the file is back.
 - **`.ecproj` import**: a compositing project's first comp lands on the
   timeline as an alpha-carrying media item (`import_ecproj`).
+- Verified in CI: keyframed text animates over served footage (mass-centroid
+  travels between its keys), direction-independent frames, byte-identical
+  save/reopen (the compositing project serializes inside `.ffproj`), the tone
+  generator is audible, relink heals a missing file, and an imported `.ecproj`
+  paints its comp on the timeline.
+- Honest scope: the comp's audio mixing passes the clip's audio through
+  unchanged (comp Audio Levels are future work); footage items of an imported
+  `.ecproj` other than the source layer stay offline; the moving-text
+  investigation is recorded in the test suite (`m4_text_visibility_matrix`) —
+  two wrong test-side assumptions (centre-position semantics, white-on-white
+  measurement), never an engine fault.
 
 ## Milestones
 
@@ -103,7 +114,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 | M1 | shared time foundation + cloud CI | ✔ (CI-verified, run 39371821743) |
 | M2 | integration proof: timeline clip + real EffectCraft effect + keyframed parameter; save/reopen; render; export; verified output (synthetic media) | ✔ (CI-verified, run 39371821743) |
 | M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | ✔ (CI-verified, run 39379740235) |
-| M4 | compositions with real layers inside the timeline (compositing-engine comps whose footage layer is backed by the editing engine's media); tone generators; relink + healing; `.ecproj` import | in review (this commit; CI verdict in Actions) |
+| M4 | compositions with real layers inside the timeline (compositing-engine comps whose footage layer is backed by the editing engine's media); tone generators; relink + healing; `.ecproj` import | ✔ (CI-verified, run 39542160028) |
 | M5 | application shell: egui workspaces over the unified session | planned |
 | M6 | feature parity + machine-readable effects/feature registry and audit | planned |
 | M7 | reliability: recovery, cancellation, missing media, audio sync, performance | planned |
