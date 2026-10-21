@@ -182,19 +182,33 @@ fn m4_comp_layers_over_footage_in_the_timeline() {
     let early = frame_at(&doc, seq, &sources, 6); // 0.25 s
     let late = frame_at(&doc, seq, &sources, 42); // 1.75 s
 
-    // Diagnostics: where bright pixels actually are (the whole frame, not just
-    // the measured band), so a wrong assumption shows up in the log.
+    // Diagnostics: what the document holds, and where the bright pixels are.
+    {
+        let composition = doc.compositions.get(&media).expect("composition");
+        let project = composition.ec_project.as_ref().expect("ec project");
+        let cid = composition.comp.expect("comp id");
+        if let Some(c) = project.comp(cid) {
+            let l0 = c.layers.first().expect("layer 0");
+            let pos = l0.props.prop("transform/position");
+            println!(
+                "diagnostic doc: layer0 position keys {}, static {:?}, sourceText {}",
+                pos.map(|pr| pr.keys.len()).unwrap_or(9999),
+                pos.map(|pr| pr.value.clone()),
+                l0.props.prop("text/sourceText").is_some()
+            );
+        }
+    }
     for (name, img) in [("early", &early), ("late", &late)] {
-        let mut whole = 0;
+        let mut cells = [[0usize; 4]; 4];
         for y in 0..img.h {
             for x in 0..img.w {
                 let p = img.get(x, y);
                 if p[0] > 0.85 && p[1] > 0.85 && p[2] > 0.85 && p[3] > 0.9 {
-                    whole += 1;
+                    cells[y * 4 / img.h][x * 4 / img.w] += 1;
                 }
             }
         }
-        println!("diagnostic {name}: whole-frame bright {whole}, band halves {:?}, size {}x{}", bright_halves(img), img.w, img.h);
+        println!("diagnostic {name}: bright grid {cells:?}");
     }
 
     // The animation really runs: the text starts left and ends right, drawn
