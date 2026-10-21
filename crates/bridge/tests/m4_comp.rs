@@ -85,9 +85,10 @@ fn build_case(text: &str, size: f64, keys: Option<([f64; 3], [f64; 3])>, with_fo
             }),
         )
     });
-    // Top layer first (index 0): the text. White-on-white is invisible to any
-    // brightness measurement, so animated cases keep clear of the footage's
-    // own bright block (bottom half) — see the visibility matrix.
+    // Top layer first (index 0): the text. A text layer's position is the left
+    // origin of its glyph run (point-text semantics: the first glyph's
+    // baseline start), so the keys are laid out for a ~130-px run to stay
+    // inside the frame and the measured band at both ends.
     let mut l = ecp::build::layer(&mut ec, &comp, "Title", ecp::LayerSource::Text, (W, H), None);
     if let Some(pr) = l.props.prop_mut("text/sourceText") {
         pr.value = EcValue::Text(Box::new(TextDoc { text: text.to_string(), size, ..Default::default() }));
@@ -144,12 +145,18 @@ fn band_stats(img: &Image) -> (usize, Option<f64>) {
     (n, if n > 0 { Some(sum / n as f64) } else { None })
 }
 
-/// The record of how the moving-text case was understood: (c) keys at y=150
-/// over footage "disappeared" while (d) the same keys without footage and
-/// (e)/(f) keys in the clean band rendered — because the footage's own bright
-/// white block sits exactly under y=150, and white text on a white block is
-/// invisible to any brightness measurement. The engine was rendering
-/// correctly the whole time.
+/// The record of how the moving-text case was understood. Two wrong
+/// assumptions, both mine, both measured away:
+///
+/// 1. a text layer's `position` is the **left origin of its glyph run**
+///    (point-text semantics), not its centre — the run renders half a run
+///    right of where a "centre" reading puts it (static [75, 60] measured a
+///    centroid of 141.8 for a 130-px run: 75 + 65);
+/// 2. the bars footage carries its own bright white block in the bottom half,
+///    and white text on it is invisible to any brightness measurement — the
+///    y=150 cases measured an empty band for that reason too.
+///
+/// The engines and the bridge were rendering correctly the whole time.
 #[test]
 fn m4_text_visibility_matrix() {
     let show = |text: &str, size: f64, keys: Option<([f64; 3], [f64; 3])>, with_footage: bool, name: &str| {
@@ -170,11 +177,11 @@ fn m4_text_visibility_matrix() {
 
 #[test]
 fn m4_comp_layers_over_footage_in_the_timeline() {
-    let (doc, seq) = build_case("FrameForge", 24.0, Some(([75.0, 60.0, 0.0], [225.0, 60.0, 0.0])), true);
+    let (doc, seq) = build_case("FrameForge", 24.0, Some(([20.0, 60.0, 0.0], [190.0, 60.0, 0.0])), true);
     let sources = ProjectSources::build(&doc).expect("sources");
 
-    let early = frame_at(&doc, seq, &sources, 6); // 0.25 s: the text is near its left key
-    let late = frame_at(&doc, seq, &sources, 42); // past the last key: the text holds at its right key
+    let early = frame_at(&doc, seq, &sources, 6); // 0.25 s: the run starts near its left key
+    let late = frame_at(&doc, seq, &sources, 42); // past the last key: the run holds at its right key
 
     // The animation really runs: the text's mass centre travels from the left
     // key (~97) to the right key (225); the static default position would sit
