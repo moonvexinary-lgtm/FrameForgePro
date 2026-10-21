@@ -91,9 +91,11 @@ fn comp_project() -> (ecp::Project, ecp::ItemId, ecp::ItemId) {
         }));
     }
     if let Some(pos) = text.props.prop_mut("transform/position") {
+        // The move completes by frame 40, so the sampled late frame (42) sits
+        // past the last key: the whole run is in the right half.
         pos.keys = vec![
-            Keyframe::new(EcTick::ZERO, EcValue::Vec3([20.0, f64::from(H) / 2.0, 0.0])),
-            Keyframe::new(EcTick(FRAMES * TICKS_PER_SECOND / 24), EcValue::Vec3([190.0, f64::from(H) / 2.0, 0.0])),
+            Keyframe::new(EcTick::ZERO, EcValue::Vec3([75.0, 150.0, 0.0])),
+            Keyframe::new(EcTick(40 * TICKS_PER_SECOND / 24), EcValue::Vec3([215.0, 150.0, 0.0])),
         ];
     }
     let source_layer = ecp::build::layer(&mut p, &comp, "Source", ecp::LayerSource::Footage { item: fid }, (W, H), None);
@@ -107,11 +109,12 @@ fn frame_at(doc: &FrameForgeProject, seq: ItemId, sources: &ProjectSources, f: i
     render_sequence(&doc.project, seq, R.tick_of(f), RenderOptions::default(), sources)
 }
 
-/// Bright (text) pixels per horizontal half of the picture.
+/// Bright (text) pixels per horizontal half of a horizontal band below the
+/// color bars (the bars carry a big white patch of their own, so the moving
+/// text is measured out of its way).
 fn bright_halves(img: &Image) -> (usize, usize) {
-    let mut left = 0;
-    let mut right = 0;
-    for y in 0..img.h {
+    let (mut left, mut right) = (0, 0);
+    for y in 138..img.h.min(168) {
         for x in 0..img.w {
             let p = img.get(x, y);
             if p[0] > 0.85 && p[1] > 0.85 && p[2] > 0.85 && p[3] > 0.9 {
@@ -139,8 +142,8 @@ fn m4_comp_layers_over_footage_in_the_timeline() {
     let late = frame_at(&doc, seq, &sources, 42); // 1.75 s
     let (el, er) = bright_halves(&early);
     let (ll, lr) = bright_halves(&late);
-    assert!(el > 20 && er < el / 4, "the text must start on the left: {el} left vs {er} right");
-    assert!(lr > 20 && ll < lr / 4, "the text must end on the right: {ll} left vs {lr} right");
+    assert!(el > 100 && er < el / 4, "the text must start on the left: {el} left vs {er} right");
+    assert!(lr > 100 && ll < lr / 4, "the text must end on the right: {ll} left vs {lr} right");
 
     // The footage shows through where the text is not: bars keep a hard edge
     // far from the text.
