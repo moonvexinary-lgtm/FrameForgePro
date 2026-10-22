@@ -131,7 +131,7 @@ verified engine — no fake controls:
 - Trimming, drag edits, undo and keyframing UIs are honestly deferred to M6
   (the engine session), and the UI says so where it matters.
 
-## M6 — the editing engine session (in review)
+## M6 — the editing engine session (✔ CI-verified, run 39703930594)
 
 The shell no longer edits the project model directly: the FilmCraft `Session`
 owns the editing project, and every project-changing action runs through
@@ -162,7 +162,7 @@ open; undo restores items under the same ids, so compositions follow.
 | M3 | file media through the codecs, offline slates, `.fcproj` import, machine-readable two-engine effects registry + duplicate audit + per-effect sweep | ✔ (CI-verified, run 39379740235) |
 | M4 | compositions with real layers inside the timeline (compositing-engine comps whose footage layer is backed by the editing engine's media); tone generators; relink + healing; `.ecproj` import | ✔ (CI-verified, run 39542160028) |
 | M5 | the application shell: an egui window with the user's icon, real workspaces (Edit: project panel, timeline, program monitor; Effects: composition editor with live parameters; Export: real renders with progress), `.ffproj` open/save, media import and clip placement | ✔ (CI-verified, run 39561711515) |
-| M6 | the editing engine session: every edit an undoable engine command, the audio clock, razor, undo/redo in the UI | in review (this commit; CI verdict in Actions) |
+| M6 | the editing engine session: every edit an undoable engine command, the audio clock, razor, undo/redo in the UI | ✔ (CI-verified, run 39703930594) |
 | M7 | keyframing UI, Color and Audio workspaces, panic hook, media relink UI | planned |
 | M8 | packaging: Windows release on CI, downloadable artifacts | planned |
 
