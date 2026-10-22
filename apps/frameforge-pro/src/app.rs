@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use filmcraft_engine::Session;
-use filmcraft_project::{ClipId, ItemId, Project, SequenceSettings};
+use filmcraft_project::{ClipId, ItemId, Project};
 use filmcraft_time::{FrameRate, Tick};
 use frameforge_bridge::{Composition, FFPROJ_SCHEMA, FrameForgeProject, ProjectSources};
 
@@ -338,7 +338,7 @@ impl eframe::App for App {
         // Playback: the audio clock drives the playhead when a stream runs;
         // otherwise the wall clock does.
         if self.playing {
-            if let Some(start) = self.wall_start {
+            if self.wall_start.is_some() {
                 let now = Instant::now();
                 if let Some(last) = self.last.replace(now) {
                     let nanos = i64::try_from(now.duration_since(last).as_nanos()).unwrap_or(i64::MAX / 4);

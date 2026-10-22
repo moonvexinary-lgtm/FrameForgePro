@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use filmcraft_project::{ItemId, Project};
-use filmcraft_render::SourceProvider;
 use filmcraft_render::audio::mix_sequence;
 use filmcraft_time::Tick;
 use frameforge_bridge::ProjectSources;
@@ -100,8 +99,8 @@ impl Player {
         self.finished.store(false, Ordering::Relaxed);
 
         let rate = u64::from(SEQUENCE_RATE);
-        let start_sample = start.to_units_floor(SEQUENCE_RATE) as u64;
-        let end_sample = end.to_units_floor(SEQUENCE_RATE) as u64;
+        let start_sample = start.to_units_floor(i64::from(SEQUENCE_RATE)) as u64;
+        let end_sample = end.to_units_floor(i64::from(SEQUENCE_RATE)) as u64;
         let device_rate = u64::from(self.device_rate);
         let channels = self.channels;
         let finished = Arc::clone(&self.finished);
@@ -146,7 +145,6 @@ impl Default for Player {
 fn device_config() -> Result<(u32, u16), String> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or_else(|| "no audio output device".to_string())?;
-    let config = device.default_output_config().map_err(|e| format!("audio device: {e}"))?;
     let want = SEQUENCE_RATE;
     let exact = device
         .supported_output_configs()

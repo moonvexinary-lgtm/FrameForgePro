@@ -40,8 +40,6 @@ fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
 
 fn edit_bool(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
     let current = app
-        .doc
-        .doc
         .compositions
         .get(&item)
         .and_then(|c| c.effects.get(effect))

@@ -3,8 +3,8 @@
 //! playhead, real engine commands). Laid out by rect — this egui generation
 //! has no panel helpers.
 
-use filmcraft_media::Generator;
 use filmcraft_media::generators::GeneratorSource;
+use filmcraft_media::{Generator, MediaSource};
 use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef};
 use filmcraft_time::TICKS_PER_SECOND;
 use filmcraft_time::Tick;
@@ -130,6 +130,7 @@ fn remove_media(app: &mut App, media: ItemId) {
     let result = app.session.edit("Remove Media", |project, _| {
         for seq in project.items.values_mut() {
             if let ItemKind::Sequence(s) = &mut seq.kind {
+                let s = std::sync::Arc::make_mut(s);
                 for track in s.video_tracks.iter_mut().chain(s.audio_tracks.iter_mut()) {
                     track.items.retain(|it| it.item != media);
                     track.sort();
