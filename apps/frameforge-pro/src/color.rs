@@ -7,7 +7,7 @@
 
 use filmcraft_project::keyframe::ParamValue;
 
-use crate::app::{App, Workspace};
+use crate::app::App;
 use crate::edit;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {

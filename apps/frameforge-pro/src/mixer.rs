@@ -14,10 +14,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
         return;
     };
 
-    // Read-only pass: every strip's state (the command writes go after).
+    // Read-only pass: every strip's state (the command writes go after; the
+    // borrow of the sequence ends at the last read).
     let tracks: Vec<(String, bool, bool, f64, f64)> = s.audio_tracks.iter().map(|t| (t.name.clone(), t.muted, t.solo, t.volume_db, t.pan)).collect();
     let master: f64 = s.master_volume_db;
-    drop(s);
 
     ui.painter().rect_filled(body, 0.0, ui.visuals().panel_fill);
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("mixer"));
@@ -37,15 +37,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
             ui.vertical(|ui| {
                 ui.set_min_width(strip_w);
                 ui.heading(name);
-                let mut mute = *muted;
                 if ui.selectable_label(*muted, if *muted { "Mute ●" } else { "Mute" }).clicked() {
-                    mute = !*muted;
-                    writes.push((name.clone(), serde_json::json!({"strip": name, "muted": mute})));
+                    writes.push((name.clone(), serde_json::json!({"strip": name, "muted": !*muted})));
                 }
-                let mut solo_on = *solo;
                 if ui.selectable_label(*solo, if *solo { "Solo ●" } else { "Solo" }).clicked() {
-                    solo_on = !*solo;
-                    writes.push((name.clone(), serde_json::json!({"strip": name, "solo": solo_on})));
+                    writes.push((name.clone(), serde_json::json!({"strip": name, "solo": !*solo})));
                 }
                 let mut vol = *volume_db;
                 if ui.add(egui::Slider::new(&mut vol, -96.0..=12.0).vertical().text("dB")).changed() {
