@@ -59,10 +59,6 @@ impl Player {
         }
     }
 
-    pub fn note(&self) -> Option<&str> {
-        self.note.as_deref()
-    }
-
     /// The playback position as ticks: exactly the audio the device consumed.
     pub fn position(&self) -> Tick {
         Tick::from_units(self.played.load(Ordering::Relaxed) as i64, i64::from(self.device_rate))
@@ -82,7 +78,7 @@ impl Player {
             return Err(why.clone());
         }
         if self.stream.is_none() {
-            let (_, channels) = device_config().map_err(|e| e)?; // note is None here, so this succeeds
+            let (_, channels) = device_config()?; // note is None here, so this succeeds
             self.channels = channels;
             let stream = build_stream(self.channels, Arc::clone(&self.slot), Arc::clone(&self.played))?;
             stream.play().map_err(|e| format!("audio: {e}"))?;
