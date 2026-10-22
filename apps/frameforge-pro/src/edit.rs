@@ -419,7 +419,8 @@ fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
     }
 }
 
-fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
+/// The program monitor — shared by the Edit and Color workspaces.
+pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let Some(seq_id) = app.sequence_id() else {
         let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor"));
         area.vertical_centered(|ui| ui.label("No sequence. New project creates one; import media on the left and double-click it to place a clip."));

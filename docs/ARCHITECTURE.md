@@ -172,6 +172,24 @@ open; undo restores items under the same ids, so compositions follow.
   artifact — the first runnable build you can download from the Actions run
   page without installing anything locally.
 
+## M8 — Color, Audio, comp layers, releases (in review)
+
+- **The Color workspace**: the program monitor beside the selected clip's
+  FilmCraft effect stack — apply from the engine's video-effect catalog
+  (`effects.apply`), toggle (`effects.toggleEnabled`), remove
+  (`effects.remove`), and set parameters (`effects.setParam`): sliders,
+  checkboxes and popups, all undoable engine commands. This is the classic
+  grade panel: Lumetri Color, ASC CDL, Brightness & Contrast…
+- **The Audio workspace**: the sequence's mixer — a strip per audio track
+  plus the Mix, with fader, pan, mute and solo, all through
+  `mixer.setStrip` (undoable). The audio clock's mixer graph reads exactly
+  this state, so a moved fader is heard immediately.
+- **Comp layer editing**: visibility toggles, removal, and new text/solid
+  layers on the clip's compositing comp — through bridge `Composition`
+  methods over the same EffectCraft project the M4 acceptance test renders.
+- **Releases**: a tag push (`v*`) builds and publishes a GitHub Release with
+  a ZIP (exe + licenses + README) — `softprops/action-gh-release`.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -183,7 +201,7 @@ open; undo restores items under the same ids, so compositions follow.
 | M5 | the application shell: an egui window with the user's icon, real workspaces (Edit: project panel, timeline, program monitor; Effects: composition editor with live parameters; Export: real renders with progress), `.ffproj` open/save, media import and clip placement | ✔ (CI-verified, run 39561711515) |
 | M6 | the editing engine session: every edit an undoable engine command, the audio clock, razor, undo/redo in the UI | ✔ (CI-verified, run 39703930594) |
 | M7 | editing depth: drag-move and trim through engine commands with a ghost preview, the keyframe editor (stopwatch + keys in media time), the panic hook, downloadable Windows dev builds from CI | ✔ (CI-verified, run 39717619124) |
-| M8 | the Color and Audio workspaces (FilmCraft's Lumetri on clips, the mixer), comp layer editing, reliability passes | planned |
+| M8 | Color workspace (FilmCraft's effect stack on the clip: apply/toggle/remove/setParam), Audio workspace (the mixer: faders, pan, mute, solo through mixer.setStrip), comp layer editing, tagged GitHub Releases with a ZIP | in review (this commit; CI verdict in Actions) |
 | M8 | packaging: Windows release on CI, downloadable artifacts | planned |
 
 ## Dependency policy

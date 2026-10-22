@@ -12,9 +12,11 @@
 
 mod app;
 mod audio;
+mod color;
 mod edit;
 mod effects;
 mod export;
+mod mixer;
 mod pixels;
 
 use std::process::ExitCode;

@@ -1,0 +1,57 @@
+# FrameForge Pro release: a tag push (v*) builds the Windows release and
+# publishes it as a GitHub Release with a ZIP. Everything runs on GitHub
+# Actions — nothing builds locally.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  windows-release:
+    name: build + package (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Disk space (before)
+        run: Get-PSDrive C | Select-Object Name, Used, Free | Format-Table
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (release)
+        run: cargo build --release -p frameforge-pro
+
+      - name: Self-test the binary
+        run: ./target/release/frameforge-pro.exe selftest
+
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item target/release/frameforge-pro.exe package/
+          Copy-Item README.md package/
+          Copy-Item LICENSE-MIT package/
+          Copy-Item LICENSE-APACHE package/
+          Copy-Item NOTICE package/
+          Compress-Archive -Path package/* -DestinationPath frameforge-pro-${{ github.ref_name }}-windows-x64.zip -Force
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: frameforge-pro-${{ github.ref_name }}-windows-x64.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Disk space (after)
+        if: always()
+        run: Get-PSDrive C | Select-Object Name, Used, Free | Format-Table

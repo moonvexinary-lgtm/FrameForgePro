@@ -282,27 +282,62 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
         "Parameters apply at once; ◆+ keys the parameter at the playhead (media time) — keys evaluate through the same keyframe system the timeline uses.",
     );
 
-    // The compositing comp, if the clip has one.
+    // The compositing comp, if the clip has one: real layer editing —
+    // visibility toggles, removal, and new text/solid layers (all through
+    // the bridge's Composition methods, which own the EffectCraft project).
     let has_comp = app.compositions.get(&item).map(|c| c.has_comp()).unwrap_or(false);
     if has_comp {
         panel.separator();
         panel.label(egui::RichText::new("Compositing comp layers").strong());
-        let mut names: Vec<String> = Vec::new();
-        if let Some(composition) = app.compositions.get(&item)
-            && let Some(project) = &composition.ec_project
-            && let Some(comp_id) = composition.comp
-            && let Some(comp) = project.comp(comp_id)
-        {
-            for layer in &comp.layers {
-                names.push(layer.name.clone());
-            }
-        }
+        let layers: Vec<(String, bool)> = app.compositions.get(&item).map(|c| c.comp_layers()).unwrap_or_default();
+        let mut toggles: Vec<usize> = Vec::new();
+        let mut removes: Vec<usize> = Vec::new();
         egui::ScrollArea::vertical().show(&mut panel, |ui| {
-            for name in names {
-                ui.label(format!("  {name}"));
+            for (index, (name, video)) in layers.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let mut toggle = *video;
+                    if ui.checkbox(&mut toggle, "").changed() {
+                        toggles.push(index);
+                    }
+                    ui.label(name);
+                    if ui.small_button("✕").clicked() {
+                        removes.push(index);
+                    }
+                });
             }
         });
-        panel.colored_label(egui::Color32::GRAY, "Layer editing arrives with the compositing workspace (M8).");
+        for index in toggles {
+            if let Some(composition) = app.compositions.get_mut(&item)
+                && composition.comp_toggle_layer(index)
+            {
+                app.mark_dirty();
+            }
+        }
+        for index in removes.iter().rev() {
+            if let Some(composition) = app.compositions.get_mut(&item)
+                && composition.comp_remove_layer(*index)
+            {
+                app.mark_dirty();
+                app.status = "Layer removed".to_string();
+            }
+        }
+        panel.horizontal(|ui| {
+            if ui.button("+ Text layer").clicked()
+                && let Some(composition) = app.compositions.get_mut(&item)
+                && composition.comp_add_text_layer("FrameForge")
+            {
+                app.mark_dirty();
+                app.status = "Text layer added".to_string();
+            }
+            if ui.button("+ Solid layer").clicked()
+                && let Some(composition) = app.compositions.get_mut(&item)
+                && composition.comp_add_solid_layer([1.0, 0.0, 0.0])
+            {
+                app.mark_dirty();
+                app.status = "Solid layer added".to_string();
+            }
+        });
+        panel.colored_label(egui::Color32::GRAY, "New layers land on top (index 0). The M4 acceptance test covers this exact render path.");
     }
 }
 

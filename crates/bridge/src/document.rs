@@ -74,6 +74,81 @@ impl Composition {
     pub fn is_noop(&self) -> bool {
         !self.effects.iter().any(|e| e.enabled) && !self.has_comp()
     }
+
+    /// The comp's layers, as (name, video-switch) rows — read for the shell.
+    pub fn comp_layers(&self) -> Vec<(String, bool)> {
+        self.ec_project
+            .as_ref()
+            .zip(self.comp)
+            .and_then(|(p, cid)| p.comp(cid))
+            .map(|comp| comp.layers.iter().map(|l| (l.name.clone(), l.switches.video)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Toggle a comp layer's video switch. False when there is no comp or no
+    /// layer at `index`.
+    pub fn comp_toggle_layer(&mut self, index: usize) -> bool {
+        let Some(comp) = self.ec_project.as_mut().zip(self.comp).and_then(|(p, cid)| p.comp_mut(cid)) else { return false };
+        if index >= comp.layers.len() {
+            return false;
+        }
+        let layer = &mut comp.layers[index];
+        layer.switches.video = !layer.switches.video;
+        true
+    }
+
+    /// Remove a comp layer. False when there is no comp or no layer at
+    /// `index`.
+    pub fn comp_remove_layer(&mut self, index: usize) -> bool {
+        let Some(comp) = self.ec_project.as_mut().zip(self.comp).and_then(|(p, cid)| p.comp_mut(cid)) else { return false };
+        if index >= comp.layers.len() {
+            return false;
+        }
+        comp.layers.remove(index);
+        true
+    }
+
+    /// Add a text layer to the top of the comp. False when there is no comp.
+    pub fn comp_add_text_layer(&mut self, text: &str) -> bool {
+        let Some((width, height, duration)) = self.comp_bounds() else { return false };
+        // Clone the comp (dropping the immutable project borrow) — build::layer
+        // reads it for the layer's defaults while the project is mutated.
+        let Some(comp) = self.ec_project.as_ref().zip(self.comp).and_then(|(p, cid)| p.comp(cid)).cloned() else { return false };
+        let Some(project) = &mut self.ec_project else { return false };
+        let Some(cid) = self.comp else { return false };
+        let mut layer = effectcraft_project::build::layer(project, &comp, "Text", effectcraft_project::LayerSource::Text, (width, height), Some(duration));
+        if let Some(source_text) = layer.props.prop_mut("text/sourceText") {
+            source_text.value =
+                effectcraft_keyframe::Value::Text(Box::new(effectcraft_keyframe::TextDoc { text: text.to_string(), size: 48.0, ..Default::default() }));
+        }
+        let Some(comp) = project.comp_mut(cid) else { return false };
+        comp.layers.insert(0, layer);
+        true
+    }
+
+    /// Add a solid layer to the top of the comp. False when there is no comp.
+    pub fn comp_add_solid_layer(&mut self, color: [f32; 3]) -> bool {
+        let Some((width, height, duration)) = self.comp_bounds() else { return false };
+        let Some(comp) = self.ec_project.as_ref().zip(self.comp).and_then(|(p, cid)| p.comp(cid)).cloned() else { return false };
+        let Some(project) = &mut self.ec_project else { return false };
+        let Some(cid) = self.comp else { return false };
+        let sid = project.add_item(
+            "Solid",
+            effectcraft_color::Label::Red,
+            None,
+            effectcraft_project::ItemKind::Solid(effectcraft_project::Solid { color, width, height, pixel_aspect: 1.0 }),
+        );
+        let layer =
+            effectcraft_project::build::layer(project, &comp, "Solid", effectcraft_project::LayerSource::Solid { item: sid }, (width, height), Some(duration));
+        let Some(comp) = project.comp_mut(cid) else { return false };
+        comp.layers.insert(0, layer);
+        true
+    }
+
+    fn comp_bounds(&self) -> Option<(u32, u32, effectcraft_time::Tick)> {
+        let (width, height, duration) = self.ec_project.as_ref().zip(self.comp).and_then(|(p, cid)| p.comp(cid)).map(|c| (c.width, c.height, c.duration))?;
+        Some((width, height, duration))
+    }
 }
 
 /// One EffectCraft effect inside a [`Composition`].

@@ -22,6 +22,8 @@ use crate::export::ExportState;
 pub enum Workspace {
     Edit,
     Effects,
+    Color,
+    Audio,
     Export,
 }
 
@@ -75,6 +77,10 @@ pub struct App {
     pub wall_start: Option<Tick>,
     /// An in-progress timeline drag (move or trim).
     pub timeline_drag: Option<TimelineDrag>,
+    /// The selected FilmCraft effect of the Color workspace's clip.
+    pub color_effect: Option<usize>,
+    /// The Color workspace's stack width (draggable gutter).
+    pub color_stack_w: f32,
 }
 
 /// The cached program-monitor texture and what it was rendered from.
@@ -122,6 +128,8 @@ impl App {
             player: Player::new(),
             wall_start: None,
             timeline_drag: None,
+            color_effect: None,
+            color_stack_w: 380.0,
         }
     }
 
@@ -418,6 +426,8 @@ impl eframe::App for App {
             match self.workspace {
                 Workspace::Edit => crate::edit::show(self, ui, body),
                 Workspace::Effects => crate::effects::show(self, ui, body),
+                Workspace::Color => crate::color::show(self, ui, body),
+                Workspace::Audio => crate::mixer::show(self, ui, body),
                 Workspace::Export => crate::export::show(self, ui, body),
             }
             self.status_bar(ui, status);
@@ -457,9 +467,9 @@ impl App {
 
         bar.selectable_value(&mut self.workspace, Workspace::Edit, "Edit");
         bar.selectable_value(&mut self.workspace, Workspace::Effects, "Effects");
+        bar.selectable_value(&mut self.workspace, Workspace::Color, "Color");
+        bar.selectable_value(&mut self.workspace, Workspace::Audio, "Audio");
         bar.selectable_value(&mut self.workspace, Workspace::Export, "Export");
-        bar.add_enabled(false, egui::Button::new("Color")).on_disabled_hover_text("The Color workspace is planned but not built yet (M7)");
-        bar.add_enabled(false, egui::Button::new("Audio")).on_disabled_hover_text("The Audio workspace is planned but not built yet (M7)");
 
         bar.separator();
 
