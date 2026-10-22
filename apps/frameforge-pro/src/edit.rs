@@ -9,7 +9,7 @@ use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef};
 use filmcraft_time::TICKS_PER_SECOND;
 use filmcraft_time::Tick;
 
-use crate::app::{App, Monitor, SEQUENCE_H, SEQUENCE_RATE, SEQUENCE_W};
+use crate::app::{App, Monitor, SEQUENCE_H, SEQUENCE_RATE, SEQUENCE_W, TimelineDrag};
 use crate::pixels;
 
 const ROW_H: f32 = 34.0;
@@ -228,7 +228,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         ui.separator();
         ui.add(egui::Slider::new(&mut app.zoom, 20.0..=400.0).text("px / s"));
         ui.separator();
-        ui.colored_label(egui::Color32::GRAY, "Click: playhead · Click a clip: select · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit");
+        ui.colored_label(egui::Color32::GRAY, "Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit");
     });
 
     let Some(s) = app.sequence() else {
@@ -300,7 +300,104 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let px = to_x(app.playhead);
     painter.line_segment([egui::pos2(px, alloc.top()), egui::pos2(px, alloc.bottom())], egui::Stroke::new(2.0, egui::Color32::LIGHT_RED));
 
+    // Interaction: drag a clip to move it, its edges to trim (engine
+    // commands on release — one undo step); click empty space to scrub.
+    const EDGE: f32 = 8.0;
+    if response.drag_started()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        // Read-only phase: what clip, what track, what gesture.
+        let decision = hit_rects.iter().find(|(r, _)| r.contains(pos)).copied().and_then(|(rect, id)| {
+            let (track, start) = app.sequence().and_then(|s| s.find_item(id).map(|(t, i)| (t, i.start)))?;
+            let kind = if pos.x < rect.left() + EDGE {
+                0
+            } else if pos.x > rect.right() - EDGE {
+                1
+            } else {
+                2
+            };
+            Some((id, track, start, kind))
+        });
+        match decision {
+            Some((id, track, start, kind)) => {
+                app.selection = Some(id);
+                app.timeline_drag = match kind {
+                    0 => Some(TimelineDrag::Trim { clip: id, edge: "in", grab_x: pos.x, last_x: pos.x }),
+                    1 => Some(TimelineDrag::Trim { clip: id, edge: "out", grab_x: pos.x, last_x: pos.x }),
+                    _ => Some(TimelineDrag::Move { clip: id, track, grab_x: pos.x, origin: start, last_x: pos.x }),
+                };
+            }
+            None => app.timeline_drag = None,
+        }
+    }
+
+    if response.dragged()
+        && app.timeline_drag.is_some()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        match &mut app.timeline_drag {
+            Some(TimelineDrag::Move { last_x, .. }) => *last_x = pos.x,
+            Some(TimelineDrag::Trim { last_x, .. }) => *last_x = pos.x,
+            None => {}
+        }
+    }
+
+    // Ghost preview of the drag (the document only changes on release).
+    if let Some(drag) = &app.timeline_drag
+        && let Some((rect, id)) = hit_rects.iter().find(|(_, id)| Some(*id) == drag_clip(drag)).copied()
+    {
+        let delta_x = match drag {
+            TimelineDrag::Move { grab_x, last_x, .. } => last_x - grab_x,
+            TimelineDrag::Trim { edge, grab_x, last_x, .. } => {
+                if *edge == "in" {
+                    (last_x - grab_x).min(rect.width() - 4.0)
+                } else {
+                    (last_x - grab_x)
+                }
+            }
+        };
+        let ghost = match drag {
+            TimelineDrag::Move { .. } => rect.translate(egui::vec2(delta_x.max(-rect.left() + alloc.left()), 0.0)),
+            TimelineDrag::Trim { edge, .. } => {
+                if *edge == "in" {
+                    egui::Rect::from_min_max(egui::pos2(rect.left() + delta_x.max(0.0).min(rect.width() - 4.0), rect.min.y), rect.max)
+                } else {
+                    egui::Rect::from_min_max(rect.min, egui::pos2((rect.right() + delta_x).max(rect.left() + 4.0), rect.max.y))
+                }
+            }
+        };
+        painter.rect_filled(ghost, 3.0, egui::Color32::from_rgba_unmultiplied(120, 170, 230, 90));
+        painter.rect_stroke(ghost, 3.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 170, 230)), egui::StrokeKind::Inside);
+    }
+
+    if response.drag_stopped()
+        && let Some(drag) = app.timeline_drag.take()
+    {
+        let zoom = app.zoom;
+        match drag {
+            TimelineDrag::Move { clip, track, grab_x, last_x, origin, .. } => {
+                let delta = ((last_x - grab_x) / zoom) as f64 * TICKS_PER_SECOND as f64;
+                let time = Tick((origin.0 as f64 + delta).max(0.0) as i64);
+                let params = serde_json::json!({"moves": [{"clip": clip.0, "track": track.0, "time": time.0}], "insert": false, "linked": true});
+                match app.execute("timeline.move", params) {
+                    Ok(_) => app.status = "Moved clip".to_string(),
+                    Err(e) => app.status = e,
+                }
+            }
+            TimelineDrag::Trim { clip, edge, grab_x, last_x, .. } => {
+                let delta = Tick((((last_x - grab_x) / zoom) as f64 * TICKS_PER_SECOND as f64) as i64);
+                let params = serde_json::json!({"clip": clip.0, "edge": edge, "mode": "regular", "delta": delta.0});
+                match app.execute("timeline.trim", params) {
+                    Ok(_) => app.status = format!("Trimmed {edge} edge"),
+                    Err(e) => app.status = e,
+                }
+            }
+        }
+    }
+
+    // Scrubbing (click or drag on empty space — never while a clip drag runs).
     if (response.clicked() || response.dragged())
+        && app.timeline_drag.is_none()
         && let Some(pos) = response.interact_pointer_pos()
     {
         match hit_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
@@ -311,6 +408,14 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 app.selection = None;
             }
         }
+    }
+}
+
+/// The clip a drag operates on.
+fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
+    match drag {
+        TimelineDrag::Move { clip, .. } => Some(*clip),
+        TimelineDrag::Trim { clip, .. } => Some(*clip),
     }
 }
 

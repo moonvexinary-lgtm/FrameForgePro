@@ -11,9 +11,16 @@ use frameforge_bridge::{EffectParamUi, EffectValue, effect_name, effect_params};
 use crate::app::App;
 
 /// The param kinds the shell can edit. The rest are shown read-only — never
-/// faked.
-fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
-    let current = |app: &App| -> Option<f64> { app.compositions.get(&item)?.effects.get(effect)?.params.get(&param.id)?.value.as_f64() };
+/// faked. Scalar parameters also carry the keyframe editor (the bridge's
+/// keyframes ride the editing engine's keyframe system, in media time).
+fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, key_time: filmcraft_time::Tick, ui: &mut egui::Ui) {
+    // The value shown is the parameter evaluated at the playhead (media
+    // time) when animated, else its static value — the same evaluation the
+    // renderer performs.
+    let current = |app: &App| -> Option<f64> {
+        let p = app.compositions.get(&item)?.effects.get(effect)?.params.get(&param.id)?;
+        p.value_at(key_time).as_f64()
+    };
     let mut value = current(app).unwrap_or_else(|| param.default.as_f64());
 
     let changed = match &param.ui {
@@ -36,6 +43,53 @@ fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
     if changed && let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect)) {
         link.params.insert(param.id.clone(), Param::new(ParamValue::Float(value)));
     }
+
+    // Keyframing: the stopwatch adds a key at the playhead (media time); the
+    // renderer evaluates the track at every request — M2 proved this exact
+    // path (direction-independent, byte-identical after save/reopen).
+    let animated = app.compositions.get(&item).and_then(|c| c.effects.get(effect)).and_then(|l| l.params.get(&param.id)).is_some_and(|p| p.is_animated());
+    ui.horizontal(|ui| {
+        let mut touched = false;
+        if ui.small_button("◆+").on_hover_text(format!("Add keyframe at the playhead (media time {:.2}s)", key_time.seconds())).clicked() {
+            if let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect)) {
+                let entry = link.params.entry(param.id.clone()).or_insert_with(|| Param::new(ParamValue::Float(value)));
+                entry.put_keyframe(key_time, ParamValue::Float(value));
+                touched = true;
+            }
+        }
+        if animated {
+            let keys: Vec<(filmcraft_time::Tick, f64)> = app
+                .compositions
+                .get(&item)
+                .and_then(|c| c.effects.get(effect))
+                .and_then(|l| l.params.get(&param.id))
+                .map(|p| p.keyframes.iter().map(|k| (k.time, k.value.as_f64().unwrap_or_default())).collect())
+                .unwrap_or_default();
+            ui.label(format!("{} key{}: ", keys.len(), if keys.len() == 1 { "" } else { "s" }));
+            for (t, v) in keys {
+                if ui.small_button(format!("×{:.1}@{:.2}s", v, t.seconds())).on_hover_text("Delete this keyframe").clicked() {
+                    if let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect)) {
+                        if let Some(p) = link.params.get_mut(&param.id) {
+                            p.remove_keyframe_at(t);
+                        }
+                        touched = true;
+                    }
+                }
+            }
+            if ui.small_button("clear").on_hover_text("Remove all keys of this parameter").clicked()
+                && let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect))
+                && let Some(p) = link.params.get_mut(&param.id)
+            {
+                let hold = p.value_at(key_time);
+                p.value = hold;
+                p.keyframes.clear();
+                touched = true;
+            }
+        }
+        if touched {
+            app.mark_dirty();
+        }
+    });
 }
 
 fn edit_bool(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
@@ -224,7 +278,10 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
         }
     });
     panel.separator();
-    panel.colored_label(egui::Color32::GRAY, "Parameters apply at once; keyframing arrives with M7.");
+    panel.colored_label(
+        egui::Color32::GRAY,
+        "Parameters apply at once; ◆+ keys the parameter at the playhead (media time) — keys evaluate through the same keyframe system the timeline uses.",
+    );
 
     // The compositing comp, if the clip has one.
     let has_comp = app.compositions.get(&item).map(|c| c.has_comp()).unwrap_or(false);
@@ -246,7 +303,7 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
                 ui.label(format!("  {name}"));
             }
         });
-        panel.colored_label(egui::Color32::GRAY, "Layer editing arrives with the compositing workspace (M6).");
+        panel.colored_label(egui::Color32::GRAY, "Layer editing arrives with the compositing workspace (M8).");
     }
 }
 
@@ -266,6 +323,15 @@ fn parameters(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) 
         return;
     };
     area.heading(name);
+    // Keyframes live in media time: the playhead's offset into the selected
+    // clip (keys follow the clip when it moves — the renderer evaluates in
+    // media time, so trims and splits never move keyframes).
+    let key_time = app
+        .selected_clip()
+        .and_then(|(clip, _)| app.sequence().and_then(|s| s.find_item(clip).map(|(_, i)| i.start)))
+        .map(|start| (app.playhead - start).max(filmcraft_time::Tick::ZERO))
+        .unwrap_or(app.playhead);
+    area.colored_label(egui::Color32::GRAY, format!("Keyframes land at media time {:.2}s (the playhead's offset into the clip)", key_time.seconds()));
     let Some(params) = effect_params(&effect_id) else { return };
     if params.is_empty() {
         area.label("This effect has no parameters.");
@@ -279,7 +345,7 @@ fn parameters(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) 
                     EffectParamUi::Popup { .. } => edit_choice(app, item, effect, param, ui),
                     EffectParamUi::Color => edit_color(app, item, effect, param, ui),
                     EffectParamUi::Number | EffectParamUi::Slider { .. } | EffectParamUi::Percent | EffectParamUi::Angle | EffectParamUi::Pixels => {
-                        edit_scalar(app, item, effect, param, ui)
+                        edit_scalar(app, item, effect, param, key_time, ui)
                     }
                     _ => {
                         ui.label(format!("{} — not editable in the shell yet", param.name));

@@ -32,6 +32,14 @@ pub const SEQUENCE_RATE: FrameRate = FrameRate::FPS_24;
 pub const SEQUENCE_W: u32 = 1280;
 pub const SEQUENCE_H: u32 = 720;
 
+/// An in-progress timeline drag, applied through an engine command on
+/// release (one undo step per gesture). `last_x` tracks the pointer during
+/// the drag for the ghost preview and the final delta.
+pub enum TimelineDrag {
+    Move { clip: ClipId, track: filmcraft_project::TrackId, grab_x: f32, origin: Tick, last_x: f32 },
+    Trim { clip: ClipId, edge: &'static str, grab_x: f32, last_x: f32 },
+}
+
 pub struct App {
     /// The editing engine session: owns the editing project, the command
     /// registry, and the undo history. Every project-changing action the
@@ -65,6 +73,8 @@ pub struct App {
     pub player: Player,
     /// The wall-clock position when audio playback fell back.
     pub wall_start: Option<Tick>,
+    /// An in-progress timeline drag (move or trim).
+    pub timeline_drag: Option<TimelineDrag>,
 }
 
 /// The cached program-monitor texture and what it was rendered from.
@@ -111,6 +121,7 @@ impl App {
             timeline_h: 220.0,
             player: Player::new(),
             wall_start: None,
+            timeline_drag: None,
         }
     }
 
@@ -398,13 +409,23 @@ impl eframe::App for App {
         let status = egui::Rect::from_min_max(egui::pos2(full.min.x, full.max.y - STATUS_H), full.max);
         let body = egui::Rect::from_min_max(egui::pos2(full.min.x, top.max.y), egui::pos2(full.max.x, status.min.y));
 
-        self.top_bar(ui, top);
-        match self.workspace {
-            Workspace::Edit => crate::edit::show(self, ui, body),
-            Workspace::Effects => crate::effects::show(self, ui, body),
-            Workspace::Export => crate::export::show(self, ui, body),
+        // The panic hook (upstream's rule): a fault in one panel must never
+        // close the app or lose the document — catch it, keep the session,
+        // say what happened. It is a safety net, not a substitute for the
+        // engine crates' never-crash rules.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.top_bar(ui, top);
+            match self.workspace {
+                Workspace::Edit => crate::edit::show(self, ui, body),
+                Workspace::Effects => crate::effects::show(self, ui, body),
+                Workspace::Export => crate::export::show(self, ui, body),
+            }
+            self.status_bar(ui, status);
+        }));
+        if result.is_err() {
+            self.status = "A UI error occurred. The project is intact — save it now.".to_string();
+            self.playing = false;
         }
-        self.status_bar(ui, status);
     }
 }
 

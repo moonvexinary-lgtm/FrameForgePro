@@ -89,6 +89,15 @@ jobs:
         if: always()
         run: ./target/release/frameforge-pro.exe selftest
 
+      - name: Upload Windows development build
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/frameforge-rust-rewrite'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frameforge-pro-windows-dev
+          path: target/release/frameforge-pro.exe
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Disk space (after)
         if: always()
         run: Get-PSDrive C | Select-Object Name, Used, Free | Format-Table

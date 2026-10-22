@@ -153,6 +153,23 @@ open; undo restores items under the same ids, so compositions follow.
   consumed (`Tick::from_units`). No usable device → honest wall-clock fallback
   with the reason in the status bar.
 
+## M7 — editing depth (in review)
+
+- **Drag-move and trim on the timeline**: dragging a clip body moves it and
+  dragging its 8-px edges trims it — both through the engine's own
+  `timeline.move` / `timeline.trim` commands (validated, clamped, linked
+  audio along, one undo step per gesture). The document only changes on
+  release; during the drag a translucent ghost previews the result.
+- **The keyframe editor**: every scalar effect parameter carries a stopwatch
+  (◆+) that keys it at the playhead's offset into the clip — media time, the
+  same keyframe system the timeline uses, so keys follow trims and moves.
+  Keys list with their values and delete individually or in one clear; the
+  slider shows the parameter evaluated at the playhead while animated.
+- **The panic hook** (upstream's rule): a fault in the frame is caught,
+  the session survives, the status bar says to save.
+- **Downloadable builds**: every green push uploads
+  `frameforge-pro.exe` (with the icon embedded) as a 7-day CI artifact.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -163,7 +180,8 @@ open; undo restores items under the same ids, so compositions follow.
 | M4 | compositions with real layers inside the timeline (compositing-engine comps whose footage layer is backed by the editing engine's media); tone generators; relink + healing; `.ecproj` import | ✔ (CI-verified, run 39542160028) |
 | M5 | the application shell: an egui window with the user's icon, real workspaces (Edit: project panel, timeline, program monitor; Effects: composition editor with live parameters; Export: real renders with progress), `.ffproj` open/save, media import and clip placement | ✔ (CI-verified, run 39561711515) |
 | M6 | the editing engine session: every edit an undoable engine command, the audio clock, razor, undo/redo in the UI | ✔ (CI-verified, run 39703930594) |
-| M7 | keyframing UI, Color and Audio workspaces, panic hook, media relink UI | planned |
+| M7 | editing depth: drag-move and trim through engine commands with a ghost preview, the keyframe editor (stopwatch + keys in media time), the panic hook, downloadable Windows dev builds from CI | in review (this commit; CI verdict in Actions) |
+| M8 | the Color and Audio workspaces (FilmCraft's Lumetri on clips, the mixer), comp layer editing, reliability passes | planned |
 | M8 | packaging: Windows release on CI, downloadable artifacts | planned |
 
 ## Dependency policy
