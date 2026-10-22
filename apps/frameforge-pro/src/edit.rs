@@ -344,7 +344,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
     // Ghost preview of the drag (the document only changes on release).
     if let Some(drag) = &app.timeline_drag
-        && let Some((rect, id)) = hit_rects.iter().find(|(_, id)| Some(*id) == drag_clip(drag)).copied()
+        && let Some((rect, _)) = hit_rects.iter().find(|(_, id)| Some(*id) == drag_clip(drag)).copied()
     {
         let delta_x = match drag {
             TimelineDrag::Move { grab_x, last_x, .. } => last_x - grab_x,
@@ -352,7 +352,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 if *edge == "in" {
                     (last_x - grab_x).min(rect.width() - 4.0)
                 } else {
-                    (last_x - grab_x)
+                    last_x - grab_x
                 }
             }
         };
