@@ -16,6 +16,7 @@ mod color;
 mod edit;
 mod effects;
 mod export;
+mod history;
 mod mixer;
 mod pixels;
 
