@@ -99,23 +99,26 @@ document mutation. The Color/Audio tabs that were disabled in M5 are now real (M
 | D1 | **S1 — data loss** | Writing a scalar effect parameter replaces the whole `Param`, **deleting its keyframes**. Editing an animated value silently destroys the animation. | `apps/frameforge-pro/src/effects.rs` (`edit_scalar`) |
 | D2 | **S1 — stale preview** | Parameter edits never call `mark_dirty()`, so the program-monitor cache does not invalidate: a changed effect is not shown until an unrelated edit bumps the revision. | same file, all four `edit_*` helpers |
 | D3 | **S1 — data loss** | `New` / `Open` discard unsaved changes without confirmation; there is no autosave or crash recovery. | `app.rs` |
-| D4 | S2 | Composition/effect edits bypass `Session` history; Ctrl+Z after an effect change undoes an unrelated timeline edit. | `app.rs`, `effects.rs` |
+| D4 | S2 | Composition/effect edits bypass `Session` history; Ctrl+Z after an effect change undoes an unrelated timeline edit. **Fixed in M11** (one chronological history; tests in `apps/frameforge-pro/src/history.rs` and `app.rs`). | `app.rs`, `effects.rs`, `history.rs` |
 | D5 | S2 | Removing an effect before the selected one leaves `selected_effect` pointing at a different effect. | `effects.rs` |
 | D6 | S2 | Export overwrites an existing file without confirmation; no cancel. | `export.rs` |
 | D7 | S2 | Track targeting absent; the second video/audio tracks cannot be used from the UI. **Fixed in M10** (track headers + source-patched placement). | `edit.rs` |
 | D8 | S3 | `README.md` still says "milestone M1 — not usable as an editor"; `ARCHITECTURE.md` header still says M1. Documentation lags reality. | docs |
 
 Post-audit status: D1, D2, D3, D5 and D8 were fixed in M9; D7 was fixed in M10 (tests in
-`apps/frameforge-pro/src/edit.rs`). D4 (composition edits outside the undo history) and D6
-(export overwrite confirmation / cancel) remain the next correctness work.
+`apps/frameforge-pro/src/edit.rs`); D4 was fixed in M11 (combined timeline/composition history,
+tests in `apps/frameforge-pro/src/history.rs`). D6 (export overwrite confirmation / cancel)
+remains the next correctness work.
 
 ## 8. Build, test, CI, sizes
 
 - CI: `windows-2025`, fmt → clippy `-D warnings` → check → test → release → self-test → artifact.
-- Last green code run: **39887395556** (M10); docs run: **39782549838**. All 17 tests passed.
-- Artifact: `frameforge-pro-windows-dev`, **25,209,694 bytes** ZIP, 7-day retention. Extracted exe: **64,305,152 bytes**.
+- Last green code run: **39900494912** (M11); all 24 tests passed. The docs/code run with the
+  App-level Ctrl+Z test is the next run; the count then becomes 25. Artifact:
+  `frameforge-pro-windows-dev`, **24.1 MB** ZIP per the run page, 7-day retention. The previous
+  extracted exe was **64,305,152 bytes**; the dependency graph did not change in M11.
 - No installer yet; the tag workflow produces `frameforge-pro-<tag>-windows-x64.zip`.
-- Local storage: no `target/` directory; 53.6 GB free on C:.
+- Local storage: no `target/` directory; ~53 GB free on C:.
 
 ## 9. Licenses
 
@@ -154,6 +157,6 @@ Acceptance criteria:
 - CI green with the existing artifact; docs updated (README status, ARCHITECTURE M9 row).
 - No new runtime dependency.
 
-Deliberately **not** in the M9 slice: effect-edit undo (D4), track targeting (D7, now fixed in
-M10), XMem (needs its own staged plan and a real worker benchmark). They are recorded in
+Deliberately **not** in the M9 slice: effect-edit undo (D4, fixed in M11), track targeting (D7,
+fixed in M10), XMem (needs its own staged plan and a real worker benchmark). They are recorded in
 `docs/FEATURE_PARITY.md` with priorities.

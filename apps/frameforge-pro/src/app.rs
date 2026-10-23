@@ -739,3 +739,41 @@ pub fn gutter_h(ui: &mut egui::Ui, y: f32, x0: f32, x1: f32, value: &mut f32) {
         *value = pos.y;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use filmcraft_bridge::Composition;
+
+    use super::*;
+
+    #[test]
+    fn ctrl_z_after_a_composition_edit_leaves_the_timeline_edit_alone() {
+        let mut app = App::from_parts(Project::new("Untitled"), HashMap::new(), None, "test");
+        app.edit_project("Timeline", |project, _| {
+            project.name = "timeline one".to_string();
+            Ok(())
+        })
+        .unwrap();
+
+        let item = ItemId(1);
+        let composition = Composition::default();
+        app.compositions.insert(item, composition.clone());
+        app.record_comp_change(item, None, Some(composition), 1);
+
+        app.undo();
+        assert!(!app.compositions.contains_key(&item), "the composition edit is undone");
+        assert_eq!(app.session.project.name, "timeline one", "the timeline edit is untouched");
+
+        app.undo();
+        assert_eq!(app.session.project.name, "Untitled", "the timeline edit is undone");
+        assert!(!app.can_undo());
+
+        app.redo();
+        assert_eq!(app.session.project.name, "timeline one");
+        app.redo();
+        assert!(app.compositions.contains_key(&item), "redo restores the composition");
+        assert!(!app.can_redo());
+    }
+}

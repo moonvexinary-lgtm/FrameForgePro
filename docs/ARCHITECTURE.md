@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: milestone M10 (2026-10-22) · Branch: `frameforge-rust-rewrite`
+Last updated: milestone M11 (2026-10-23) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -26,7 +26,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 |---|---|---|
 | L6 apps | `frameforge-pro` binary; workspaces: Edit / Effects / Color / Audio / Export | M5–M9: real workspaces, session edits, autosave |
 | L5 ui-egui | unified shell: workspaces, timeline, monitors, panels (egui — same UI stack as both upstreams) | M5–M8: working; docking/layout persistence still planned |
-| L4 engine | unified session: project, commands, undo; timeline items reference compositions | M6: FilmCraft `Session` is the editing authority |
+| L4 engine | unified session: project, commands, undo; timeline items reference compositions | M6: FilmCraft `Session` is the editing authority; M11: composition edits share its undo order |
 | L3 render/export | FilmCraft track compositor + EffectCraft layer compositor behind adapters; one export pipeline | M2/M4: verified; export formats decode-verified for H.264 |
 | L2 edit/effects | edit algebra; effect-bridge: EffectCraft effects on FilmCraft timeline clips, shared keyframes | M2: verified (307 effects swept) |
 | L1 media | FilmCraft codecs/media (already shared by both engines upstream) | upstream, pinned |
@@ -149,10 +149,12 @@ open; undo restores items under the same ids, so compositions follow.
 - **Commands wired**: `file.newSequence`, `file.newBarsAndTone`,
   `file.newColorMatte`, `file.import`, `timeline.place` (source-patched
   destinations with the engine's validation), `edit.clear` (named-clip delete), `sequence.addEditAllTracks`
-  (razor at the playhead), `edit.undo`, `edit.redo` — plus a `Session::edit`
-  closure for the Tone generator (no command yet) and media removal.
-- **Undo/redo**: toolbar buttons with real enable state from the history,
-  Ctrl+Z / Ctrl+Shift+Z.
+  (razor at the playhead), and the `Session::edit` closure for the Tone
+  generator (no command yet) and media removal. Undo/redo call `Session::undo` /
+  `Session::redo` directly so the shell can pair composition snapshots with the
+  engine's steps (M11) instead of using the `edit.undo` / `edit.redo` commands.
+- **Undo/redo**: toolbar buttons with real enable state from the combined
+  history, Ctrl+Z / Ctrl+Shift+Z.
 - **The audio clock**: a cpal output stream (48 kHz stereo f32 requested) fed
   by a worker thread that renders the timeline mix through the engine's mixer
   graph in 100 ms chunks; the playhead is exactly the audio the device
@@ -237,6 +239,49 @@ open; undo restores items under the same ids, so compositions follow.
   end-to-end through the real engine, the audio-only parameter shape, and the
   unpatched-video error.
 
+## M11 — one chronological undo history (✔ CI-verified, run 39900494912)
+
+Timeline edits are whole-project snapshots owned by FilmCraft's `Session`.
+Composition/effect edits live beside that project, so they previously bypassed
+the history: Ctrl+Z after an effect change undid an unrelated timeline edit.
+M11 gives both kinds of edit one order.
+
+- **`apps/frameforge-pro/src/history.rs` (`EditHistory`)**: a slot per engine
+  history step. `None` is a project step the engine already stores; `Some` is
+  the before/after snapshot of the affected composition. A composition edit
+  adds a project-neutral `Session::edit` step (`"Edit composition"`) so the
+  snapshot has a place in the same stack; undo/redo pops one engine step and one
+  snapshot together.
+- **Commands are tracked, not guessed**: `App::execute` records the identity of
+  the newest engine snapshot (`undo_top`) before and after each command, so
+  selection/targeting and merged fader moves add no slot. Custom edits
+  (`add_tone`, media removal) go through `App::edit_project`, which does the
+  same.
+- **Gesture coalescing**: pointer presses bump a gesture id; every change in one
+  slider/colour drag updates the same composition step's `after` state. A new
+  click or a keyboard change after release is a separate step. A new edit after
+  undo clears both the engine redo and the composition redo.
+- **Limit alignment**: when the engine trims its oldest step at its limit, the
+  matching slot is dropped; redo is mirrored against the engine's actual length,
+  because the engine's redo can legitimately push past the limit.
+- **Undo/redo application**: the engine restores the project; the shell applies
+  the composition's `before`/`after`, invalidates the preview sources, clears
+  stale selections, and repairs `selected_effect` when it no longer exists.
+- **Failure safety**: if the neutral engine step cannot be recorded, the
+  composition is rolled back to `before` and the status bar reports the engine
+  error, so the document and history cannot disagree.
+- **Tests**: seven tests in `history.rs` — composition undo leaves the previous
+  timeline edit alone (and redo restores both), one drag is one step, a new edit
+  clears redo, non-editing and merged commands add no slot, the history limit
+  stays aligned, and a closed gesture does not swallow a later change. An
+  App-level test (`app::tests::ctrl_z_after_a_composition_edit_leaves_the_timeline_edit_alone`)
+  drives `App::undo`/`redo` and asserts both the project name and the
+  composition map.
+- **Limitations**: the egui gesture bracket in `effects.rs` is code-inspected,
+  not UI-automated; history is session-only (not saved in `.ffproj`); snapshots
+  clone only the affected composition, so undo memory grows with composition
+  size, not project size.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -251,6 +296,7 @@ open; undo restores items under the same ids, so compositions follow.
 | M8 | Color workspace (FilmCraft's effect stack on the clip: apply/toggle/remove/setParam), Audio workspace (the mixer: faders, pan, mute, solo through mixer.setStrip), comp layer editing, tagged GitHub Releases with a ZIP | ✔ (CI-verified, run 39729926210) |
 | M9 | durability: crash-recovery autosaves, unsaved-changes guard, keyframe-preserving parameter writes, preview invalidation, measured baseline audit + architecture decision + feature parity + XMem plan | ✔ (CI-verified, run 39878432877) |
 | M10 | source-patched multi-track editing: per-track target/source-patch headers on the engine's `timeline.setTargeting`, placement on patched V2/A2, audio-only and unpatched-destination tests | ✔ (CI-verified, run 39887395556) |
+| M11 | one chronological undo history: composition snapshots paired with project-neutral engine steps, gesture coalescing, limit-aligned redo, composition rollback on failure, seven history tests plus an App-level Ctrl+Z test | ✔ (CI-verified, run 39900494912) |
 
 ## Dependency policy
 

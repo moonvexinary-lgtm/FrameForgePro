@@ -19,8 +19,8 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | New / open / save / save-as (`.ffproj`) | ✅ | Atomic save with round-trip validation; M2 reopens and renders byte-identical frames; M9 saves and reloads | — |
 | Versioned project schema + refusal of newer files | ✅ | M9 `newer_schema_is_refused` (schema 999 is a named error) | — |
 | Crash recovery / autosave | ✅ | M9 `autosave_round_trip_newer_than_and_clear`, `corrupt_autosave_is_a_clear_error_not_a_crash`; the shell's 20 s timer calls exactly this module | UI close-path prompt (still absent) is separate |
-| Undo / redo of timeline edits | 🟡 | FilmCraft `Session` history and command tests upstream; shell buttons/keys wired, no FrameForge-level test | A FrameForge test that executes an edit, undoes and asserts the document |
-| Undo / redo of effect & composition edits | ⬜ | Effects are edited on the bridge document, outside `Session` history | Composition edits enter a real undo history; Ctrl+Z never undoes the wrong thing |
+| Undo / redo of timeline edits | ✅ | M11 `history.rs` executes `Session` edits, undoes/redoes them through `EditHistory`, and asserts the project name and document steps; `app::tests::ctrl_z_after_a_composition_edit_leaves_the_timeline_edit_alone` drives the shell's `undo`/`redo` | — (UI automation is a separate gap) |
+| Undo / redo of effect & composition edits | ✅ | M11 `history.rs`: composition undo/redo shares the timeline's order, one drag is one step, a new edit clears redo, limits stay aligned; the App-level test asserts the composition map after undo/redo; the egui gesture bracket is code-inspected | — (UI automation is a separate gap) |
 | Media import (generators, files) | ✅ | M3 fixture export → re-import through `file.import`/codecs → render | — |
 | Media bin folders / tags / search / metadata | ⬜ | Flat list today | Bin model + UI, persisted in the project |
 | Thumbnails / audio waveforms | ⬜ | — | Generated off the UI thread, cached, bounded |
