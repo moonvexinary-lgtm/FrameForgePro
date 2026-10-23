@@ -145,7 +145,7 @@ fn add_generator(app: &mut App, command: &str) {
 fn add_tone(app: &mut App) {
     let hz = 440.0_f32;
     let db = -6.0_f32;
-    let result = app.session.edit("New Tone", |project, state| {
+    let result = app.edit_project("New Tone", |project, state| {
         let source = GeneratorSource::new(Generator::Tone { hz, db }, SEQUENCE_W, SEQUENCE_H, SEQUENCE_RATE, Tick(10 * TICKS_PER_SECOND));
         let info = source.info().clone();
         let name = info.name.clone();
@@ -170,7 +170,6 @@ fn add_tone(app: &mut App) {
     });
     match result {
         Ok(_) => {
-            app.mark_dirty();
             app.status = "Media added".to_string();
         }
         Err(e) => app.status = e.to_string(),
@@ -215,7 +214,7 @@ fn place_media(app: &mut App, media: ItemId) {
 /// Remove `media` and its clips (undoable). Its composition stays keyed: an
 /// undo restores the item under the same id, and the composition with it.
 fn remove_media(app: &mut App, media: ItemId) {
-    let result = app.session.edit("Remove Media", |project, _| {
+    let result = app.edit_project("Remove Media", |project, _| {
         for seq in project.items.values_mut() {
             if let ItemKind::Sequence(s) = &mut seq.kind {
                 let s = std::sync::Arc::make_mut(s);
@@ -230,7 +229,6 @@ fn remove_media(app: &mut App, media: ItemId) {
     });
     match result {
         Ok(()) => {
-            app.mark_dirty();
             app.status = "Media removed".to_string();
         }
         Err(e) => app.status = e.to_string(),

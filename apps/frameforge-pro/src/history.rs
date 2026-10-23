@@ -7,14 +7,19 @@
 //! engine history. Both kinds of edit therefore share one chronological
 //! undo/redo order.
 //!
-//! This file currently contains the compiling skeleton and its tests: the
-//! bookkeeping below is deliberately unimplemented so the tests fail first.
+//! The two stacks here stay in lockstep with `session.history.undo` and
+//! `session.history.redo`: each engine step has exactly one slot, `None` for a
+//! project edit and `Some` for the composition snapshot that rides with a
+//! project-neutral step.
 
-#![allow(dead_code)]
+use std::sync::Arc;
 
 use filmcraft_engine::{EngineError, Session};
 use filmcraft_project::ItemId;
 use frameforge_bridge::Composition;
+
+/// The engine-history label for a composition step.
+pub const COMPOSITION_LABEL: &str = "Edit composition";
 
 /// A composition edit: the affected item and the states around it.
 #[derive(Clone, Debug)]
@@ -37,20 +42,19 @@ type Step = Option<CompositionStep>;
 
 /// The combined history stacks, kept in lockstep with the engine's own
 /// `session.history.undo` / `session.history.redo` vectors.
+#[derive(Default)]
 pub struct EditHistory {
     undo: Vec<Step>,
     redo: Vec<Step>,
-}
-
-impl Default for EditHistory {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Bumped on every pointer press so one drag shares one undo step.
+    gesture: u64,
+    /// The gesture and item whose composition step is still open.
+    open_gesture: Option<(u64, ItemId)>,
 }
 
 impl EditHistory {
     pub fn new() -> Self {
-        EditHistory { undo: Vec::new(), redo: Vec::new() }
+        Self::default()
     }
 
     pub fn can_undo(&self) -> bool {
@@ -65,17 +69,41 @@ impl EditHistory {
     /// of the newest undo snapshot before the command (from [`undo_top`]).
     /// Commands that did not add a history step (selection, targeting, a merged
     /// fader move) do not create an entry.
-    pub fn note_project_step(&mut self, _session: &Session, _top_before: Option<usize>) {}
+    pub fn note_project_step(&mut self, session: &Session, top_before: Option<usize>) {
+        if undo_top(session) == top_before {
+            return;
+        }
+        // The engine may have trimmed its oldest step at the history limit, so
+        // its length can stay the same while the top changes. At least this
+        // command's step is present; anything it added beyond the first is
+        // filled with project steps (upstream groups multiple edits into one).
+        let before_len = self.undo.len();
+        let after_len = session.history.undo.len();
+        let added = after_len.saturating_sub(before_len).max(1);
+        for _ in 0..added {
+            self.undo.push(None);
+        }
+        self.redo.clear();
+        self.open_gesture = None;
+        self.trim_to_session(session);
+    }
 
     /// Start (or continue) a pointer gesture. A press starts a new gesture;
     /// otherwise the same id is returned. A whole slider drag is one step.
-    pub fn begin_gesture(&mut self, _pressed: bool) -> u64 {
-        0
+    pub fn begin_gesture(&mut self, pressed: bool) -> u64 {
+        if pressed {
+            self.gesture = self.gesture.wrapping_add(1);
+        }
+        self.gesture
     }
 
     /// Close the current gesture once the pointer is up, so a later keyboard
     /// change is a separate step.
-    pub fn end_gesture(&mut self, _dragging: bool) {}
+    pub fn end_gesture(&mut self, dragging: bool) {
+        if !dragging {
+            self.open_gesture = None;
+        }
+    }
 
     /// Record a composition edit. The first change of a gesture adds a
     /// project-neutral step to the engine history; later changes in the same
@@ -83,23 +111,64 @@ impl EditHistory {
     /// (the caller restores the composition).
     pub fn record_composition(
         &mut self,
-        _session: &mut Session,
-        _item: ItemId,
-        _before: Option<Composition>,
-        _after: Option<Composition>,
-        _gesture: u64,
+        session: &mut Session,
+        item: ItemId,
+        before: Option<Composition>,
+        after: Option<Composition>,
+        gesture: u64,
     ) -> Result<(), EngineError> {
+        if self.open_gesture == Some((gesture, item))
+            && let Some(Some(step)) = self.undo.last_mut()
+        {
+            step.after = after;
+            self.redo.clear();
+            return Ok(());
+        }
+        // The composition lives beside the editing project, so this step does
+        // not change the project itself: it exists to give the composition
+        // snapshot the same place in the one chronological history.
+        session.edit(COMPOSITION_LABEL, |_, _| Ok(()))?;
+        self.undo.push(Some(CompositionStep { item, before, after }));
+        self.redo.clear();
+        self.open_gesture = Some((gesture, item));
+        self.trim_to_session(session);
         Ok(())
     }
 
     /// Undo one step. Returns the engine label and the composition step (when
     /// the undone step was a composition edit) for the caller to apply.
-    pub fn undo(&mut self, _session: &mut Session) -> Option<Undone> {
-        None
+    pub fn undo(&mut self, session: &mut Session) -> Option<Undone> {
+        let step = self.undo.pop()?;
+        let Some(label) = session.undo() else {
+            self.undo.push(step);
+            return None;
+        };
+        self.redo.push(step.clone());
+        self.open_gesture = None;
+        Some(Undone { label, step })
     }
 
-    pub fn redo(&mut self, _session: &mut Session) -> Option<Undone> {
-        None
+    /// Redo one step (the mirror of [`EditHistory::undo`]).
+    pub fn redo(&mut self, session: &mut Session) -> Option<Undone> {
+        let step = self.redo.pop()?;
+        let Some(label) = session.redo() else {
+            self.redo.push(step);
+            return None;
+        };
+        self.undo.push(step.clone());
+        self.open_gesture = None;
+        self.trim_to_session(session);
+        Some(Undone { label, step })
+    }
+
+    /// Drop the oldest slots when the engine trimmed its own history at the
+    /// limit. Redo can legitimately push the engine past its limit, so this
+    /// mirrors the engine's actual length rather than the limit.
+    fn trim_to_session(&mut self, session: &Session) {
+        let len = session.history.undo.len();
+        if self.undo.len() > len {
+            self.undo.drain(0..self.undo.len() - len);
+        }
     }
 
     #[cfg(test)]
@@ -111,8 +180,8 @@ impl EditHistory {
 /// Identity of the newest engine undo snapshot, used to tell whether a command
 /// actually added a step. The engine's history stores an `Arc<Project>`; two
 /// different states have different allocations.
-pub fn undo_top(_session: &Session) -> Option<usize> {
-    None
+pub fn undo_top(session: &Session) -> Option<usize> {
+    session.history.undo.last().map(|(_, project)| Arc::as_ptr(project) as usize)
 }
 
 #[cfg(test)]

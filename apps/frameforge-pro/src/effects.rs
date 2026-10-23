@@ -187,6 +187,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     // by hand.
     let effective_item = app.selected_clip().map(|(_, item)| item).or(app.effects_item);
     let Some(item) = effective_item else {
+        app.history.end_gesture(false);
         let mut area = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("fx-pick"));
         area.add_space(12.0);
         area.heading("Effects");
@@ -209,11 +210,25 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
         return;
     };
 
+    // One undo step per pointer gesture: snapshot the selected composition
+    // before the widgets run, then record the difference. A slider, colour
+    // picker or drag-value drag therefore coalesces into one step instead of
+    // one step per frame; a new click or keyboard change starts a new step.
+    let (pressed, dragging) = ui.ctx().input(|i| (i.pointer.any_pressed(), i.pointer.any_down()));
+    let gesture = app.history.begin_gesture(pressed);
+    let before = app.compositions.get(&item).cloned();
+
     let list_w = 300.0_f32.clamp(220.0, body.width() - 300.0);
     let list = egui::Rect::from_min_max(body.min, egui::pos2(body.min.x + list_w, body.max.y));
     let params = egui::Rect::from_min_max(egui::pos2(body.min.x + list_w, body.min.y), body.max);
     effect_list(app, ui, list, item);
     parameters(app, ui, params, item);
+
+    let after = app.compositions.get(&item).cloned();
+    if before != after {
+        app.record_comp_change(item, before, after, gesture);
+    }
+    app.history.end_gesture(dragging);
 }
 
 fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) {

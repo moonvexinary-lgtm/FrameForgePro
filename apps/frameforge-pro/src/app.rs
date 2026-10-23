@@ -8,13 +8,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use filmcraft_engine::Session;
+use filmcraft_engine::{EditorState, Session};
 use filmcraft_project::{ClipId, ItemId, Project};
 use filmcraft_time::{FrameRate, Tick};
 use frameforge_bridge::{Composition, FFPROJ_SCHEMA, FrameForgeProject, ProjectSources};
 
 use crate::audio::Player;
 use crate::export::ExportState;
+use crate::history::{CompositionStep, EditHistory, undo_top};
 
 /// The workspaces. Color and Audio are not built yet: they appear in the bar
 /// as clearly-marked planned entries, never as fake panels.
@@ -55,6 +56,8 @@ pub struct App {
     /// Bumped on every edit; the monitor cache keys on it.
     pub revision: u64,
     sources: Option<ProjectSources>,
+    /// Timeline and composition edits in one chronological undo/redo order.
+    pub history: EditHistory,
 
     pub workspace: Workspace,
     pub playhead: Tick,
@@ -114,6 +117,7 @@ impl App {
             dirty: false,
             revision: 0,
             sources: None,
+            history: EditHistory::new(),
             workspace: Workspace::Edit,
             playhead: Tick::ZERO,
             playing: false,
@@ -148,9 +152,47 @@ impl App {
     /// Run an engine command; on success the document changed (the monitor
     /// and sources rebuild).
     pub fn execute(&mut self, id: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+        let top = undo_top(&self.session);
         let result = self.session.execute(id, params).map_err(|e| e.to_string())?;
+        self.history.note_project_step(&self.session, top);
         self.mark_dirty();
         Ok(result)
+    }
+
+    /// Apply a custom, undoable project edit and keep the combined history in
+    /// step. The engine still owns the whole-project snapshot.
+    pub fn edit_project<R>(
+        &mut self,
+        label: &str,
+        f: impl FnOnce(&mut Project, &mut EditorState) -> filmcraft_engine::Result<R>,
+    ) -> filmcraft_engine::Result<R> {
+        let top = undo_top(&self.session);
+        let result = self.session.edit(label, f)?;
+        self.history.note_project_step(&self.session, top);
+        self.mark_dirty();
+        Ok(result)
+    }
+
+    /// Record a composition edit that has already been applied to
+    /// `self.compositions`. On failure the previous state is put back, so the
+    /// document and the history can never disagree.
+    pub fn record_comp_change(&mut self, item: ItemId, before: Option<Composition>, after: Option<Composition>, gesture: u64) {
+        let rollback = before.clone();
+        match self.history.record_composition(&mut self.session, item, before, after, gesture) {
+            Ok(()) => self.mark_dirty(),
+            Err(e) => {
+                match rollback {
+                    Some(composition) => {
+                        self.compositions.insert(item, composition);
+                    }
+                    None => {
+                        self.compositions.remove(&item);
+                    }
+                }
+                self.status = e.to_string();
+                self.mark_dirty();
+            }
+        }
     }
 
     pub fn mark_dirty(&mut self) {
@@ -377,21 +419,69 @@ impl App {
         self.selection = None;
     }
 
-    /// Undo / redo through the engine's history.
+    /// Undo / redo through the combined history: project steps are restored by
+    /// the engine, composition steps by the snapshot that rides with them.
     pub fn undo(&mut self) {
-        match self.execute("edit.undo", serde_json::json!({})) {
-            Ok(_) => self.status = "Undo".to_string(),
-            Err(e) => self.status = e,
+        match self.history.undo(&mut self.session) {
+            Some(undone) => {
+                if let Some(step) = undone.step.as_ref() {
+                    self.apply_composition_step(step, false);
+                }
+                self.status = format!("Undo {}", undone.label);
+                self.after_history_change();
+            }
+            None => self.status = "Nothing to undo".to_string(),
         }
-        self.selection = None;
     }
 
     pub fn redo(&mut self) {
-        match self.execute("edit.redo", serde_json::json!({})) {
-            Ok(_) => self.status = "Redo".to_string(),
-            Err(e) => self.status = e,
+        match self.history.redo(&mut self.session) {
+            Some(redone) => {
+                if let Some(step) = redone.step.as_ref() {
+                    self.apply_composition_step(step, true);
+                }
+                self.status = format!("Redo {}", redone.label);
+                self.after_history_change();
+            }
+            None => self.status = "Nothing to redo".to_string(),
         }
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    fn apply_composition_step(&mut self, step: &CompositionStep, forward: bool) {
+        let state = if forward { &step.after } else { &step.before };
+        match state {
+            Some(composition) => {
+                self.compositions.insert(step.item, composition.clone());
+            }
+            None => {
+                self.compositions.remove(&step.item);
+            }
+        }
+    }
+
+    /// A history jump rebuilt the document: invalidate the preview cache and
+    /// drop selections that no longer point at something.
+    fn after_history_change(&mut self) {
+        self.mark_dirty();
+        let effect_item = self.selected_clip().map(|(_, item)| item).or(self.effects_item);
         self.selection = None;
+        if let Some(item) = self.effects_item
+            && !self.session.project.items.contains_key(&item)
+        {
+            self.effects_item = None;
+        }
+        let effect_count = effect_item.and_then(|item| self.compositions.get(&item)).map_or(0, |composition| composition.effects.len());
+        if self.selected_effect.is_some_and(|index| index >= effect_count) {
+            self.selected_effect = None;
+        }
     }
 
     /// Razor every track at the playhead (Add Edit, All Tracks).
@@ -575,10 +665,10 @@ impl App {
 
         bar.separator();
 
-        if bar.add_enabled(self.session.history.can_undo(), egui::Button::new("Undo")).clicked() {
+        if bar.add_enabled(self.can_undo(), egui::Button::new("Undo")).clicked() {
             self.undo();
         }
-        if bar.add_enabled(self.session.history.can_redo(), egui::Button::new("Redo")).clicked() {
+        if bar.add_enabled(self.can_redo(), egui::Button::new("Redo")).clicked() {
             self.redo();
         }
 
