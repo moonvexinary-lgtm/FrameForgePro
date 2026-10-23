@@ -7,7 +7,7 @@
 //!
 //! The sidecar is a normal `.ffproj` document (same schema, same round-trip
 //! check, same atomic write), so recovery is just a load — no second format and
-//! no partial state. `/autosave` is a sibling path, so it never alters the
+//! no partial state. The autosave is a sibling file, so it never alters the
 //! user's project file until they choose to save.
 
 use std::path::{Path, PathBuf};

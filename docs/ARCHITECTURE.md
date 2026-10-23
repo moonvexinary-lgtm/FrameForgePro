@@ -196,7 +196,7 @@ open; undo restores items under the same ids, so compositions follow.
 - **Releases**: a tag push (`v*`) builds and publishes a GitHub Release with
   a ZIP (exe + licenses + README) — `softprops/action-gh-release`.
 
-## M9 — durability and honest planning (CI pending)
+## M9 — durability and honest planning (✔ CI-verified, run 39878432877)
 
 - **Crash-recovery autosaves**: while a saved project is dirty, the shell writes an
   atomic `<project>.ffproj.autosave` sidecar at most every 20 s (same schema, same
@@ -216,7 +216,8 @@ open; undo restores items under the same ids, so compositions follow.
   verified MIT code licence, the 237.5 MB official weight download, and the rule that
   nothing is claimed until a real worker test runs.
 - **Tests**: `crates/bridge/tests/m9_durability.rs` — autosave round-trip, newer-than
-  detection, clear, corrupt sidecar error, and keyframe-preserving writes.
+  detection, clear, corrupt sidecar error, keyframe-preserving writes, and refusal of a
+  newer project schema. The first three passed in run 39878432877.
 
 ## Milestones
 
@@ -230,7 +231,7 @@ open; undo restores items under the same ids, so compositions follow.
 | M6 | the editing engine session: every edit an undoable engine command, the audio clock, razor, undo/redo in the UI | ✔ (CI-verified, run 39703930594) |
 | M7 | editing depth: drag-move and trim through engine commands with a ghost preview, the keyframe editor (stopwatch + keys in media time), the panic hook, downloadable Windows dev builds from CI | ✔ (CI-verified, run 39717619124) |
 | M8 | Color workspace (FilmCraft's effect stack on the clip: apply/toggle/remove/setParam), Audio workspace (the mixer: faders, pan, mute, solo through mixer.setStrip), comp layer editing, tagged GitHub Releases with a ZIP | ✔ (CI-verified, run 39729926210) |
-| M9 | durability: crash-recovery autosaves, unsaved-changes guard, keyframe-preserving parameter writes, preview invalidation, measured baseline audit + architecture decision + feature parity + XMem plan | CI pending |
+| M9 | durability: crash-recovery autosaves, unsaved-changes guard, keyframe-preserving parameter writes, preview invalidation, measured baseline audit + architecture decision + feature parity + XMem plan | ✔ (CI-verified, run 39878432877) |
 
 ## Dependency policy
 

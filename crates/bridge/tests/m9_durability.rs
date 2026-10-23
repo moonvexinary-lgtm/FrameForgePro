@@ -62,6 +62,19 @@ fn corrupt_autosave_is_a_clear_error_not_a_crash() {
 }
 
 #[test]
+fn newer_schema_is_refused() {
+    let dir = std::env::temp_dir();
+    let project = dir.join(format!("frameforge-m9-schema-{}.ffproj", std::process::id()));
+    let mut value = serde_json::to_value(doc()).expect("serialize the document");
+    value["schema"] = serde_json::json!(999);
+    std::fs::write(&project, serde_json::to_string(&value).expect("serialize the future document")).expect("write the future document");
+
+    let error = FrameForgeProject::load(&project).expect_err("a newer schema is refused");
+    assert!(error.to_string().contains("schema 999"), "the refusal names the newer schema: {error}");
+    std::fs::remove_file(&project).ok();
+}
+
+#[test]
 fn scalar_writes_preserve_keyframes() {
     let mut composition = Composition::default();
     let mut animated = Param::new(ParamValue::Float(0.0));
