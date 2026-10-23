@@ -571,6 +571,58 @@ fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
     }
 }
 
+/// The program monitor — shared by the Edit and Color workspaces.
+pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
+    let Some(seq_id) = app.sequence_id() else {
+        let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor"));
+        area.vertical_centered(|ui| ui.label("No sequence. New project creates one; import media on the left and double-click it to place a clip."));
+        return;
+    };
+    let rate = app.sequence().map(|s| s.settings.frame_rate).unwrap_or(SEQUENCE_RATE);
+    let frame = rate.frame_at(app.playhead);
+
+    // Render only when the shown frame, the document revision or the sequence
+    // changed — through the same compositor export uses.
+    let needs = app.monitor.as_ref().is_none_or(|m| m.frame != frame || m.revision != app.revision || m.seq != seq_id);
+    if needs {
+        let playhead = app.playhead;
+        let rendered = app
+            .with_sources(|project, sources| filmcraft_render::render_sequence(project, seq_id, playhead, filmcraft_render::RenderOptions::default(), sources))
+            .unwrap_or_else(|| filmcraft_render::Image::new(SEQUENCE_W as usize, SEQUENCE_H as usize));
+        let size = (rendered.w as u32, rendered.h as u32);
+        let image = pixels::to_color_image(&rendered);
+        if let Some(m) = app.monitor.as_mut().filter(|m| m.seq == seq_id) {
+            m.texture.set(image, egui::TextureOptions::default());
+        } else {
+            let texture = ui.ctx().load_texture("program-monitor", image, egui::TextureOptions::default());
+            app.monitor = Some(Monitor { texture, frame, revision: app.revision, seq: seq_id, size });
+        }
+        if let Some(m) = app.monitor.as_mut() {
+            m.frame = frame;
+            m.revision = app.revision;
+        }
+    }
+
+    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor"));
+    if let Some(m) = &app.monitor {
+        let avail = area.available_rect_before_wrap();
+        let scale = (avail.width() / m.size.0 as f32).min((avail.height() - 24.0) / m.size.1 as f32);
+        let shown = egui::vec2(m.size.0 as f32 * scale, m.size.1 as f32 * scale);
+        let at = egui::pos2(avail.left() + (avail.width() - shown.x) / 2.0, avail.top() + (avail.height() - shown.y) / 2.0);
+        let dest = egui::Rect::from_min_size(at, shown);
+        ui.painter().image(m.texture.id(), dest, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+    }
+    area.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        ui.colored_label(egui::Color32::GRAY, if app.wall_start.is_some() && app.playing { "wall clock (no audio device)" } else { "audio clock" });
+        ui.label(format!(
+            "{} × {} · frame {}",
+            app.monitor.as_ref().map(|m| m.size.0).unwrap_or(0),
+            app.monitor.as_ref().map(|m| m.size.1).unwrap_or(0),
+            frame + 1
+        ));
+    });
+}
+
 #[cfg(test)]
 mod tests {
     //! Real engine tests for source-patched placement: no UI, but the exact
@@ -678,56 +730,4 @@ mod tests {
         };
         assert!(err.contains("No video destination"), "{err}");
     }
-}
-
-/// The program monitor — shared by the Edit and Color workspaces.
-pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
-    let Some(seq_id) = app.sequence_id() else {
-        let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor"));
-        area.vertical_centered(|ui| ui.label("No sequence. New project creates one; import media on the left and double-click it to place a clip."));
-        return;
-    };
-    let rate = app.sequence().map(|s| s.settings.frame_rate).unwrap_or(SEQUENCE_RATE);
-    let frame = rate.frame_at(app.playhead);
-
-    // Render only when the shown frame, the document revision or the sequence
-    // changed — through the same compositor export uses.
-    let needs = app.monitor.as_ref().is_none_or(|m| m.frame != frame || m.revision != app.revision || m.seq != seq_id);
-    if needs {
-        let playhead = app.playhead;
-        let rendered = app
-            .with_sources(|project, sources| filmcraft_render::render_sequence(project, seq_id, playhead, filmcraft_render::RenderOptions::default(), sources))
-            .unwrap_or_else(|| filmcraft_render::Image::new(SEQUENCE_W as usize, SEQUENCE_H as usize));
-        let size = (rendered.w as u32, rendered.h as u32);
-        let image = pixels::to_color_image(&rendered);
-        if let Some(m) = app.monitor.as_mut().filter(|m| m.seq == seq_id) {
-            m.texture.set(image, egui::TextureOptions::default());
-        } else {
-            let texture = ui.ctx().load_texture("program-monitor", image, egui::TextureOptions::default());
-            app.monitor = Some(Monitor { texture, frame, revision: app.revision, seq: seq_id, size });
-        }
-        if let Some(m) = app.monitor.as_mut() {
-            m.frame = frame;
-            m.revision = app.revision;
-        }
-    }
-
-    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor"));
-    if let Some(m) = &app.monitor {
-        let avail = area.available_rect_before_wrap();
-        let scale = (avail.width() / m.size.0 as f32).min((avail.height() - 24.0) / m.size.1 as f32);
-        let shown = egui::vec2(m.size.0 as f32 * scale, m.size.1 as f32 * scale);
-        let at = egui::pos2(avail.left() + (avail.width() - shown.x) / 2.0, avail.top() + (avail.height() - shown.y) / 2.0);
-        let dest = egui::Rect::from_min_size(at, shown);
-        ui.painter().image(m.texture.id(), dest, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-    }
-    area.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        ui.colored_label(egui::Color32::GRAY, if app.wall_start.is_some() && app.playing { "wall clock (no audio device)" } else { "audio clock" });
-        ui.label(format!(
-            "{} × {} · frame {}",
-            app.monitor.as_ref().map(|m| m.size.0).unwrap_or(0),
-            app.monitor.as_ref().map(|m| m.size.1).unwrap_or(0),
-            frame + 1
-        ));
-    });
 }
