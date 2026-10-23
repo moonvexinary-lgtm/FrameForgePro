@@ -49,11 +49,7 @@ impl Placement {
 fn track_end(seq: &Sequence, id: Option<TrackId>, video: bool) -> Tick {
     let Some(id) = id else { return Tick::ZERO };
     let tracks = if video { &seq.video_tracks } else { &seq.audio_tracks };
-    tracks
-        .iter()
-        .find(|t| t.id == id)
-        .map(|t| t.items.iter().map(|i| i.start + i.duration).max().unwrap_or_default())
-        .unwrap_or_default()
+    tracks.iter().find(|t| t.id == id).map(|t| t.items.iter().map(|i| i.start + i.duration).max().unwrap_or_default()).unwrap_or_default()
 }
 
 /// The track's label in the sequence (`V2`, `A1`).
@@ -409,19 +405,11 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             ui.visuals().text_color(),
         );
         let target_hint = if targeted { "Stop targeting this track" } else { "Target this track (navigation, paste, mute/solo)" };
-        if ui
-            .interact(target_rect, egui::Id::new(("ff-track-target", track.id.0)), egui::Sense::click())
-            .on_hover_text(target_hint)
-            .clicked()
-        {
+        if ui.interact(target_rect, egui::Id::new(("ff-track-target", track.id.0)), egui::Sense::click()).on_hover_text(target_hint).clicked() {
             actions.push(TrackAction::Target { track: track.id, on: !targeted });
         }
         let patch_hint = if patched { "Unpatch this track (new media will not land here)" } else { "Patch new media to this track" };
-        if ui
-            .interact(patch_rect, egui::Id::new(("ff-track-patch", track.id.0)), egui::Sense::click())
-            .on_hover_text(patch_hint)
-            .clicked()
-        {
+        if ui.interact(patch_rect, egui::Id::new(("ff-track-patch", track.id.0)), egui::Sense::click()).on_hover_text(patch_hint).clicked() {
             actions.push(TrackAction::Patch { track: track.id, on: !patched });
         }
         for item in &track.items {
@@ -604,13 +592,8 @@ mod tests {
 
     fn add_tone_item(s: &mut Session) -> ItemId {
         s.edit("New Tone", |project, _| {
-            let source = GeneratorSource::new(
-                Generator::Tone { hz: 440.0, db: -6.0 },
-                1280,
-                720,
-                filmcraft_time::FrameRate::FPS_24,
-                Tick(10 * TICKS_PER_SECOND),
-            );
+            let source =
+                GeneratorSource::new(Generator::Tone { hz: 440.0, db: -6.0 }, 1280, 720, filmcraft_time::FrameRate::FPS_24, Tick(10 * TICKS_PER_SECOND));
             let info = source.info().clone();
             let name = info.name.clone();
             Ok(project.add_item(
@@ -678,7 +661,7 @@ mod tests {
             let seq = s.active_sequence().unwrap();
             plan_placement(&s.project, seq, tone, &tg).unwrap()
         };
-        assert_eq!(plan.video, None);
+        assert!(plan.video.is_none());
         assert_eq!(plan.audio.as_ref().map(|a| a.0), Some(a1));
         let params = placement_params(tone, s.state.active_sequence.unwrap(), &plan);
         assert_eq!(params["track"].as_u64(), Some(a1.0), "an audio-only clip names the sound track as `track`");
