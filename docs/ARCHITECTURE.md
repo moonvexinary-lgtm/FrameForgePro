@@ -1,6 +1,12 @@
 # FrameForge Pro — Architecture
 
-Last updated: milestone M1 (2026-10-19) · Branch: `frameforge-rust-rewrite`
+Last updated: milestone M9 (2026-10-22) · Branch: `frameforge-rust-rewrite`
+
+Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
+state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
+FFmpeg/MLT/GStreamer; XMem out-of-process), [`FEATURE_PARITY.md`](FEATURE_PARITY.md)
+(honest status and priorities), [`ROTO_AI_PLAN.md`](ROTO_AI_PLAN.md) (mandatory XMem
+staging).
 
 ## Goal
 
@@ -18,11 +24,11 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 
 | Layer | Responsibility | Status |
 |---|---|---|
-| L6 apps | `frameforge-pro` binary; workspaces: Edit / Effects / Color / Audio / Export | M1: self-test binary |
-| L5 ui-egui | unified shell: docking, timeline, monitors, panels (egui — same UI stack as both upstreams) | planned |
-| L4 engine | unified session: project, commands, undo; timeline items reference compositions | planned |
-| L3 render/export | FilmCraft track compositor + EffectCraft layer compositor behind adapters; one export pipeline | planned |
-| L2 edit/effects | edit algebra; effect-bridge: EffectCraft effects on FilmCraft timeline clips, shared keyframes | planned (next: M2) |
+| L6 apps | `frameforge-pro` binary; workspaces: Edit / Effects / Color / Audio / Export | M5–M9: real workspaces, session edits, autosave |
+| L5 ui-egui | unified shell: workspaces, timeline, monitors, panels (egui — same UI stack as both upstreams) | M5–M8: working; docking/layout persistence still planned |
+| L4 engine | unified session: project, commands, undo; timeline items reference compositions | M6: FilmCraft `Session` is the editing authority |
+| L3 render/export | FilmCraft track compositor + EffectCraft layer compositor behind adapters; one export pipeline | M2/M4: verified; export formats decode-verified for H.264 |
+| L2 edit/effects | edit algebra; effect-bridge: EffectCraft effects on FilmCraft timeline clips, shared keyframes | M2: verified (307 effects swept) |
 | L1 media | FilmCraft codecs/media (already shared by both engines upstream) | upstream, pinned |
 | L0 foundation | time, geometry, colour | M1: time (verified) |
 
@@ -190,6 +196,28 @@ open; undo restores items under the same ids, so compositions follow.
 - **Releases**: a tag push (`v*`) builds and publishes a GitHub Release with
   a ZIP (exe + licenses + README) — `softprops/action-gh-release`.
 
+## M9 — durability and honest planning (CI pending)
+
+- **Crash-recovery autosaves**: while a saved project is dirty, the shell writes an
+  atomic `<project>.ffproj.autosave` sidecar at most every 20 s (same schema, same
+  round-trip check, same atomic write as a normal save). Opening a project with a newer
+  autosave offers recovery; if the project file itself is unreadable, the autosave is
+  loaded directly and the error is reported. A successful save clears the sidecar.
+- **Unsaved-changes guard**: New/Open confirm before discarding work; Ctrl+S and
+  Ctrl+Shift+S save/save-as; the status bar shows the last autosave.
+- **Keyframe-preserving parameter writes**: editing an animated scalar now adds or
+  updates a key at the playhead (the engine's `effects.setParam` semantics) instead of
+  replacing the `Param` and destroying the animation. All parameter writes now
+  invalidate the program-monitor cache, so a changed effect is actually shown.
+- **Selection repair**: removing an effect before the selected one keeps the selection
+  pointing at the same effect.
+- **Measured audit and plans**: `BASELINE_AUDIT.md`, `ARCHITECTURE_DECISION.md`,
+  `FEATURE_PARITY.md`, `ROTO_AI_PLAN.md` — including the mandatory XMem design, its
+  verified MIT code licence, the 237.5 MB official weight download, and the rule that
+  nothing is claimed until a real worker test runs.
+- **Tests**: `crates/bridge/tests/m9_durability.rs` — autosave round-trip, newer-than
+  detection, clear, corrupt sidecar error, and keyframe-preserving writes.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -202,7 +230,7 @@ open; undo restores items under the same ids, so compositions follow.
 | M6 | the editing engine session: every edit an undoable engine command, the audio clock, razor, undo/redo in the UI | ✔ (CI-verified, run 39703930594) |
 | M7 | editing depth: drag-move and trim through engine commands with a ghost preview, the keyframe editor (stopwatch + keys in media time), the panic hook, downloadable Windows dev builds from CI | ✔ (CI-verified, run 39717619124) |
 | M8 | Color workspace (FilmCraft's effect stack on the clip: apply/toggle/remove/setParam), Audio workspace (the mixer: faders, pan, mute, solo through mixer.setStrip), comp layer editing, tagged GitHub Releases with a ZIP | ✔ (CI-verified, run 39729926210) |
-| M8 | packaging: Windows release on CI, downloadable artifacts | planned |
+| M9 | durability: crash-recovery autosaves, unsaved-changes guard, keyframe-preserving parameter writes, preview invalidation, measured baseline audit + architecture decision + feature parity + XMem plan | CI pending |
 
 ## Dependency policy
 

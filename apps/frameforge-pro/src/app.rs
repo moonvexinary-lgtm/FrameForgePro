@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use filmcraft_engine::Session;
 use filmcraft_project::{ClipId, ItemId, Project};
@@ -81,6 +81,10 @@ pub struct App {
     pub color_effect: Option<usize>,
     /// The Color workspace's stack width (draggable gutter).
     pub color_stack_w: f32,
+    /// When the last recovery autosave was written (shown in the status bar).
+    pub autosaved_at: Option<Instant>,
+    /// Throttles autosave writes.
+    last_autosave: Instant,
 }
 
 /// The cached program-monitor texture and what it was rendered from.
@@ -130,6 +134,8 @@ impl App {
             timeline_drag: None,
             color_effect: None,
             color_stack_w: 380.0,
+            autosaved_at: None,
+            last_autosave: Instant::now(),
         }
     }
 
@@ -172,6 +178,9 @@ impl App {
     }
 
     pub fn new_project(&mut self) {
+        if !self.confirm_discard() {
+            return;
+        }
         let mut app = App::from_parts(Project::new("Untitled"), HashMap::new(), None, "New project");
         if let Err(e) =
             app.execute("file.newSequence", serde_json::json!({"name": "Main", "width": SEQUENCE_W, "height": SEQUENCE_H, "fps": 24, "video": 2, "audio": 2}))
@@ -182,13 +191,55 @@ impl App {
     }
 
     pub fn open(&mut self, path: PathBuf) {
-        match FrameForgeProject::load(&path) {
-            Ok(doc) => {
-                let project = doc.project;
-                let compositions = doc.compositions;
-                *self = App::from_parts(project, compositions, Some(path), "Project opened");
+        if !self.confirm_discard() {
+            return;
+        }
+        // A newer autosave belongs to this project: offer the work a crash left
+        // behind instead of silently discarding it. If the project file itself
+        // is unreadable, the autosave is the only good copy and is loaded
+        // directly (with the error reported).
+        let recovery = frameforge_bridge::autosave::newer_than(&path);
+        let loaded = match FrameForgeProject::load(&path) {
+            Ok(doc) => (doc, None),
+            Err(e) => match recovery.as_ref().and_then(|_| frameforge_bridge::autosave::load(&path).ok()) {
+                Some(recovered) => (recovered, Some(e.to_string())),
+                None => {
+                    self.status = format!("{e}");
+                    return;
+                }
+            },
+        };
+        let (doc, project_error) = loaded;
+        *self = App::from_parts(doc.project, doc.compositions, Some(path.clone()), "Project opened");
+        if let Some(why) = project_error {
+            self.status = format!("Project file unreadable ({why}); recovered the autosave. Save to keep it.");
+            self.dirty = true;
+            self.autosaved_at = Some(Instant::now());
+            return;
+        }
+        if recovery.is_none() {
+            return;
+        }
+        let recover = rfd::MessageDialog::new()
+            .set_title("Recover unsaved changes?")
+            .set_description("A newer autosave exists for this project (it was written after the last save). Recover the unsaved changes?")
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .set_level(rfd::MessageLevel::Info)
+            .show()
+            == rfd::MessageDialogResult::Yes;
+        if recover {
+            match frameforge_bridge::autosave::load(&path) {
+                Ok(recovered) => {
+                    *self = App::from_parts(recovered.project, recovered.compositions, Some(path), "Recovered autosaved changes — Save to keep them");
+                    self.dirty = true;
+                    self.autosaved_at = Some(Instant::now());
+                }
+                Err(e) => self.status = format!("Project opened; the autosave could not be read: {e}"),
             }
-            Err(e) => self.status = format!("{e}"),
+        } else if let Err(e) = frameforge_bridge::autosave::clear(&path) {
+            self.status = format!("Project opened; the selected autosave could not be removed: {e}");
+        } else {
+            self.status = "Project opened; the autosave was discarded".to_string();
         }
     }
 
@@ -196,11 +247,48 @@ impl App {
         let Some(path) = self.doc_path_or_pick() else { return };
         match self.document().save(&path) {
             Ok(()) => {
-                self.path = Some(path);
+                self.path = Some(path.clone());
                 self.dirty = false;
+                let _ = frameforge_bridge::autosave::clear(&path);
+                self.autosaved_at = None;
+                self.last_autosave = Instant::now();
                 self.status = "Project saved".to_string();
             }
             Err(e) => self.status = format!("{e}"),
+        }
+    }
+
+    /// The unsaved-changes guard in front of New/Open. A clean project never
+    /// prompts.
+    fn confirm_discard(&mut self) -> bool {
+        if !self.dirty {
+            return true;
+        }
+        rfd::MessageDialog::new()
+            .set_title("Unsaved changes")
+            .set_description("The current project has unsaved changes. Discard them?")
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .set_level(rfd::MessageLevel::Warning)
+            .show()
+            == rfd::MessageDialogResult::Yes
+    }
+
+    /// Write a recovery autosave at most every 20 s while the document is
+    /// dirty. Only saved projects are autosaved (an untitled project has no
+    /// stable sidecar path); the unsaved-changes guard covers that case.
+    fn maybe_autosave(&mut self) {
+        const INTERVAL: Duration = Duration::from_secs(20);
+        if !self.dirty {
+            return;
+        }
+        let Some(path) = self.path.clone() else { return };
+        if self.last_autosave.elapsed() < INTERVAL {
+            return;
+        }
+        self.last_autosave = Instant::now();
+        match frameforge_bridge::autosave::write(&self.document(), &path) {
+            Ok(_) => self.autosaved_at = Some(Instant::now()),
+            Err(e) => self.status = format!("Autosave failed: {e}"),
         }
     }
 
@@ -219,8 +307,11 @@ impl App {
         let Some(path) = self.pick_save_path() else { return };
         match self.document().save(&path) {
             Ok(()) => {
-                self.path = Some(path);
+                self.path = Some(path.clone());
                 self.dirty = false;
+                let _ = frameforge_bridge::autosave::clear(&path);
+                self.autosaved_at = None;
+                self.last_autosave = Instant::now();
                 self.status = "Project saved".to_string();
             }
             Err(e) => self.status = format!("{e}"),
@@ -379,8 +470,8 @@ impl eframe::App for App {
         }
 
         // Transport keys everywhere: Space, Ctrl+Z / Ctrl+Shift+Z, Delete,
-        // Ctrl+K (add edit on all tracks).
-        let (space, undo_key, redo_key, delete, add_edit) = ui.ctx().input(|i| {
+        // Ctrl+K (add edit on all tracks), Ctrl+S / Ctrl+Shift+S (save).
+        let (space, undo_key, redo_key, delete, add_edit, save_key, save_as_key) = ui.ctx().input(|i| {
             let cmd = i.modifiers.command;
             (
                 i.key_pressed(egui::Key::Space),
@@ -388,8 +479,16 @@ impl eframe::App for App {
                 (cmd && i.key_pressed(egui::Key::Z) && i.modifiers.shift) || (cmd && i.key_pressed(egui::Key::Y)),
                 i.key_pressed(egui::Key::Delete),
                 cmd && i.key_pressed(egui::Key::K),
+                cmd && i.key_pressed(egui::Key::S) && !i.modifiers.shift,
+                cmd && i.key_pressed(egui::Key::S) && i.modifiers.shift,
             )
         });
+        if save_key {
+            self.save();
+        }
+        if save_as_key {
+            self.save_as();
+        }
         if space && self.sequence().is_some() {
             if self.playing {
                 self.stop_playback();
@@ -411,6 +510,9 @@ impl eframe::App for App {
         if add_edit {
             self.add_edit_all_tracks();
         }
+
+        // Recovery autosave (throttled; only for saved, dirty projects).
+        self.maybe_autosave();
 
         let full = ui.max_rect();
         let top = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), TOP_H));
@@ -511,6 +613,10 @@ impl App {
         bar.label(format!("{}{}", if self.dirty { "• " } else { "" }, self.session.project.name));
         bar.separator();
         bar.colored_label(egui::Color32::GRAY, &self.status);
+        if let Some(at) = self.autosaved_at {
+            bar.separator();
+            bar.colored_label(egui::Color32::GRAY, format!("Autosaved · {}s ago", at.elapsed().as_secs()));
+        }
     }
 }
 

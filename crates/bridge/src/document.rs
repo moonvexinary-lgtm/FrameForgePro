@@ -13,7 +13,10 @@ use effectcraft_project::{ItemId as EcItemId, Project as EcProject};
 use filmcraft_media::Generator;
 use filmcraft_media::MediaSource;
 use filmcraft_media::generators::GeneratorSource;
-use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project, keyframe::Param};
+use filmcraft_project::{
+    ItemId, ItemKind, Label, MediaClip, MediaRef, Project,
+    keyframe::{Param, ParamValue},
+};
 use filmcraft_time::Tick;
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +76,26 @@ impl Composition {
     /// source is used as is).
     pub fn is_noop(&self) -> bool {
         !self.effects.iter().any(|e| e.enabled) && !self.has_comp()
+    }
+
+    /// Set a scalar parameter at `time` (media time), preserving animation.
+    ///
+    /// This is the editing engine's own `effects.setParam` semantics: a
+    /// parameter that already has keyframes gains or updates a key at `time`
+    /// instead of being flattened to a static value. Replacing the whole
+    /// [`Param`] here would silently destroy the user's animation, which is the
+    /// bug this method exists to prevent.
+    ///
+    /// Returns false when there is no effect at `effect`.
+    pub fn set_scalar(&mut self, effect: usize, param: &str, time: Tick, value: f64) -> bool {
+        let Some(link) = self.effects.get_mut(effect) else { return false };
+        let entry = link.params.entry(param.to_string()).or_insert_with(|| Param::new(ParamValue::Float(value)));
+        if entry.is_animated() {
+            entry.put_keyframe(time, ParamValue::Float(value));
+        } else {
+            entry.value = ParamValue::Float(value);
+        }
+        true
     }
 
     /// The comp's layers, as (name, video-switch) rows — read for the shell.

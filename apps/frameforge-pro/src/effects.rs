@@ -40,8 +40,12 @@ fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
             false
         }
     };
-    if changed && let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect)) {
-        link.params.insert(param.id.clone(), Param::new(ParamValue::Float(value)));
+    if changed && let Some(composition) = app.compositions.get_mut(&item) {
+        // Keyframe-preserving: an animated parameter gains a key at the
+        // playhead (the engine's own setParam semantics) instead of losing
+        // its track; see `Composition::set_scalar`.
+        composition.set_scalar(effect, &param.id, key_time, value);
+        app.mark_dirty();
     }
 
     // Keyframing: the stopwatch adds a key at the playhead (media time); the
@@ -104,10 +108,12 @@ fn edit_bool(app: &mut App, item: ItemId, effect: usize, param: &frameforge_brid
         })
         .unwrap_or(false);
     let mut value = current;
-    if ui.checkbox(&mut value, &param.name).changed()
-        && let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect))
-    {
+    let changed = ui.checkbox(&mut value, &param.name).changed();
+    if changed && let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect)) {
         link.params.insert(param.id.clone(), Param::new(ParamValue::Bool(value)));
+    }
+    if changed {
+        app.mark_dirty();
     }
 }
 
@@ -139,6 +145,9 @@ fn edit_choice(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
     {
         link.params.insert(param.id.clone(), Param::new(ParamValue::Choice(new_index)));
     }
+    if new_index != current {
+        app.mark_dirty();
+    }
 }
 
 fn edit_color(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bridge::ParamInfo, ui: &mut egui::Ui) {
@@ -169,6 +178,7 @@ fn edit_color(app: &mut App, item: ItemId, effect: usize, param: &frameforge_bri
         if let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect)) {
             link.params.insert(param.id.clone(), Param::new(ParamValue::Color(c)));
         }
+        app.mark_dirty();
     }
 }
 
@@ -248,6 +258,10 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
         }
         if app.selected_effect == Some(index) {
             app.selected_effect = None;
+        } else if let Some(selected) = app.selected_effect
+            && selected > index
+        {
+            app.selected_effect = Some(selected - 1);
         }
         app.mark_dirty();
         app.status = "Effect removed".to_string();

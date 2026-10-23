@@ -4,12 +4,14 @@ A unified, Rust-native video editor for Windows: **FilmCraft's** nonlinear editi
 and **EffectCraft's** compositing and motion-graphics engine in one application, with
 Premiere Pro-inspired professional workflows.
 
-> **Status: milestone M1 — the rewrite has begun; the application is not usable as an
-> editor yet.** What exists today: the Rust workspace, the verified shared time
-> foundation, and a cloud build/test pipeline. The Edit / Effects / Color / Audio /
-> Export workspaces are built in the milestones that follow
-> ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Nothing is stubbed or faked: what is
-> not built yet is listed honestly as not built.
+> **Status: milestone M9 — a working prototype editor, not yet a Resolve competitor.**
+> The complete core journey runs on real code and is CI-verified: import media, edit a
+> multitrack timeline, apply a real effect, preview it, save, reopen, export, and verify
+> the rendered file. M9 adds crash-recovery autosaves, an unsaved-changes guard, and
+> keyframe-preserving parameter writes. Roto AI (XMem) is **designed, not implemented**:
+> see [docs/ROTO_AI_PLAN.md](docs/ROTO_AI_PLAN.md). Nothing is stubbed or faked; the
+> honest gap list is [docs/FEATURE_PARITY.md](docs/FEATURE_PARITY.md) and the current
+> baseline audit is [docs/BASELINE_AUDIT.md](docs/BASELINE_AUDIT.md).
 
 ## One application, two engines
 
