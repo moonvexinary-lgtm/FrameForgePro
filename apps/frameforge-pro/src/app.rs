@@ -744,7 +744,7 @@ pub fn gutter_h(ui: &mut egui::Ui, y: f32, x0: f32, x1: f32, value: &mut f32) {
 mod tests {
     use std::collections::HashMap;
 
-    use filmcraft_bridge::Composition;
+    use frameforge_bridge::Composition;
 
     use super::*;
 
