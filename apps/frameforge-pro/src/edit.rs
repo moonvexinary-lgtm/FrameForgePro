@@ -3,9 +3,10 @@
 //! playhead, real engine commands). Laid out by rect — this egui generation
 //! has no panel helpers.
 
+use filmcraft_engine::Targeting;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_media::{Generator, MediaSource};
-use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef};
+use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project, Sequence, TrackId};
 use filmcraft_time::TICKS_PER_SECOND;
 use filmcraft_time::Tick;
 
@@ -15,6 +16,108 @@ use crate::pixels;
 const ROW_H: f32 = 34.0;
 const RULER_H: f32 = 18.0;
 const GENERATOR_SECONDS: f64 = 10.0;
+/// The fixed track-header column: target/source-patch buttons and the track
+/// name. The timeline body (ruler and clips) starts to its right.
+const TRACK_HEAD_W: f32 = 82.0;
+
+/// A track-header click, applied after the read-only drawing pass.
+enum TrackAction {
+    Target { track: TrackId, on: bool },
+    Patch { track: TrackId, on: bool },
+}
+
+/// Where a placement will go: one time (kept A/V together), the patched
+/// destination tracks and their names for the status line.
+struct Placement {
+    at: Tick,
+    video: Option<(TrackId, String)>,
+    audio: Option<(TrackId, String)>,
+}
+
+impl Placement {
+    fn label(&self) -> String {
+        match (&self.video, &self.audio) {
+            (Some((_, v)), Some((_, a))) => format!("{v} + {a}"),
+            (Some((_, v)), None) => v.clone(),
+            (None, Some((_, a))) => a.clone(),
+            (None, None) => "no track".to_string(),
+        }
+    }
+}
+
+/// The end of a patched destination track (zero when nothing is on it).
+fn track_end(seq: &Sequence, id: Option<TrackId>, video: bool) -> Tick {
+    let Some(id) = id else { return Tick::ZERO };
+    let tracks = if video { &seq.video_tracks } else { &seq.audio_tracks };
+    tracks
+        .iter()
+        .find(|t| t.id == id)
+        .map(|t| t.items.iter().map(|i| i.start + i.duration).max().unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// The track's label in the sequence (`V2`, `A1`).
+fn track_name(seq: &Sequence, id: TrackId, video: bool) -> Option<String> {
+    let (tracks, prefix) = if video { (&seq.video_tracks, "V") } else { (&seq.audio_tracks, "A") };
+    tracks.iter().position(|t| t.id == id).map(|i| format!("{prefix}{}", i + 1))
+}
+
+/// Plan a placement on the engine's real source-patched destinations. A
+/// picture goes to the patched video track and its sound to the patched audio
+/// track; audio-only media uses the audio destination alone. Clips append to
+/// the destination tracks (so patching an empty V2 lays a clip over V1 rather
+/// than after it). Both streams share one start, keeping A/V in sync.
+fn plan_placement(project: &Project, seq: &Sequence, media: ItemId, tg: &Targeting) -> Result<Placement, String> {
+    let Some((_, clip, _)) = project.resolve_media(media) else {
+        return Err("The media item is missing".to_string());
+    };
+    let has_video = clip.info.video.is_some();
+    let has_audio = clip.info.has_audio();
+    if !has_video && !has_audio {
+        return Err("Nothing to place: the media has no streams".to_string());
+    }
+    if has_video && tg.video_dest.is_none() {
+        return Err("No video destination: click S on a video track first".to_string());
+    }
+    if has_audio && tg.audio_dest.is_none() {
+        return Err("No audio destination: click S on an audio track first".to_string());
+    }
+    let video = if has_video { tg.video_dest.and_then(|id| track_name(seq, id, true).map(|n| (id, n))) } else { None };
+    let audio = if has_audio { tg.audio_dest.and_then(|id| track_name(seq, id, false).map(|n| (id, n))) } else { None };
+    if has_video && video.is_none() {
+        return Err("The patched video destination is not in this sequence: patch a video track".to_string());
+    }
+    if has_audio && audio.is_none() {
+        return Err("The patched audio destination is not in this sequence: patch an audio track".to_string());
+    }
+    let v_end = if video.is_some() { track_end(seq, tg.video_dest, true) } else { Tick::ZERO };
+    let a_end = if audio.is_some() { track_end(seq, tg.audio_dest, false) } else { Tick::ZERO };
+    let at = if video.is_some() && audio.is_some() {
+        v_end.max(a_end)
+    } else if video.is_some() {
+        v_end
+    } else {
+        a_end
+    };
+    Ok(Placement { at, video, audio })
+}
+
+/// The engine's `timeline.place` parameters for a plan. An audio-only clip
+/// names the audio track as `track` (the engine's sound-only form); a picture
+/// names `track` and, when linked, its sound's `audioTrack`.
+fn placement_params(media: ItemId, sequence: ItemId, plan: &Placement) -> serde_json::Value {
+    let mut params = serde_json::json!({"item": media.0, "time": plan.at.0, "sequence": sequence.0});
+    match (&plan.video, &plan.audio) {
+        (Some((v, _)), Some((a, _))) => {
+            params["track"] = serde_json::json!(v.0);
+            params["audioTrack"] = serde_json::json!(a.0);
+        }
+        (Some((v, _)), None) => params["track"] = serde_json::json!(v.0),
+        (None, Some((a, _))) => params["track"] = serde_json::json!(a.0),
+        (None, None) => {}
+    }
+    params
+}
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     let project_w = app.project_w.clamp(180.0, body.width() - 260.0);
@@ -85,41 +188,30 @@ fn add_file(app: &mut App, path: std::path::PathBuf) {
     }
 }
 
-/// Place `media` at the end of the timeline through the engine's place
-/// command (undoable, with its validation): a picture goes to V1 with its
-/// sound on A1; audio-only media goes to A1 alone.
+/// Place `media` at the end of the patched destination tracks through the
+/// engine's place command (undoable, with its validation). The track headers'
+/// S buttons choose the destinations; double-clicking a clip's media never
+/// silently picks V1/A1 behind the editor's back.
 fn place_media(app: &mut App, media: ItemId) {
     let Some(seq_id) = app.sequence_id() else {
         app.status = "No sequence".to_string();
         return;
     };
-    let Some((_, clip, _)) = app.session.project.resolve_media(media) else { return };
-    let has_video = clip.info.video.is_some();
-    let has_audio = clip.info.has_audio();
-    let (mut v_end, mut a_end) = (Tick::ZERO, Tick::ZERO);
-    if let Some(s) = app.sequence() {
-        if let Some(t) = s.video_tracks.first() {
-            for it in &t.items {
-                v_end = v_end.max(it.start + it.duration);
-            }
-        }
-        if let Some(t) = s.audio_tracks.first() {
-            for it in &t.items {
-                a_end = a_end.max(it.start + it.duration);
-            }
-        }
-    }
-    let at = v_end.max(a_end).0;
-    let params = if has_video {
-        serde_json::json!({"item": media.0, "track": "V1", "audioTrack": if has_audio { "A1" } else { "" }, "time": at, "sequence": seq_id.0})
-    } else if has_audio {
-        serde_json::json!({"item": media.0, "track": "A1", "time": at, "sequence": seq_id.0})
-    } else {
-        app.status = "Nothing to place: the media has no streams".to_string();
+    let tg = app.session.targeting();
+    let Some(seq) = app.sequence() else {
+        app.status = "No sequence".to_string();
         return;
     };
-    match app.execute("timeline.place", params) {
-        Ok(_) => app.status = "Placed clip".to_string(),
+    let plan = match plan_placement(&app.session.project, seq, media, &tg) {
+        Ok(p) => p,
+        Err(e) => {
+            app.status = e;
+            return;
+        }
+    };
+    let label = plan.label();
+    match app.execute("timeline.place", placement_params(media, seq_id, &plan)) {
+        Ok(_) => app.status = format!("Placed clip on {label}"),
         Err(e) => app.status = e,
     }
 }
@@ -210,7 +302,7 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
     }
     panel.separator();
-    panel.colored_label(egui::Color32::GRAY, "Double-click media to place it (undoable). Select a clip, then the Effects workspace.");
+    panel.colored_label(egui::Color32::GRAY, "Double-click media to place it on the patched tracks (undoable). Select a clip, then the Effects workspace.");
 }
 
 fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -228,7 +320,10 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         ui.separator();
         ui.add(egui::Slider::new(&mut app.zoom, 20.0..=400.0).text("px / s"));
         ui.separator();
-        ui.colored_label(egui::Color32::GRAY, "Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit");
+        ui.colored_label(
+            egui::Color32::GRAY,
+            "T: target · S: patch · Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit",
+        );
     });
 
     let Some(s) = app.sequence() else {
@@ -238,13 +333,17 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     };
     let rows = s.video_tracks.len() + s.audio_tracks.len();
     let strip = egui::Rect::from_min_max(rect.min + egui::vec2(0.0, 26.0), rect.max);
-    let width = ((app.sequence_end().seconds() + 2.0) * app.zoom as f64).max(strip.width() as f64) as f32;
+    let head_w = TRACK_HEAD_W.min((strip.width() * 0.4).max(0.0));
+    let head = egui::Rect::from_min_max(strip.min, egui::pos2(strip.min.x + head_w, strip.max.y));
+    let body = egui::Rect::from_min_max(egui::pos2(strip.min.x + head_w, strip.min.y), strip.max);
+    let width = ((app.sequence_end().seconds() + 2.0) * app.zoom as f64).max(body.width() as f64) as f32;
     let desired = egui::vec2(width, RULER_H + rows as f32 * ROW_H);
     let (alloc, response) = {
-        let mut body = ui.new_child(egui::UiBuilder::new().max_rect(strip).id_salt("timeline-body"));
-        body.allocate_exact_size(desired, egui::Sense::click_and_drag())
+        let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("timeline-body"));
+        body_ui.allocate_exact_size(desired, egui::Sense::click_and_drag())
     };
     let painter = ui.painter_at(alloc);
+    let header_painter = ui.painter_at(strip);
     let to_x = |t: Tick| alloc.left() + t.seconds() as f32 * app.zoom;
 
     painter.rect_filled(alloc, 0.0, ui.visuals().extreme_bg_color);
@@ -267,13 +366,64 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     }
 
     let mut hit_rects: Vec<(egui::Rect, filmcraft_project::ClipId)> = Vec::new();
+    let mut actions: Vec<TrackAction> = Vec::new();
+    let tg = app.session.targeting();
+    // Corner above the headers, then one header per track. The target square
+    // (T) selects the engine's targeted tracks (navigation/paste, mute/solo);
+    // the source square (S) patches where new media lands for that stream.
+    header_painter.rect_filled(egui::Rect::from_min_max(strip.min, egui::pos2(head.right(), strip.top() + RULER_H)), 0.0, ui.visuals().extreme_bg_color);
+    header_painter.text(
+        egui::pos2(head.left() + 6.0, strip.top() + RULER_H / 2.0),
+        egui::Align2::LEFT_CENTER,
+        "Tracks",
+        egui::FontId::proportional(10.0),
+        ui.visuals().weak_text_color(),
+    );
     for (row, track) in s.video_tracks.iter().chain(&s.audio_tracks).enumerate() {
         let y = alloc.top() + RULER_H + row as f32 * ROW_H;
         let is_video = row < s.video_tracks.len();
         let row_rect = egui::Rect::from_min_max(egui::pos2(alloc.left(), y), egui::pos2(alloc.right(), y + ROW_H));
         painter.rect_filled(row_rect, 2.0, ui.visuals().faint_bg_color);
         let name = if is_video { format!("V{}", row + 1) } else { format!("A{}", row + 1 - s.video_tracks.len()) };
-        painter.text(egui::pos2(alloc.left() + 6.0, y + ROW_H / 2.0), egui::Align2::LEFT_CENTER, name, egui::FontId::default(), ui.visuals().text_color());
+        let head_rect = egui::Rect::from_min_size(egui::pos2(head.left(), y), egui::vec2(head.width(), ROW_H));
+        header_painter.rect_filled(head_rect, 0.0, ui.visuals().faint_bg_color);
+        header_painter.line_segment(
+            [egui::pos2(head.right(), y), egui::pos2(head.right(), y + ROW_H)],
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        );
+        let targeted = tg.targeted.contains(&track.id);
+        let patched = if is_video { tg.video_dest == Some(track.id) } else { tg.audio_dest == Some(track.id) };
+        let target_rect = egui::Rect::from_min_size(egui::pos2(head_rect.left() + 6.0, y + ROW_H / 2.0 - 7.0), egui::vec2(15.0, 15.0));
+        let patch_rect = egui::Rect::from_min_size(egui::pos2(head_rect.left() + 25.0, y + ROW_H / 2.0 - 7.0), egui::vec2(15.0, 15.0));
+        let on = ui.visuals().selection.bg_fill;
+        let off = ui.visuals().widgets.inactive.bg_fill;
+        header_painter.rect_filled(target_rect, 2.0, if targeted { on } else { off });
+        header_painter.text(target_rect.center(), egui::Align2::CENTER_CENTER, "T", egui::FontId::monospace(9.0), egui::Color32::WHITE);
+        header_painter.rect_filled(patch_rect, 2.0, if patched { egui::Color32::from_rgb(176, 112, 36) } else { off });
+        header_painter.text(patch_rect.center(), egui::Align2::CENTER_CENTER, "S", egui::FontId::monospace(9.0), egui::Color32::WHITE);
+        header_painter.text(
+            egui::pos2(head_rect.left() + 47.0, y + ROW_H / 2.0),
+            egui::Align2::LEFT_CENTER,
+            name,
+            egui::FontId::proportional(12.0),
+            ui.visuals().text_color(),
+        );
+        let target_hint = if targeted { "Stop targeting this track" } else { "Target this track (navigation, paste, mute/solo)" };
+        if ui
+            .interact(target_rect, egui::Id::new(("ff-track-target", track.id.0)), egui::Sense::click())
+            .on_hover_text(target_hint)
+            .clicked()
+        {
+            actions.push(TrackAction::Target { track: track.id, on: !targeted });
+        }
+        let patch_hint = if patched { "Unpatch this track (new media will not land here)" } else { "Patch new media to this track" };
+        if ui
+            .interact(patch_rect, egui::Id::new(("ff-track-patch", track.id.0)), egui::Sense::click())
+            .on_hover_text(patch_hint)
+            .clicked()
+        {
+            actions.push(TrackAction::Patch { track: track.id, on: !patched });
+        }
         for item in &track.items {
             let clip_rect = egui::Rect::from_min_max(egui::pos2(to_x(item.start), y + 3.0), egui::pos2(to_x(item.start + item.duration), y + ROW_H - 3.0));
             let selected = app.selection == Some(item.id);
@@ -294,6 +444,20 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 egui::Color32::WHITE,
             );
             hit_rects.push((clip_rect, item.id));
+        }
+    }
+
+    // Applying target/source changes after the drawing loop (the sequence was
+    // borrowed read-only above). This is editor state, not the document, so it
+    // is neither undoable nor a dirtying edit — matching the engine.
+    for action in actions {
+        let (track, key, on, what) = match action {
+            TrackAction::Target { track, on } => (track, "targeted", on, "Target"),
+            TrackAction::Patch { track, on } => (track, "sourcePatch", on, "Source patch"),
+        };
+        match app.session.execute("timeline.setTargeting", serde_json::json!({"track": track.0, key: on})) {
+            Ok(_) => app.status = format!("{what} updated"),
+            Err(e) => app.status = e.to_string(),
         }
     }
 
@@ -416,6 +580,120 @@ fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
     match drag {
         TimelineDrag::Move { clip, .. } => Some(*clip),
         TimelineDrag::Trim { clip, .. } => Some(*clip),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Real engine tests for source-patched placement: no UI, but the exact
+    //! plan and command parameters the timeline's double-click path uses.
+
+    use super::{placement_params, plan_placement};
+    use filmcraft_engine::Session;
+    use filmcraft_media::generators::GeneratorSource;
+    use filmcraft_media::{Generator, MediaSource};
+    use filmcraft_project::{ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef};
+    use filmcraft_time::{TICKS_PER_SECOND, Tick};
+    use serde_json::json;
+
+    fn demo_session() -> Session {
+        let mut s = Session::default();
+        s.execute("file.openDemoProject", json!({})).unwrap();
+        s
+    }
+
+    fn add_tone_item(s: &mut Session) -> ItemId {
+        s.edit("New Tone", |project, _| {
+            let source = GeneratorSource::new(
+                Generator::Tone { hz: 440.0, db: -6.0 },
+                1280,
+                720,
+                filmcraft_time::FrameRate::FPS_24,
+                Tick(10 * TICKS_PER_SECOND),
+            );
+            let info = source.info().clone();
+            let name = info.name.clone();
+            Ok(project.add_item(
+                name.as_str(),
+                Label::Iris,
+                ItemKind::Media(MediaClip {
+                    media: MediaRef::Generator(Generator::Tone { hz: 440.0, db: -6.0 }),
+                    info,
+                    interpret: Default::default(),
+                    mark_in: None,
+                    mark_out: None,
+                    markers: Vec::new(),
+                    offline: false,
+                    proxy: None,
+                    identity: None,
+                }),
+                None,
+            ))
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn placement_uses_the_patched_video_and_audio_tracks() {
+        let mut s = demo_session();
+        let item = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 2.0})).unwrap()["item"].as_u64().unwrap());
+        let (v2, a2) = {
+            let seq = s.active_sequence().unwrap();
+            (seq.video_tracks[1].id, seq.audio_tracks[1].id)
+        };
+        let ends = {
+            let seq = s.active_sequence().unwrap();
+            (super::track_end(seq, Some(v2), true), super::track_end(seq, Some(a2), false))
+        };
+        s.execute("timeline.setTargeting", json!({"track": v2.0, "sourcePatch": true})).unwrap();
+        s.execute("timeline.setTargeting", json!({"track": a2.0, "sourcePatch": true})).unwrap();
+        let tg = s.targeting();
+        let plan = {
+            let seq = s.active_sequence().unwrap();
+            plan_placement(&s.project, seq, item, &tg).unwrap()
+        };
+        assert_eq!(plan.video.as_ref().map(|v| v.0), Some(v2), "the picture follows the patched V2");
+        assert_eq!(plan.audio.as_ref().map(|a| a.0), Some(a2), "the sound follows the patched A2");
+        assert_eq!(plan.at, ends.0.max(ends.1), "both streams start together at the later patched-track end");
+
+        let seq_id = s.state.active_sequence.unwrap();
+        let r = s.execute("timeline.place", placement_params(item, seq_id, &plan)).unwrap();
+        let clips: Vec<ClipId> = r["clips"].as_array().unwrap().iter().filter_map(|c| c.as_u64().map(ClipId)).collect();
+        assert_eq!(clips.len(), 2);
+        let seq = s.active_sequence().unwrap();
+        let mut tracks: Vec<_> = clips.iter().filter_map(|c| seq.find_item(*c).map(|(t, _)| t)).collect();
+        tracks.sort_by_key(|t| t.0);
+        let mut want = vec![v2, a2];
+        want.sort_by_key(|t| t.0);
+        assert_eq!(tracks, want);
+    }
+
+    #[test]
+    fn audio_only_placement_uses_the_audio_destination_and_unpatched_video_is_an_error() {
+        let mut s = demo_session();
+        let tone = add_tone_item(&mut s);
+        let a1 = s.active_sequence().unwrap().audio_tracks[0].id;
+        let tg = s.targeting();
+        let plan = {
+            let seq = s.active_sequence().unwrap();
+            plan_placement(&s.project, seq, tone, &tg).unwrap()
+        };
+        assert_eq!(plan.video, None);
+        assert_eq!(plan.audio.as_ref().map(|a| a.0), Some(a1));
+        let params = placement_params(tone, s.state.active_sequence.unwrap(), &plan);
+        assert_eq!(params["track"].as_u64(), Some(a1.0), "an audio-only clip names the sound track as `track`");
+        assert!(params.get("audioTrack").is_none());
+
+        // With no video destination, a picture cannot land anywhere.
+        let v1 = s.active_sequence().unwrap().video_tracks[0].id;
+        s.execute("timeline.setTargeting", json!({"track": v1.0, "sourcePatch": false})).unwrap();
+        let bars = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 1.0})).unwrap()["item"].as_u64().unwrap());
+        let tg = s.targeting();
+        let err = {
+            let seq = s.active_sequence().unwrap();
+            plan_placement(&s.project, seq, bars, &tg).err().unwrap()
+        };
+        assert!(err.contains("No video destination"), "{err}");
     }
 }
 
