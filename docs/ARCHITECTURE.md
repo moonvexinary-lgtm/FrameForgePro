@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: milestone M9 (2026-10-22) · Branch: `frameforge-rust-rewrite`
+Last updated: milestone M10 (2026-10-22) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -147,8 +147,8 @@ session's project and the bridge's compositions on save, and disassembled on
 open; undo restores items under the same ids, so compositions follow.
 
 - **Commands wired**: `file.newSequence`, `file.newBarsAndTone`,
-  `file.newColorMatte`, `file.import`, `timeline.place` (V1/A1 with the
-  engine's validation), `edit.clear` (named-clip delete), `sequence.addEditAllTracks`
+  `file.newColorMatte`, `file.import`, `timeline.place` (source-patched
+  destinations with the engine's validation), `edit.clear` (named-clip delete), `sequence.addEditAllTracks`
   (razor at the playhead), `edit.undo`, `edit.redo` — plus a `Session::edit`
   closure for the Tone generator (no command yet) and media removal.
 - **Undo/redo**: toolbar buttons with real enable state from the history,
@@ -219,6 +219,24 @@ open; undo restores items under the same ids, so compositions follow.
   detection, clear, corrupt sidecar error, keyframe-preserving writes, and refusal of a
   newer project schema. The first three passed in run 39878432877.
 
+## M10 — source-patched multi-track editing (✔ CI-verified, run 39887395556)
+
+- **Track headers**: the timeline now has a fixed header column per track with
+  two real controls. **T** toggles the engine's targeted tracks (navigation,
+  paste, mute/solo), and **S** toggles the source patch (`video_dest` /
+  `audio_dest`) through `timeline.setTargeting`. Both are editor state, not the
+  document — neither is undoable nor marks the project dirty, matching the
+  engine.
+- **Placement follows the patch**: double-clicking media plans its destination
+  from `Session::targeting()`, appends to the patched video/audio tracks and
+  calls `timeline.place` with those exact track ids. A linked picture+sound
+  clip shares one start; audio-only media names the sound track as `track`;
+  an unpatched destination is an actionable status error instead of a silent
+  fallback to V1/A1.
+- **Tests**: `apps/frameforge-pro/src/edit.rs` — patched V2/A2 placement
+  end-to-end through the real engine, the audio-only parameter shape, and the
+  unpatched-video error.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -232,6 +250,7 @@ open; undo restores items under the same ids, so compositions follow.
 | M7 | editing depth: drag-move and trim through engine commands with a ghost preview, the keyframe editor (stopwatch + keys in media time), the panic hook, downloadable Windows dev builds from CI | ✔ (CI-verified, run 39717619124) |
 | M8 | Color workspace (FilmCraft's effect stack on the clip: apply/toggle/remove/setParam), Audio workspace (the mixer: faders, pan, mute, solo through mixer.setStrip), comp layer editing, tagged GitHub Releases with a ZIP | ✔ (CI-verified, run 39729926210) |
 | M9 | durability: crash-recovery autosaves, unsaved-changes guard, keyframe-preserving parameter writes, preview invalidation, measured baseline audit + architecture decision + feature parity + XMem plan | ✔ (CI-verified, run 39878432877) |
+| M10 | source-patched multi-track editing: per-track target/source-patch headers on the engine's `timeline.setTargeting`, placement on patched V2/A2, audio-only and unpatched-destination tests | ✔ (CI-verified, run 39887395556) |
 
 ## Dependency policy
 

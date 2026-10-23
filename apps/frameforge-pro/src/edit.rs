@@ -318,7 +318,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         ui.separator();
         ui.colored_label(
             egui::Color32::GRAY,
-            "T: target · S: patch · Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit",
+            "Track T/S: target/patch · Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit",
         );
     });
 

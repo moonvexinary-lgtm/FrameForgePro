@@ -25,9 +25,9 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | Media bin folders / tags / search / metadata | ⬜ | Flat list today | Bin model + UI, persisted in the project |
 | Thumbnails / audio waveforms | ⬜ | — | Generated off the UI thread, cached, bounded |
 | Relink missing media | 🟡 | `FrameForgeProject::relink` and the offline slate are tested (M3); no UI dialog | Relink dialog + offline badge |
-| Multi-track timeline (2V + 2A) | 🟡 | Engine tracks and the shell's 2+2 sequence; placement via `timeline.place`; no test of a two-video-track edit | A test that edits V2/A2 and renders the result |
-| Track targeting (choose V2/A2) | ⬜ | Placement always V1/A1 | Track target buttons; place on the selected track |
-| Track mute / solo / lock / visibility in the timeline | ⬜ | Audio mute/solo exists in the mixer; no track headers | Track header controls bound to commands |
+| Multi-track timeline (2V + 2A) | ✅ | Source-patched placement on V2/A2 through `timeline.place`; `edit::tests::placement_uses_the_patched_video_and_audio_tracks` executes the real engine and asserts both destination tracks | — (UI automation is a separate gap) |
+| Track targeting / source patching (choose V2/A2) | ✅ | Timeline headers expose the engine's real targeting (T) and source patch (S) through `timeline.setTargeting`; placement follows the patched tracks; audio-only and unpatched cases tested in `edit.rs` | — |
+| Track mute / solo / lock / visibility in the timeline | ⬜ | Headers currently carry target/source patch only; audio mute/solo exists in the mixer | Track header controls bound to commands |
 | Select / delete / razor / drag-move / trim | 🟡 | Engine commands and their upstream tests; M7 shell gestures; no FrameForge gesture test | A scripted edit test per gesture |
 | Insert / overwrite, ripple delete, roll, slip, slide | ⬜ | Engine supports much of this; no shell wiring | Commands wired + timeline tests |
 | Snapping, markers, ranges | ⬜ | — | Toggleable snapping; markers persisted |

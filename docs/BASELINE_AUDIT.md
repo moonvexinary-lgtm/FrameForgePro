@@ -72,7 +72,7 @@ and the comp/text path, not for all 307.
 | Area | What exists | What is missing |
 |---|---|---|
 | Media bin | Import generators/files, list, place, remove | folders, search, tags, metadata, thumbnails, waveforms, relink UI, proxy generation |
-| Timeline | 2 video + 2 audio tracks, select, drag-move, trim, razor, delete, scrub | track targeting (new clips always go to V1/A1), insert/overwrite, ripple/roll/slip/slide, snapping, markers, transitions UI, speed/freeze/reverse, waveforms, thumbnails |
+| Timeline | 2 video + 2 audio tracks, select, drag-move, trim, razor, delete, scrub, per-track target/source-patch headers, placement on the patched tracks | insert/overwrite, ripple/roll/slip/slide, snapping, markers, transitions UI, speed/freeze/reverse, waveforms, thumbnails |
 | Effect stack | add/remove/toggle, typed params, scalar keyframes, comp layers | undo, reorder, duplicate, reset, presets, full keyframe types (bool/color/choice), graph editor |
 | Color | FilmCraft video-effect stack on the selected clip | scopes, curves UI, wheels, before/after, LUT management |
 | Audio | faders, pan, mute, solo | meters, audio-effect inserts UI, automation lanes, per-clip volume |
@@ -102,14 +102,18 @@ document mutation. The Color/Audio tabs that were disabled in M5 are now real (M
 | D4 | S2 | Composition/effect edits bypass `Session` history; Ctrl+Z after an effect change undoes an unrelated timeline edit. | `app.rs`, `effects.rs` |
 | D5 | S2 | Removing an effect before the selected one leaves `selected_effect` pointing at a different effect. | `effects.rs` |
 | D6 | S2 | Export overwrites an existing file without confirmation; no cancel. | `export.rs` |
-| D7 | S2 | Track targeting absent; the second video/audio tracks cannot be used from the UI. | `edit.rs` |
+| D7 | S2 | Track targeting absent; the second video/audio tracks cannot be used from the UI. **Fixed in M10** (track headers + source-patched placement). | `edit.rs` |
 | D8 | S3 | `README.md` still says "milestone M1 — not usable as an editor"; `ARCHITECTURE.md` header still says M1. Documentation lags reality. | docs |
+
+Post-audit status: D1, D2, D3, D5 and D8 were fixed in M9; D7 was fixed in M10 (tests in
+`apps/frameforge-pro/src/edit.rs`). D4 (composition edits outside the undo history) and D6
+(export overwrite confirmation / cancel) remain the next correctness work.
 
 ## 8. Build, test, CI, sizes
 
 - CI: `windows-2025`, fmt → clippy `-D warnings` → check → test → release → self-test → artifact.
-- Last green code run: **39729926210**; docs run: **39782549838**. 11 tests, 0 failed.
-- Artifact: `frameforge-pro-windows-dev`, **24 MB** ZIP, 7-day retention. Extracted exe: **61.3 MB**.
+- Last green code run: **39887395556** (M10); docs run: **39782549838**. All 17 tests passed.
+- Artifact: `frameforge-pro-windows-dev`, **25,209,694 bytes** ZIP, 7-day retention. Extracted exe: **64,305,152 bytes**.
 - No installer yet; the tag workflow produces `frameforge-pro-<tag>-windows-x64.zip`.
 - Local storage: no `target/` directory; 53.6 GB free on C:.
 
@@ -150,5 +154,6 @@ Acceptance criteria:
 - CI green with the existing artifact; docs updated (README status, ARCHITECTURE M9 row).
 - No new runtime dependency.
 
-Deliberately **not** in this slice: effect-edit undo (D4), track targeting (D7), XMem (needs its own staged
-plan and a real worker benchmark). They are recorded in `docs/FEATURE_PARITY.md` with priorities.
+Deliberately **not** in the M9 slice: effect-edit undo (D4), track targeting (D7, now fixed in
+M10), XMem (needs its own staged plan and a real worker benchmark). They are recorded in
+`docs/FEATURE_PARITY.md` with priorities.
