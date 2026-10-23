@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn a_command_that_does_not_edit_adds_no_step() {
-        let mut session = Session::default();
+        let session = Session::default();
         let mut history = EditHistory::new();
         let top = undo_top(&session);
 
