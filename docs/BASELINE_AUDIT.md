@@ -113,10 +113,10 @@ remains the next correctness work.
 ## 8. Build, test, CI, sizes
 
 - CI: `windows-2025`, fmt → clippy `-D warnings` → check → test → release → self-test → artifact.
-- Last green code run: **39900494912** (M11); all 24 tests passed. The docs/code run with the
-  App-level Ctrl+Z test is the next run; the count then becomes 25. Artifact:
+- Last green code run: **40037973347** (M11); all 25 tests passed. Artifact:
   `frameforge-pro-windows-dev`, **24.1 MB** ZIP per the run page, 7-day retention. The previous
-  extracted exe was **64,305,152 bytes**; the dependency graph did not change in M11.
+  extracted exe was **64,305,152 bytes**; M11 added no dependency, so the package stays the same
+  order of size.
 - No installer yet; the tag workflow produces `frameforge-pro-<tag>-windows-x64.zip`.
 - Local storage: no `target/` directory; ~53 GB free on C:.
 

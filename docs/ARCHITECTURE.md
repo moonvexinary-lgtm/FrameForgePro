@@ -239,7 +239,7 @@ open; undo restores items under the same ids, so compositions follow.
   end-to-end through the real engine, the audio-only parameter shape, and the
   unpatched-video error.
 
-## M11 — one chronological undo history (✔ CI-verified, run 39900494912)
+## M11 — one chronological undo history (✔ CI-verified, run 40037973347)
 
 Timeline edits are whole-project snapshots owned by FilmCraft's `Session`.
 Composition/effect edits live beside that project, so they previously bypassed
@@ -296,7 +296,7 @@ M11 gives both kinds of edit one order.
 | M8 | Color workspace (FilmCraft's effect stack on the clip: apply/toggle/remove/setParam), Audio workspace (the mixer: faders, pan, mute, solo through mixer.setStrip), comp layer editing, tagged GitHub Releases with a ZIP | ✔ (CI-verified, run 39729926210) |
 | M9 | durability: crash-recovery autosaves, unsaved-changes guard, keyframe-preserving parameter writes, preview invalidation, measured baseline audit + architecture decision + feature parity + XMem plan | ✔ (CI-verified, run 39878432877) |
 | M10 | source-patched multi-track editing: per-track target/source-patch headers on the engine's `timeline.setTargeting`, placement on patched V2/A2, audio-only and unpatched-destination tests | ✔ (CI-verified, run 39887395556) |
-| M11 | one chronological undo history: composition snapshots paired with project-neutral engine steps, gesture coalescing, limit-aligned redo, composition rollback on failure, seven history tests plus an App-level Ctrl+Z test | ✔ (CI-verified, run 39900494912) |
+| M11 | one chronological undo history: composition snapshots paired with project-neutral engine steps, gesture coalescing, limit-aligned redo, composition rollback on failure, seven history tests plus an App-level Ctrl+Z test | ✔ (CI-verified, run 40037973347) |
 
 ## Dependency policy
 
