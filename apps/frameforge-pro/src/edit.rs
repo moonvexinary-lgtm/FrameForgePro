@@ -376,6 +376,41 @@ fn place_media(app: &mut App, media: ItemId) {
     }
 }
 
+/// Insert or overwrite the selected bin media at the playhead on the patched
+/// destination tracks. This is the engine's real `insert` mode: insert ripples
+/// the existing clips right, overwrite trims or removes whatever is under it.
+pub(crate) fn place_at_playhead(app: &mut App, media: ItemId, insert: bool) {
+    let Some(seq_id) = app.sequence_id() else {
+        app.status = "No sequence".to_string();
+        return;
+    };
+    let at = app.playhead.max(Tick::ZERO);
+    let tg = app.session.targeting();
+    let plan = {
+        let Some(seq) = app.session.active_sequence() else {
+            app.status = "No sequence".to_string();
+            return;
+        };
+        match plan_placement(&app.session.project, seq, media, &tg) {
+            Ok(mut p) => {
+                p.at = at;
+                p
+            }
+            Err(e) => {
+                app.status = e;
+                return;
+            }
+        }
+    };
+    let label = plan.label();
+    let mut params = placement_params(media, seq_id, &plan);
+    params["insert"] = serde_json::json!(insert);
+    match app.execute("timeline.place", params) {
+        Ok(_) => app.status = format!("{} on {label}", if insert { "Inserted" } else { "Overwrote" }),
+        Err(e) => app.status = e,
+    }
+}
+
 /// Remove `media` and its clips (undoable). Its composition stays keyed: an
 /// undo restores the item under the same id, and the composition with it.
 fn remove_media(app: &mut App, media: ItemId) {
@@ -394,6 +429,9 @@ fn remove_media(app: &mut App, media: ItemId) {
     });
     match result {
         Ok(()) => {
+            if app.bin_selection == Some(media) {
+                app.bin_selection = None;
+            }
             app.status = "Media removed".to_string();
         }
         Err(e) => app.status = e.to_string(),
@@ -430,6 +468,7 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let mut ids = Vec::new();
     app.session.project.root.all_items(&mut ids);
     let mut clicks = Vec::new();
+    let mut chosen = None;
     egui::ScrollArea::vertical().show(&mut panel, |ui| {
         for id in ids {
             let Some(item) = app.session.project.items.get(&id) else { continue };
@@ -440,19 +479,26 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 MediaRef::File { .. } => "file",
             };
             let has_comp = app.compositions.contains_key(&id);
+            let selected = app.bin_selection == Some(id);
             let label = format!("{name} [{kind}]{}", if has_comp { " ●" } else { "" });
-            let response = ui.selectable_label(false, label).on_hover_text(if has_comp {
-                "Has a compositing composition. Double-click: place on the timeline. Right-click: remove."
+            let response = ui.selectable_label(selected, label).on_hover_text(if has_comp {
+                "Has a composition. Click: select for Insert/Overwrite at the playhead. Double-click: append to the timeline. Right-click: remove."
             } else {
-                "Double-click: place on the timeline. Right-click: remove."
+                "Click: select for Insert/Overwrite at the playhead. Double-click: append to the timeline. Right-click: remove."
             });
             if response.double_clicked() {
                 clicks.push((id, 0));
             } else if response.secondary_clicked() {
                 clicks.push((id, 1));
+            } else if response.clicked() {
+                chosen = Some(id);
             }
         }
     });
+    if let Some(id) = chosen {
+        app.bin_selection = Some(id);
+        app.status = "Selected for Insert/Overwrite".to_string();
+    }
     for (id, which) in clicks {
         if which == 0 {
             place_media(app, id);
@@ -461,7 +507,7 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
     }
     panel.separator();
-    panel.colored_label(egui::Color32::GRAY, "Double-click media to place it on the patched tracks (undoable). Select a clip, then the Effects workspace.");
+    panel.colored_label(egui::Color32::GRAY, "Click a media item, then Insert/Overwrite in the timeline header; double-click appends to the patched tracks (all undoable). Select a clip, then the Effects workspace.");
 }
 
 fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -475,6 +521,18 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         ui.separator();
         if ui.button("Razor (all tracks)").clicked() {
             app.add_edit_all_tracks();
+        }
+        ui.separator();
+        let has_bin_item = app.bin_selection.is_some();
+        if ui.add_enabled(has_bin_item, egui::Button::new("Insert")).on_hover_text("Insert the selected bin item at the playhead (ripples existing clips right)").clicked()
+            && let Some(item) = app.bin_selection
+        {
+            place_at_playhead(app, item, true);
+        }
+        if ui.add_enabled(has_bin_item, egui::Button::new("Overwrite")).on_hover_text("Overwrite the selected bin item at the playhead").clicked()
+            && let Some(item) = app.bin_selection
+        {
+            place_at_playhead(app, item, false);
         }
         ui.separator();
         if ui.button("Add Marker (M)").on_hover_text("Add a marker at the playhead (undoable)").clicked() {
@@ -892,9 +950,9 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
 #[cfg(test)]
 mod tests {
-    //! Real engine tests for source-patched placement, the track-header
-    //! settings, the marker helpers and the snap maths: no UI, but the exact
-    //! commands and targets the timeline uses.
+    //! Real engine tests for source-patched placement (append and
+    //! insert/overwrite), the track-header settings, the marker helpers and the
+    //! snap maths: no UI, but the exact commands and targets the timeline uses.
 
     use super::{placement_params, plan_placement};
     use filmcraft_engine::Session;
@@ -1093,5 +1151,45 @@ mod tests {
         let without = super::snap_targets(seq, Some(clip), Tick(777));
         assert!(without.contains(&Tick(777)), "the playhead is a target");
         assert_eq!(all.len() - without.len(), 2, "the dragged clip contributes its start and end, and nothing else");
+    }
+
+    #[test]
+    fn insert_and_overwrite_at_the_playhead_use_the_real_engine_insert_flag() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "IO"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1"})).unwrap();
+        let a = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 2.0})).unwrap()["item"].as_u64().unwrap());
+        let b = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 1.0})).unwrap()["item"].as_u64().unwrap());
+        let seq = s.state.active_sequence.unwrap();
+        let tg = s.targeting();
+        let plan = {
+            let q = s.active_sequence().unwrap();
+            let mut p = plan_placement(&s.project, q, a, &tg).unwrap();
+            p.at = Tick::ZERO;
+            p
+        };
+        s.execute("timeline.place", placement_params(a, seq, &plan)).unwrap();
+
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+        app.playhead = Tick::ZERO;
+        let one_second = Tick(TICKS_PER_SECOND);
+
+        super::place_at_playhead(&mut app, b, true);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let v1 = &q.video_tracks[0];
+            assert!(v1.items.iter().any(|i| i.item == b && i.start == Tick::ZERO), "insert lands B at the playhead");
+            let a_after = v1.items.iter().find(|i| i.item == a).map(|i| i.start);
+            assert!(a_after.is_some_and(|t| t >= one_second), "insert ripples A right, got {a_after:?}");
+        }
+
+        app.undo();
+        super::place_at_playhead(&mut app, b, false);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let v1 = &q.video_tracks[0];
+            assert!(v1.items.iter().any(|i| i.item == b && i.start == Tick::ZERO), "overwrite lands B at the playhead");
+            assert!(v1.items.iter().filter(|i| i.item == a).all(|i| i.start >= one_second), "overwrite trims A under B");
+        }
     }
 }

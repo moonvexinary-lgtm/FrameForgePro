@@ -66,6 +66,8 @@ pub struct App {
     pub last: Option<Instant>,
     pub zoom: f32,
     pub selection: Option<ClipId>,
+    /// The media item selected in the project panel (the Insert/Overwrite source).
+    pub bin_selection: Option<ItemId>,
     pub seq: Option<ItemId>,
     pub status: String,
     pub export: ExportState,
@@ -124,6 +126,7 @@ impl App {
             last: None,
             zoom: 120.0,
             selection: None,
+            bin_selection: None,
             seq,
             status: status.to_string(),
             export: ExportState { include_audio: true, ..Default::default() },
