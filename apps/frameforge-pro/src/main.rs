@@ -8,7 +8,9 @@
 //!
 //! * `frameforge-pro` — the application window;
 //! * `frameforge-pro catalog` — the machine-readable effects registry (JSON);
-//! * `frameforge-pro selftest` — the foundation self-test (CI runs this).
+//! * `frameforge-pro selftest` — the foundation self-test (CI runs this);
+//! * `frameforge-pro roto-bench [frames]` — the Rust-side R2 frame-export
+//!   measurement (XMem inference is reported as not measured unless installed).
 
 mod app;
 mod audio;
@@ -19,6 +21,7 @@ mod export;
 mod history;
 mod mixer;
 mod pixels;
+mod roto_bench;
 
 use std::process::ExitCode;
 
@@ -27,6 +30,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("catalog") => print_catalog(),
         Some("selftest") => self_test(),
+        Some("roto-bench") => roto_bench::run(&args[1..]),
         _ => run_gui(),
     }
 }

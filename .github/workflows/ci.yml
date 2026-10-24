@@ -87,7 +87,10 @@ jobs:
 
       - name: Binary self-test
         if: always()
-        run: ./target/release/frameforge-pro.exe selftest
+        run: |
+          ./target/release/frameforge-pro.exe selftest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./target/release/frameforge-pro.exe roto-bench 4
 
       - name: Upload Windows development build
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/frameforge-rust-rewrite'

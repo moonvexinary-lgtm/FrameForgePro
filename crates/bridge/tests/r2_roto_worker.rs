@@ -10,8 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
+use filmcraft_media::Generator;
 use filmcraft_media::generators::GeneratorSource;
-use filmcraft_media::{Generator, MediaSource};
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 use frameforge_bridge::{ExportedFrames, WORKER_PROTOCOL, WorkerCommand, WorkerDirection, WorkerEvent, XmemWorker, export_frames};
 
