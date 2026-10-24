@@ -41,12 +41,16 @@ fn track_action_command(action: TrackAction) -> (&'static str, serde_json::Value
         TrackAction::Target { track, on } => ("timeline.setTargeting", serde_json::json!({"track": track.0, "targeted": on}), "Target"),
         TrackAction::Patch { track, on } => ("timeline.setTargeting", serde_json::json!({"track": track.0, "sourcePatch": on}), "Source patch"),
         TrackAction::Setting { track, key, on } => {
-            let what = match key {
-                TRACK_ENABLED => "Visibility",
-                TRACK_MUTED => "Mute",
-                TRACK_SOLO => "Solo",
-                TRACK_LOCKED => "Lock",
-                _ => "Track setting",
+            let what = if key == TRACK_ENABLED {
+                "Visibility"
+            } else if key == TRACK_MUTED {
+                "Mute"
+            } else if key == TRACK_SOLO {
+                "Solo"
+            } else if key == TRACK_LOCKED {
+                "Lock"
+            } else {
+                "Track setting"
             };
             ("timeline.setTrack", serde_json::json!({"track": track.0, key: on}), what)
         }
@@ -365,7 +369,8 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     };
     let painter = ui.painter_at(alloc);
     let header_painter = ui.painter_at(strip);
-    let to_x = |t: Tick| alloc.left() + t.seconds() as f32 * app.zoom;
+    let zoom = app.zoom;
+    let to_x = |t: Tick| alloc.left() + t.seconds() as f32 * zoom;
 
     painter.rect_filled(alloc, 0.0, ui.visuals().extreme_bg_color);
     let seconds = (alloc.width() / app.zoom).ceil() as i64;
