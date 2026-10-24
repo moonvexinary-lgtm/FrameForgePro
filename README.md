@@ -4,7 +4,7 @@ A unified, Rust-native video editor for Windows: **FilmCraft's** nonlinear editi
 and **EffectCraft's** compositing and motion-graphics engine in one application, with
 Premiere Pro-inspired professional workflows.
 
-> **Status: milestone M12 — a working prototype editor, not yet a Resolve competitor.**
+> **Status: M12 core editor plus the R1/R2 Roto AI foundation — a working prototype, not yet a Resolve competitor.**
 > The complete core journey runs on real code and is CI-verified: import media, edit a
 > multitrack timeline, apply a real effect, preview it, save, reopen, export, and verify
 > the rendered file. M9 added crash-recovery autosaves, an unsaved-changes guard, and
@@ -12,8 +12,12 @@ Premiere Pro-inspired professional workflows.
 > placement on V2/A2; M11 puts timeline and composition/effect edits into one
 > chronological undo history, so Ctrl+Z never undoes an unrelated edit; M12 adds export
 > overwrite confirmation, real cancellation with partial-file cleanup, and a Save /
-> Discard / Cancel guard when the window closes. Roto AI (XMem)
-> is **designed, not implemented**:
+> Discard / Cancel guard when the window closes. R1 adds a validated cached-mask reader
+> and alpha application in `ComposedSource`, so a synthetic matte changes both preview and
+> H.264 export; R2 adds the JSON-lines worker protocol, a child-process client and the PNG
+> frame exporter (`roto-bench` measures only that Rust path). XMem inference, the Roto AI
+> workspace, the optional Python pack and the consent-based 237.5 MB weights are **not
+> implemented or claimed** — R3–R6 remain:
 > see [docs/ROTO_AI_PLAN.md](docs/ROTO_AI_PLAN.md). Nothing is stubbed or faked; the
 > honest gap list is [docs/FEATURE_PARITY.md](docs/FEATURE_PARITY.md) and the current
 > baseline audit is [docs/BASELINE_AUDIT.md](docs/BASELINE_AUDIT.md).

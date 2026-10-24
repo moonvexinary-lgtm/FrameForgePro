@@ -1,12 +1,12 @@
 # Baseline audit — FrameForge Pro
 
-Audit date: 2026-10-22 · Auditor: coding agent (source inspection + CI evidence, no assumptions)
+Audit date: 2026-10-22 · Updated: 2026-10-24 with R1/R2 evidence · Auditor: coding agent (source inspection + CI evidence, no assumptions)
 
 ## 1. Exact refs inspected
 
 | Ref | Commit | What it is |
 |---|---|---|
-| `frameforge-rust-rewrite` | `d13d05d` | **The maintained implementation.** Rust workspace: FilmCraft editing engine + EffectCraft compositing engine + the egui application shell. |
+| `frameforge-rust-rewrite` | `ef53ddc` | **The maintained implementation.** Rust workspace: FilmCraft editing engine + EffectCraft compositing engine + the egui application shell. R1/R2 add the cached roto mask seam and the XMem worker transport. |
 | `frameforge-dev` | `2601eb5` | The original C++/Qt/QML application (a Kdenlive fork, GPL-3.0, 2 003 files). It is an **ancestor** of the Rust branch (`git merge-base --is-ancestor` → true), preserved unchanged, and is not built or linked. |
 | `frameforge-cpp-legacy` (tag, documented in README) | `2601eb5` | Recovery point for the Qt application. |
 | Upstream FilmCraft | `6c3948a36c80e4996d924766ba7157eec4fca85e` | Pinned git dependency (`filmcraft-*`). |
@@ -23,6 +23,8 @@ single fast-forward and should be an explicit decision, not a side effect of thi
 - Verified command shapes against FilmCraft's own tests (`effects.apply`, `effects.setParam`,
   `effects.toggleEnabled`, `effects.remove`, `mixer.setStrip`) rather than trusting the shell's call sites.
 - Read the last green CI run's logs (`39729926210`) for measured test and effect-sweep numbers.
+  R1 and R2 were verified by their own green runs (`40056112214`, `40059782293`); the R2 run also
+  executes `roto-bench 4` in its binary self-test step.
 - **No local Cargo build was run** (storage policy). CI is the compiler. Disk free at audit time: **53.6 GB**.
 
 ## 3. Workspace inventory
@@ -43,7 +45,9 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 |---|---|
 | Exact, shared time base across both engines | `frameforge-core::verify_foundation`; binary self-test in CI. |
 | Real effects on timeline media | `ComposedSource` runs EffectCraft's registry through the renderer; M2 test proves keyframed Gaussian blur (monotonic softening, direction-independent, identity at 0). |
-| Save / reopen fidelity | `.ffproj` schema 2, atomic save with round-trip validation; M2 test renders byte-identical frames after reopen. |
+| Save / reopen fidelity | `.ffproj` schema 3, atomic save with round-trip validation; M2 test renders byte-identical frames after reopen; schema-2 projects load with no roto reference. |
+| Cached roto alpha in preview and export | R1 (`40056112214`): `MaskCache` + `ComposedSource` multiply straight alpha on the one render path; a synthetic matte changes preview **and** decoded H.264 pixels; every cache-key input invalidates the address. |
+| XMem worker transport and frame exporter | R2 (`40059782293`): protocol-1 JSON lines over a real child process (fake worker), typed events, 1 MiB line cap, stderr tail, `export_frames` PNGs verified for count/size/order; `roto-bench` runs in CI. **No XMem inference or weights.** |
 | Real export with verified output | H.264 + AAC export, decoded back and checked (resolution, rate, duration, audio peak, blur present) in `m2_poc.rs`. |
 | File media, offline slate, relink, `.fcproj` / `.ecproj` import | `m3_media_catalog.rs`, `m4_comp.rs`; missing files render the offline slate and heal on relink. |
 | Compositions with real layers | EffectCraft comp renders over FilmCraft footage at identical ticks; keyframed text measured moving; byte-identical reopen. |
@@ -54,15 +58,15 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 | Audio mixer | `mixer.setStrip` with `volumeDb`, `pan`, `muted`, `solo` — exact upstream parameter names verified. |
 | Audio playback clock | cpal stream fed by a worker mixing through the engine's mixer, playhead = device frames; honest wall-clock fallback. |
 | Panic containment | `catch_unwind` around the frame; session survives. |
-| Cloud-only build + downloadable dev build | Run `40045638522`: fmt/clippy/check/test/release green, 28 tests, 25,229,770-byte artifact. |
+| Cloud-only build + downloadable dev build | Run `40059782293`: fmt/clippy/check/test/release green, **36 tests**, 25,512,804-byte artifact. |
 
 Measured in run `39729926210`'s test log:
 
 - **307 of 307** EffectCraft effects ran through the real composed-source path with default parameters
   (0 reported unsupported), on a 32×32 Bars frame.
 - FilmCraft's catalog is asserted at **≥ 60** effect definitions by the same test.
-- The M8 log behind those measurements ran 11 tests; the M12 suite is **28 tests** across the
-  workspace, all green (run `40045638522`).
+- The M8 log behind those measurements ran 11 tests; the M12 suite was **28 tests**, and the R2 suite
+  is **36 tests** across the workspace (R1 added 5, R2 added 3), all green (run `40059782293`).
 
 These counts are *registry entries exercised through the bridge*, not a claim that every effect is
 artistically complete or parameter-swept at multiple values. Golden-frame coverage exists for Gaussian blur
@@ -79,14 +83,16 @@ and the comp/text path, not for all 307.
 | Audio | faders, pan, mute, solo | meters, audio-effect inserts UI, automation lanes, per-clip volume |
 | Export | 5 built-in formats, progress, report, overwrite confirmation, cancel (partial file removed) | queue, presets, range selection, progress detail |
 | Project | new/open/save/save-as, atomic write, autosave/recovery, New/Open and window-close guards | recent files |
+| Roto AI | R1 mask-cache reader + alpha in `ComposedSource`; R2 worker protocol, child-process client, frame exporter and `roto-bench` | real XMem inference, Python/CPU runtime pack, consent download/weights, initial-mask and correction UI, workspace, job queue/timeout, in-memory mask LRU |
 | UI | workspaces, resizable gutters, shortcuts (Space, Ctrl+Z/Y, Ctrl+K, Del) | command palette, configurable shortcuts, layout persistence, UI scaling, source monitor, safe areas, accessibility pass |
 
 ## 6. Not implemented at all (no code path exists)
 
-- **Roto AI / XMem** — no workspace, no worker, no masks, no model management. See
-  `docs/ROTO_AI_PLAN.md`. Nothing is presented as working.
+- **Roto AI / XMem inference** — no Roto AI workspace, no Python worker process, no PyTorch, no
+  weights and no model management. The R1 mask cache/alpha seam and R2 protocol/exporter exist, but
+  nothing in the UI presents Roto AI as working. See `docs/ROTO_AI_PLAN.md`.
 - Motion/Graphics workspace (titles exist only as comp layers added from the Effects panel).
-- Masks, chroma key UI, tracking, adjustment clips, nested sequences UI, multicam, captions, OTIO/EDL.
+- Mask/chroma-key authoring UI, tracking, adjustment clips, nested sequences UI, multicam, captions, OTIO/EDL.
 - GPU preview/effects (the bridge path is CPU), proxies, caches, background rendering.
 - Plugin host (OpenFX), AI pack, installers (only a ZIP of the exe on tag).
 
@@ -115,11 +121,14 @@ audit remains open.
 ## 8. Build, test, CI, sizes
 
 - CI: `windows-2025`, fmt → clippy `-D warnings` → check → test → release → self-test → artifact.
-- Last green code run: **40045638522** (M12); all **28** tests passed. Artifact:
-  `frameforge-pro-windows-dev`, **25,229,770 bytes** ZIP, 7-day retention. The previous M11
-  artifact was 25,226,843 bytes; M12 added no dependency, so the size difference is code only.
-  The previous extracted exe was **64,305,152 bytes**; the M12 package stays the same order of
-  size.
+- Last green code run: **40059782293** (R2); all **36** tests passed. Artifact:
+  `frameforge-pro-windows-dev`, **25,512,804 bytes** ZIP, 7-day retention. The R1 artifact was
+  25,418,672 bytes and the M12 artifact 25,229,770 bytes; R1/R2 added no new external crate
+  (`image` was already a workspace/app dependency; the bridge now uses it too).
+  The last extracted exe was **64,305,152 bytes** (M10/M12 measurement); the R2 ZIP is the same order
+  of size, but the R2 exe was not extracted locally.
+- `frameforge-pro roto-bench 4` runs in the binary self-test; it measures the Rust decode/scale/PNG
+  path only and prints "XMem CPU inference: not measured". No XMem speed figure exists.
 - No installer yet; the tag workflow produces `frameforge-pro-<tag>-windows-x64.zip`.
 - Local storage: no `target/` directory; ~53 GB free on C:.
 
@@ -134,6 +143,7 @@ audit remains open.
 | Legacy Qt app on `frameforge-dev` | GPL-3.0 | **not** bundled, not linked |
 | XMem (future optional pack) | MIT (code) | weights redistributed only with consent + notice; not bundled by default |
 | XMem weights `v1.0` | release assets, 237.5 MB (`XMem.pth`) | download-on-consent; licence/notice recorded at download |
+| PowerShell fake worker (`tests/fixtures/fake_xmem_worker.ps1`) | original test code (this project) | test-only, not shipped |
 
 The brief's allowlist (MIT/Apache/BSD/ISC/Zlib/CC0/Unicode/BSL) is satisfied today. FFmpeg does not appear in
 the dependency graph; if it is added later it must be an LGPL build with a per-build licence record.
@@ -163,3 +173,8 @@ Acceptance criteria:
 Deliberately **not** in the M9 slice: effect-edit undo (D4, fixed in M11), track targeting (D7,
 fixed in M10), XMem (needs its own staged plan and a real worker benchmark). They are recorded in
 `docs/FEATURE_PARITY.md` with priorities.
+
+Subsequent sessions completed R1 (mask cache/alpha) and R2 (worker transport/exporter). The next
+highest-impact work is timeline depth (mute/solo/lock/visibility, insert/overwrite, ripple/roll/slip/
+slide, snapping, markers, source monitor, transitions), followed by R3's real XMem CPU run once the
+optional runtime and weights are installed with consent.

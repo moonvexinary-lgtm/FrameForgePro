@@ -1,7 +1,12 @@
 # Roto AI — XMem integration plan (mandatory engine)
 
-Status: **design only — nothing is implemented or claimed.** This document defines the architecture,
-licensing, storage and acceptance tests that must pass before any Roto AI control appears in the UI.
+Status: **R1 and the R2 transport/exporter are implemented and CI-verified; XMem inference itself
+(R3), the Roto AI workspace (R4), and the consent-based pack/weights (R5) are not.** R1 (run
+`40056112214`) reads a cached mask and multiplies the clip's alpha on the one preview/export path.
+R2 (run `40059782293`) speaks the JSON-lines worker protocol to a real child process and writes
+worker input PNGs; its fake worker test uses no PyTorch and no weights. The CPU XMem benchmark is
+**not recorded**; `roto-bench` measures only the Rust frame-export path and reports XMem inference as
+"not measured". Nothing in the UI presents Roto AI as working.
 
 ## Non-negotiables
 
@@ -68,11 +73,101 @@ ComposedSource / renderer ◄── cached alpha PNGs ───────┘
   the same seam every EffectCraft effect already uses. FilmCraft-native mask integration is evaluated
   later; it is not required for the first working prototype.
 
+## Implemented in R1/R2 (2026-10-24)
+
+### Mask cache (R1)
+
+`crates/bridge/src/roto.rs` owns the cache reader and `ComposedSource` owns the alpha seam.
+
+```
+%LOCALAPPDATA%\FrameForgePro\roto\<key>\
+  manifest.json
+  frame_00000000.png
+  frame_00000001.png
+  ...
+```
+
+`manifest.json` is versioned:
+
+```json
+{
+  "version": 1,
+  "key": "0123456789abcdef",
+  "width": 480,
+  "height": 270,
+  "frame_rate": { "num": 24000, "den": 1001 },
+  "frame_start": 0,
+  "frame_count": 120
+}
+```
+
+Each frame is an 8-bit grayscale PNG at the declared working size. A frame inside `frame_start ..
+frame_start+frame_count` whose PNG is missing is an error, never silently unmasked; a frame outside
+the declared range is left untouched. Mask files are named by the media frame index, so the
+worker and the renderer agree without a side table.
+
+`RotoCacheKey::cache_key()` is a stable 64-bit FNV-1a digest of the source identity, model SHA-256,
+working width/height, exact frame rate, ordered correction ids and the pinned XMem commit. Changing
+any input addresses a different directory. The key is validated as 16 hex digits before it is joined
+to the cache root, so a hand-edited `.ffproj` cannot traverse paths.
+
+`ComposedSource::with_roto_cache` applies the mask after the effect chain or comp output:
+
+```text
+alpha_out = (alpha_in * mask + 127) / 255
+```
+
+RGB is untouched (the pixels are straight-alpha RGBA), and the preview and export both read the same
+`MaskCache`. The tests are `crates/bridge/tests/r1_roto.rs` (5 tests, run `40056112214`): exact
+left-transparent/right-opaque alpha inside coverage with outside-coverage pass-through; a missing
+in-range frame is an error; every cache-key input invalidates the address; a correction edit misses
+the old cache; and a two-track preview plus real H.264 export both show the background through the
+transparent half. `.ffproj` schema is now 3; schema-2 readers refuse a schema-3 project instead of
+silently dropping its mask reference.
+
+Limitations: masks must match the requested frame size exactly (a proxy mask is not stretched onto a
+full-resolution export; R3 regenerates at the requested working size); decoded masks are not kept in
+an in-memory LRU yet, so every render request decodes its PNG; there is no mask writer or UI.
+
+### Worker protocol and frame exporter (R2)
+
+`crates/bridge/src/roto_worker.rs` defines protocol 1 as JSON lines:
+
+```json
+{"command":"hello","protocol":1}
+{"event":"ready","protocol":1,"backend":"cpu","torch":"…","xmem":"…"}
+{"command":"propagate","frames_dir":"…","first_frame":0,"last_frame":119,"initial_mask":"…","output_dir":"…","width":480,"height":270,"model":"XMem.pth","model_sha256":"…","direction":"forward"}
+{"event":"progress","frame":0,"total":120,"elapsed":0.1,"fps":10.0}
+{"event":"done","frames":120,"elapsed":12.0}
+{"command":"cancel"} / {"event":"cancelled"}
+{"command":"shutdown"}
+```
+
+`XmemWorker` spawns a child process, sends a `hello` handshake and returns a typed `WorkerInfo`; a
+closed pipe is an error carrying the capped stderr tail, not a silent end of job. One event line is
+capped at 1 MiB. The test `crates/bridge/tests/r2_roto_worker.rs` (3 tests, run `40059782293`) spawns
+a real PowerShell fake worker and covers ready → progress → done → cancel → shutdown; the fake never
+claims to be XMem.
+
+`export_frames` decodes the requested range through FilmCraft's codecs, scales to fit a working size
+without upscaling, and writes `frame_<index>.png` in media order. The same test exports three green
+frames at 32×18 and checks dimensions, colour and order.
+
+`frameforge-pro roto-bench [frames]` times this Rust-side decode/scale/PNG path on synthetic Bars &
+Tone and CI runs it with 4 frames. It prints "XMem CPU inference: not measured" unconditionally — no
+pack/weight detection or inference call is wired yet — so it never invents an inference number. The
+target-laptop CPU benchmark required by R2 remains open because it needs the optional runtime and
+237.5 MB weights, which are R3/R5 work.
+
+Limitations: the client is blocking (a hung worker needs the R3 job runner's timeout/kill policy);
+`request_shutdown` sends the request and process teardown kills the child; no Python runtime, weights,
+real worker script, initial-mask UI, job queue or UI wiring is shipped.
+
 ## Packaging
 
 | Layer | Contents | Size |
 |---|---|---|
-| Core editor | Rust exe + existing libraries | ~24 MB ZIP / ~61 MB exe (measured) |
+| Core editor | Rust exe + existing libraries | 25.5 MB ZIP (25,512,804 bytes, run `40059782293`); the last extracted exe was ~64 MB (M12) |
 | Roto AI pack (optional) | embedded CPython 3.11 (Windows x64), CPU PyTorch, XMem source (MIT notice), worker script | **to be measured** (PyTorch CPU is the dominant cost; no estimate is published as fact until the prototype is built) |
 | Weights (optional, consent) | `XMem.pth` 237.5 MB from the official release, SHA-256 recorded, plus licence/notice | 237.5 MB |
 
@@ -95,8 +190,8 @@ projects keep their mask cache and still render from it.
 | Stage | Deliverable | Acceptance test (must actually run) |
 |---|---|---|
 | **R0** | This plan, licensing record, protocol spec | Reviewed; no UI controls presented as working |
-| **R1** | Mask cache + alpha application in `ComposedSource`, synthetic mask | Render test: a known alpha matte changes pixels exactly as expected in preview **and** export; cache invalidation test |
-| **R2** | Worker protocol + frame exporter, CPU benchmark command | Worker round-trip test with a fake model (no weights); benchmark recorded on the target laptop |
+| **R1** | Mask cache + alpha application in `ComposedSource`, synthetic mask | ✔ Implemented; 5 tests in `r1_roto.rs` (run `40056112214`): known alpha matte changes preview **and** H.264 export pixels; every key input invalidates the cache; a missing in-range mask is an error |
+| **R2** | Worker protocol + frame exporter, CPU benchmark command | 🟡 Protocol round-trip against a real fake child and PNG exporter tested (3 tests, run `40059782293`); `roto-bench` runs in CI. **Not met:** target-laptop CPU XMem benchmark (needs the R3/R5 pack and weights) |
 | **R3** | Real XMem CPU end-to-end on a short synthetic clip | Accuracy on a moving rectangle ≥ agreed IoU; forward and backward propagation; cancel/resume; memory ceiling; final-export mask equality |
 | **R4** | Roto AI workspace (brush, initial mask, propagate, corrections, cache UI) | UI interactions bound to real worker state; no fake values; screenshots recorded |
 | **R5** | Weights consent download + optional pack | Download shows size/source/licence; checksum verified; deletion works; core app still runs without it |
@@ -108,6 +203,9 @@ CPU; its logs are the evidence for R3. It is never simulated in the normal suite
 
 ## Not claimed
 
-XMem integration is **not complete** until R3 passes with the real model and R4 is wired. The current app has
-no Roto AI workspace, no worker, no mask cache and no weights; the tab is not shown. Any future status in
-`docs/FEATURE_PARITY.md` will name the run that proved it.
+XMem integration is **not complete** until R3 passes with the real model and R4 is wired. The current
+app has no Roto AI workspace, no Python worker, no inference, no weights and no initial-mask UI; the
+tab is not shown. What exists is the R1 mask seam (cache reader + alpha in `ComposedSource`), the R2
+protocol/exporter and a benchmark command that explicitly refuses to invent an inference number. The
+real CPU measurement waits for R3 because installing the optional runtime and weights is a separate,
+consented step. Any future status in `docs/FEATURE_PARITY.md` will name the run that proved it.

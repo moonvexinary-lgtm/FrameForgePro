@@ -5,8 +5,9 @@ Status legend:
 - **✅ verified** — real code, and an automated test or CI measurement exercises that exact path
   (a bridge test, a pinned upstream test that FrameForge calls, or a measured CI run). The evidence
   is named in the row.
-- **🟡 implemented, code-inspected** — real code that the shell uses, but no automated test drives
-  that layer yet. This is not a claim of production readiness.
+- **🟡 partially implemented / code-inspected** — real code for part of the capability, sometimes
+  with tests for that slice, but the capability is incomplete or no automated test drives the full
+  layer. This is not a claim of production readiness.
 - **⬜ not implemented.**
 
 No row is marked ✅ on the strength of a screenshot, a build succeeding, or documentation. Tests run
@@ -84,8 +85,8 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | OTIO / EDL interchange | ⬜ | Licence-safe interchange target |
 | Plugin host (OpenFX) | ⬜ | Evaluate only after the effect architecture is stable |
 | Motion tracking / planar tracking / stabilization | ⬜ | — |
-| **Roto AI (XMem)** | ⬜ | Mandatory design; see `docs/ROTO_AI_PLAN.md`. Nothing implemented or claimed yet |
-| AI pack (weights, runtime) | ⬜ | Optional, consent-based download only |
+| **Roto AI (XMem)** | 🟡 | R1 cache + alpha seam and R2 worker protocol/exporter are implemented and CI-verified (runs `40056112214`, `40059782293`); real XMem inference, initial-mask UI, corrections and the workspace are **not** implemented. See `docs/ROTO_AI_PLAN.md` |
+| AI pack (weights, runtime) | ⬜ | Optional, consent-based download only; no pack or weights are bundled or installed |
 | Project archive / collect media | ⬜ | — |
 | Installer | ⬜ | Tag builds a ZIP; an installer is future work |
 
@@ -100,9 +101,9 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | Media import → preview → timeline edit → effect → save/reopen → export | ✅ | The pipeline is exactly M2/M3/M9; the shell calls the same code, click-through not automated |
 | Visible effect parameters change preview and export | 🟡 | Monitor-cache invalidation fixed in M9; no UI automation |
 | XMem Roto AI controls wired to a real worker | ⬜ | — |
-| Mask cache reusable in compositing/export, invalidates on edits | ⬜ | — |
+| Mask cache reusable in compositing/export, invalidates on edits | ✅ | R1 `r1_roto.rs`: a synthetic matte changes preview **and** H.264 export; every cache-key input (including ordered correction ids) addresses a different directory; a missing in-range mask is a clear error. No mask UI yet |
 | No placeholder buttons / fake progress | ✅ | M9 audit inspected every enabled control |
-| Unit / integration / render tests pass | ✅ | Run 39878432877: 14 tests (M2/M3/M4/M9 durability); the follow-up adds the schema-refusal test |
+| Unit / integration / render tests pass | ✅ | Run `40059782293`: **36 tests** (M2/M3/M4/M9 durability, M11 history, R1 roto, R2 worker/exporter); CI on windows-2025 |
 | CI on Windows; failures documented | ✅ | `ci.yml` + `ci-diagnostics` branch |
 | Licences, sizes, limitations documented | ✅ | `NOTICE`, `docs/PROVENANCE.md`, this file; AI pack sizes pending |
 
@@ -113,4 +114,8 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 - No stress test for hundreds of clips/effects on a long timeline.
 - No fractional-rate *project* round-trip test through the shell (the foundation verifies the math).
 - No non-ASCII / spaces-in-path test yet; no missing-media UI test.
-- No 1080p benchmark on the target laptop yet; no fabricated numbers will be reported.
+- No 1080p editing/playback/export benchmark on the target laptop yet; CI timings are not target
+  numbers.
+- No XMem CPU inference benchmark on the target laptop yet. `roto-bench` measures only the Rust
+  decode/scale/PNG path and prints "XMem CPU inference: not measured"; the real measurement needs the
+  R3/R5 runtime and weights. No fabricated numbers will be reported.

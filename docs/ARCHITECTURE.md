@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: milestone M12 (2026-10-23) · Branch: `frameforge-rust-rewrite`
+Last updated: R2 (2026-10-24) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -26,8 +26,8 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 |---|---|---|
 | L6 apps | `frameforge-pro` binary; workspaces: Edit / Effects / Color / Audio / Export | M5–M9: real workspaces, session edits, autosave |
 | L5 ui-egui | unified shell: workspaces, timeline, monitors, panels (egui — same UI stack as both upstreams) | M5–M8: working; docking/layout persistence still planned |
-| L4 engine | unified session: project, commands, undo; timeline items reference compositions | M6: FilmCraft `Session` is the editing authority; M11: composition edits share its undo order |
-| L3 render/export | FilmCraft track compositor + EffectCraft layer compositor behind adapters; one export pipeline | M2/M4: verified; H.264 is decode-verified; M12: overwrite confirmation + real cancel |
+| L4 engine | unified session: project, commands, undo; timeline items reference compositions | M6: FilmCraft `Session` is the editing authority; M11: composition edits share its undo order; R2: worker protocol + frame exporter |
+| L3 render/export | FilmCraft track compositor + EffectCraft layer compositor behind adapters; one export pipeline | M2/M4: verified; H.264 is decode-verified; M12: overwrite confirmation + real cancel; R1: cached roto alpha in preview/export |
 | L2 edit/effects | edit algebra; effect-bridge: EffectCraft effects on FilmCraft timeline clips, shared keyframes | M2: verified (307 effects swept) |
 | L1 media | FilmCraft codecs/media (already shared by both engines upstream) | upstream, pinned |
 | L0 foundation | time, geometry, colour | M1: time (verified) |
@@ -57,7 +57,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
     (`filmcraft_project::Param`, media time, exact ticks); evaluation is a pure
     function of time, and the acceptance test proves rendering backward
     reproduces identical frames.
-  - [`FrameForgeProject`] (`.ffproj` v1): the FilmCraft editing project plus a
+  - [`FrameForgeProject`] (`.ffproj`, schema 3): the FilmCraft editing project plus a
     compositing `Composition` per media item; atomic, round-trip-checked JSON.
   - Acceptance (`crates/bridge/tests/m2_poc.rs`, run by CI): registry ≥ 300
     effects → build timeline (synthetic Bars-and-Tone video + audio clips) →
@@ -95,7 +95,8 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
   masks, blend modes and nested comps render over real footage with the
   compositing engine's layer compositor, at the exact same ticks.
 - `.ffproj` schema 2: the compositing project serializes inside the document;
-  schema-1 files load unchanged (new fields default).
+  schema-1 files load unchanged (new fields default). R1 later adds schema 3 for
+  the optional roto mask reference.
 - **Tone generators** reconstruct (audio-only media items play).
 - **Relink**: `FrameForgeProject::relink` repoints file media; the offline slate
   heals the moment the file is back.
@@ -304,10 +305,58 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
 - **Tests**: `export.rs::tests::output_path_adds_the_selected_extension_once`,
   `export.rs::tests::a_cancelled_export_is_reported_as_a_cancellation`, and
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
-  The suite is 28 tests.
+  At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
+
+## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
+
+The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
+the clip's alpha, without any model, Python or weights.
+
+- **`crates/bridge/src/roto.rs`**: versioned disk cache (`manifest.json` + 8-bit grayscale PNGs named
+  by media frame index), a validated 16-hex cache key (source identity, model SHA-256, working size,
+  exact frame rate, ordered correction ids, pinned XMem commit), and `RotoCacheKey::cache_key()`.
+  Frames outside the declared range pass through; a missing frame **inside** it is a clear error, not
+  a silently unmasked export.
+- **`ComposedSource`**: `with_roto_cache` multiplies straight alpha after the effect chain or comp
+  output. `ProjectSources` opens the cache named by `Composition.roto`; a missing cache becomes a
+  per-source error instead of an unmasked fallback. Preview and export share this method and therefore
+  the same mask bytes.
+- **`.ffproj` schema 3**: `roto` is optional; schema-2 files load unchanged, and schema-2 readers
+  refuse schema-3 projects rather than silently dropping masks.
+- **Tests** (`crates/bridge/tests/r1_roto.rs`, 5): exact alpha inside coverage and pass-through
+  outside, missing in-range frame error, every key input changes the address, a correction edit misses
+  the old cache, and a two-track project renders + exports the background through the transparent
+  half. No new crate dependency: `image` was already a workspace dependency of the app; the bridge now
+  uses it too.
+- **Limitations**: mask and frame sizes must match (no proxy stretching; R3 regenerates at the working
+  size); decoded masks are not held in an in-memory LRU; no mask writer, initial-mask UI or XMem
+  inference yet.
+
+## R2 — worker transport and frame exporter (✔ CI-verified, run 40059782293)
+
+R2 builds the boundary the real XMem worker will use, and proves it without pretending to run XMem.
+
+- **`crates/bridge/src/roto_worker.rs`**: protocol 1 JSON lines for `hello`, `propagate`, `cancel`
+  and `shutdown`, with typed `ready` / `progress` / `done` / `error` / `cancelled` events.
+  `XmemWorker` spawns a real child process, requires a matching handshake, caps one event line at
+  1 MiB, and reports a closed pipe with the captured stderr tail. On Windows it starts the child with
+  `CREATE_NO_WINDOW`.
+- **`export_frames`**: decodes a range through FilmCraft's codecs, fits the working size without
+  upscaling, and writes `frame_<media index>.png` in order for the worker.
+- **`frameforge-pro roto-bench [frames]`**: times this Rust-side decode/scale/PNG path on synthetic
+  Bars & Tone. CI runs it with 4 frames. It says "XMem CPU inference: not measured" because the
+  optional runtime and consented weights are absent; no inference number is invented.
+- **Tests** (`crates/bridge/tests/r2_roto_worker.rs`, 3): a real PowerShell fake worker completes
+  ready → progress → done → cancel → shutdown over pipes; the exporter writes scaled PNGs in media
+  order; an empty range is rejected. The fake worker is not XMem and the test says so.
+- **Measured limits**: the client is blocking; a hung worker needs the R3 job runner's timeout/kill
+  policy. `request_shutdown` sends the request and teardown kills the child. No Python, weights, real
+  worker script, job queue, initial-mask UI or UI wiring ships in R2.
+- **Size**: artifact `frameforge-pro-windows-dev` is **25,512,804 bytes** ZIP (R1 was 25,418,672;
+  M12 25,229,770); no new external crate.
 
 ## Milestones
 
@@ -325,6 +374,8 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
 | M10 | source-patched multi-track editing: per-track target/source-patch headers on the engine's `timeline.setTargeting`, placement on patched V2/A2, audio-only and unpatched-destination tests | ✔ (CI-verified, run 39887395556) |
 | M11 | one chronological undo history: composition snapshots paired with project-neutral engine steps, gesture coalescing, limit-aligned redo, composition rollback on failure, seven history tests plus an App-level Ctrl+Z test | ✔ (CI-verified, run 40037973347) |
 | M12 | export safety and close guard: overwrite confirmation on the exact resolved path, real cancellation through `Progress.cancel` with partial-file cleanup, and a Save/Discard/Cancel guard on the window close request | ✔ (CI-verified, run 40045638522) |
+| R1 | cached roto masks: validated cache key + manifest/PNG reader, alpha in `ComposedSource`, schema 3, preview + H.264 export test and cache-invalidation test | ✔ (CI-verified, run 40056112214) |
+| R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests | ✔ (CI-verified, run 40059782293; XMem CPU benchmark still open) |
 
 ## Dependency policy
 
