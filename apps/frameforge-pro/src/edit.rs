@@ -57,6 +57,76 @@ fn track_action_command(action: TrackAction) -> (&'static str, serde_json::Value
     }
 }
 
+/// A marker's label colour (the engine stores Premiere-style labels).
+fn marker_color(label: Label) -> egui::Color32 {
+    match label {
+        Label::Violet => egui::Color32::from_rgb(150, 110, 220),
+        Label::Iris => egui::Color32::from_rgb(122, 96, 220),
+        Label::Caribbean => egui::Color32::from_rgb(46, 190, 180),
+        Label::Lavender => egui::Color32::from_rgb(170, 150, 230),
+        Label::Cerulean => egui::Color32::from_rgb(70, 150, 220),
+        Label::Forest => egui::Color32::from_rgb(70, 160, 90),
+        Label::Rose => egui::Color32::from_rgb(220, 90, 120),
+        Label::Mango => egui::Color32::from_rgb(230, 150, 60),
+        Label::Purple => egui::Color32::from_rgb(150, 80, 200),
+        Label::Blue => egui::Color32::from_rgb(80, 120, 230),
+        Label::Teal => egui::Color32::from_rgb(50, 180, 170),
+        Label::Magenta => egui::Color32::from_rgb(210, 80, 190),
+        Label::Tan => egui::Color32::from_rgb(200, 170, 130),
+        Label::Green => egui::Color32::from_rgb(90, 200, 110),
+        Label::Brown => egui::Color32::from_rgb(160, 120, 80),
+        Label::Yellow => egui::Color32::from_rgb(230, 210, 70),
+    }
+}
+
+/// Add a sequence marker at the playhead through `markers.add` (frame-snapped,
+/// undoable).
+pub(crate) fn add_marker(app: &mut App) {
+    if app.sequence().is_none() {
+        app.status = "No sequence".to_string();
+        return;
+    }
+    let at = app.session.sequence_rate().snap_nearest(app.playhead.max(Tick::ZERO));
+    app.playhead = at;
+    match app.execute("markers.add", serde_json::json!({"time": at.0})) {
+        Ok(_) => app.status = "Marker added".to_string(),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Clear the marker at the playhead through `markers.clearCurrent` (undoable).
+pub(crate) fn clear_marker(app: &mut App) {
+    let has_one = app.sequence().is_some_and(|s| s.markers.iter().any(|m| m.start == app.playhead));
+    if !has_one {
+        app.status = "No marker at the playhead".to_string();
+        return;
+    }
+    // The engine's clearCurrent looks at its own playhead; keep it in step.
+    app.session.set_playhead(app.playhead);
+    match app.execute("markers.clearCurrent", serde_json::json!({})) {
+        Ok(_) => app.status = "Marker cleared".to_string(),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Jump to the next / previous marker (editor navigation, no document edit).
+pub(crate) fn go_marker(app: &mut App, forward: bool) {
+    let next = app.sequence().and_then(|s| {
+        if forward {
+            s.markers.iter().map(|m| m.start).find(|t| *t > app.playhead)
+        } else {
+            s.markers.iter().rev().map(|m| m.start).find(|t| *t < app.playhead)
+        }
+    });
+    match next {
+        Some(t) => {
+            app.playhead = t;
+            app.status = "Marker".to_string();
+        }
+        None => app.status = if forward { "No later marker".to_string() } else { "No earlier marker".to_string() },
+    }
+}
+
 /// Where a placement will go: one time (kept A/V together), the patched
 /// destination tracks and their names for the status line.
 struct Placement {
@@ -343,6 +413,19 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             app.add_edit_all_tracks();
         }
         ui.separator();
+        if ui.button("Add Marker (M)").on_hover_text("Add a marker at the playhead (undoable)").clicked() {
+            add_marker(app);
+        }
+        if ui.button("Prev Marker").clicked() {
+            go_marker(app, false);
+        }
+        if ui.button("Next Marker").clicked() {
+            go_marker(app, true);
+        }
+        if ui.button("Clear Marker").on_hover_text("Clear the marker at the playhead").clicked() {
+            clear_marker(app);
+        }
+        ui.separator();
         ui.add(egui::Slider::new(&mut app.zoom, 20.0..=400.0).text("px / s"));
         ui.separator();
         ui.colored_label(
@@ -389,6 +472,19 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 ui.visuals().text_color(),
             );
         }
+    }
+
+    // Sequence markers live in the ruler: a coloured stem with a round head.
+    let mut marker_hits: Vec<(f32, Tick, String)> = Vec::new();
+    for m in &s.markers {
+        let x = to_x(m.start);
+        if x < alloc.left() - 6.0 || x > alloc.right() + 6.0 {
+            continue;
+        }
+        let color = marker_color(m.color);
+        painter.line_segment([egui::pos2(x, alloc.top() + 3.0), egui::pos2(x, alloc.top() + RULER_H)], egui::Stroke::new(2.0, color));
+        painter.circle_filled(egui::pos2(x, alloc.top() + 3.0), 3.0, color);
+        marker_hits.push((x, m.start, if m.name.is_empty() { format!("marker {}", m.id.0) } else { m.name.clone() }));
     }
 
     let mut hit_rects: Vec<(egui::Rect, filmcraft_project::ClipId)> = Vec::new();
@@ -632,8 +728,28 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         match hit_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
             Some(id) if response.clicked() => app.selection = Some(id),
             _ => {
-                let secs = ((pos.x - alloc.left()) / app.zoom).max(0.0) as f64;
-                app.playhead = Tick((secs * TICKS_PER_SECOND as f64) as i64);
+                // A click on a marker head jumps to it instead of scrubbing.
+                let mut marker_click: Option<(Tick, String)> = None;
+                if response.clicked() {
+                    let mut best = 7.0f32;
+                    for (x, t, name) in &marker_hits {
+                        let d = (pos.x - x).abs();
+                        if d < best {
+                            best = d;
+                            marker_click = Some((*t, name.clone()));
+                        }
+                    }
+                }
+                match marker_click {
+                    Some((t, name)) => {
+                        app.playhead = t;
+                        app.status = format!("Marker: {name}");
+                    }
+                    None => {
+                        let secs = ((pos.x - alloc.left()) / app.zoom).max(0.0) as f64;
+                        app.playhead = Tick((secs * TICKS_PER_SECOND as f64) as i64);
+                    }
+                }
                 app.selection = None;
             }
         }
@@ -702,9 +818,9 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
 #[cfg(test)]
 mod tests {
-    //! Real engine tests for source-patched placement and the track-header
-    //! settings: no UI, but the exact plan and command parameters the timeline
-    //! uses.
+    //! Real engine tests for source-patched placement, the track-header
+    //! settings and the marker helpers: no UI, but the exact commands the
+    //! timeline uses.
 
     use super::{placement_params, plan_placement};
     use filmcraft_engine::Session;
@@ -848,5 +964,39 @@ mod tests {
             plan_placement(&s.project, seq, bars, &tg).err().unwrap()
         };
         assert!(err.contains("No video destination"), "{err}");
+    }
+
+    #[test]
+    fn marker_helpers_add_clear_and_navigate_through_the_real_engine() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "Markers"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1"})).unwrap();
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+
+        app.playhead = Tick(3 * TICKS_PER_SECOND);
+        super::add_marker(&mut app);
+        let first = {
+            let seq = app.session.active_sequence().unwrap();
+            assert_eq!(seq.markers.len(), 1, "markers.add lands one marker");
+            seq.markers[0].start
+        };
+        assert_eq!(app.playhead, first, "the marker lands on the frame-snapped playhead");
+
+        app.playhead = first + TICKS_PER_SECOND;
+        super::add_marker(&mut app);
+        assert_eq!(app.session.active_sequence().unwrap().markers.len(), 2);
+
+        app.playhead = Tick::ZERO;
+        super::go_marker(&mut app, true);
+        assert_eq!(app.playhead, first, "next marker goes to the first one");
+        super::go_marker(&mut app, true);
+        assert!(app.playhead > first, "the second next goes later");
+        super::go_marker(&mut app, false);
+        assert_eq!(app.playhead, first, "previous marker comes back");
+
+        super::clear_marker(&mut app);
+        assert_eq!(app.session.active_sequence().unwrap().markers.len(), 1, "clear removes the marker at the playhead");
+        app.undo();
+        assert_eq!(app.session.active_sequence().unwrap().markers.len(), 2, "undo restores the cleared marker");
     }
 }

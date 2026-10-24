@@ -598,8 +598,12 @@ impl eframe::App for App {
         }
 
         // Transport keys everywhere: Space, Ctrl+Z / Ctrl+Shift+Z, Delete,
-        // Ctrl+K (add edit on all tracks), Ctrl+S / Ctrl+Shift+S (save).
-        let (space, undo_key, redo_key, delete, add_edit, save_key, save_as_key) = ui.ctx().input(|i| {
+        // Ctrl+K (add edit on all tracks), Ctrl+S / Ctrl+Shift+S (save). The
+        // marker keys are Edit-workspace only and stand down while a text field
+        // has focus (they would otherwise fire while typing in a search box).
+        let in_edit = self.workspace == Workspace::Edit;
+        let typing = ui.ctx().wants_keyboard_input();
+        let (space, undo_key, redo_key, delete, add_edit, save_key, save_as_key, add_marker_key, next_marker_key) = ui.ctx().input(|i| {
             let cmd = i.modifiers.command;
             (
                 i.key_pressed(egui::Key::Space),
@@ -609,6 +613,8 @@ impl eframe::App for App {
                 cmd && i.key_pressed(egui::Key::K),
                 cmd && i.key_pressed(egui::Key::S) && !i.modifiers.shift,
                 cmd && i.key_pressed(egui::Key::S) && i.modifiers.shift,
+                in_edit && !typing && !cmd && !i.modifiers.shift && i.key_pressed(egui::Key::M),
+                in_edit && !typing && !cmd && i.modifiers.shift && i.key_pressed(egui::Key::M),
             )
         });
         if save_key {
@@ -637,6 +643,12 @@ impl eframe::App for App {
         }
         if add_edit {
             self.add_edit_all_tracks();
+        }
+        if add_marker_key {
+            crate::edit::add_marker(self);
+        }
+        if next_marker_key {
+            crate::edit::go_marker(self, true);
         }
 
         // Recovery autosave (throttled; only for saved, dirty projects).
