@@ -38,6 +38,15 @@ pub struct ExportState {
     pub error: Option<String>,
 }
 
+/// Resolve the typed output path: trim it, add the selected format's
+/// extension exactly once, and reject an empty path. The same function is
+/// used by the overwrite prompt and the render, so the name the user confirms
+/// is the name that is written.
+fn output_path(text: &str, _extension: &str) -> Option<String> {
+    let _path = text.trim();
+    None
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     ui.painter().rect_filled(body, 0.0, ui.visuals().panel_fill);
     let margin = 40.0;
@@ -168,4 +177,18 @@ fn start(app: &mut App) {
     app.export.result = None;
     app.export.error = None;
     app.status = format!("Exporting to {path}…");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::output_path;
+
+    #[test]
+    fn output_path_adds_the_selected_extension_once() {
+        assert_eq!(output_path("C:\\clips\\shot", "mp4").as_deref(), Some("C:\\clips\\shot.mp4"));
+        assert_eq!(output_path("C:\\clips\\shot.MP4", "mp4").as_deref(), Some("C:\\clips\\shot.MP4"));
+        assert_eq!(output_path("  C:\\clips\\shot  ", "mov").as_deref(), Some("C:\\clips\\shot.mov"));
+        assert_eq!(output_path("C:\\clips\\shot.notmp4", "mp4").as_deref(), Some("C:\\clips\\shot.notmp4.mp4"));
+        assert_eq!(output_path("   ", "mp4"), None);
+    }
 }

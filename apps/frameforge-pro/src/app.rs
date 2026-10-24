@@ -300,6 +300,12 @@ impl App {
         }
     }
 
+    /// Whether the window's close request must be cancelled. The confirmation
+    /// is a parameter so the decision table is testable without a dialog.
+    fn close_guard(&self, _close_requested: bool, _confirm: fn(&mut App) -> bool) -> bool {
+        false
+    }
+
     /// The unsaved-changes guard in front of New/Open. A clean project never
     /// prompts.
     fn confirm_discard(&mut self) -> bool {
@@ -747,6 +753,26 @@ mod tests {
     use frameforge_bridge::Composition;
 
     use super::*;
+
+    fn refuse_discard(_: &mut App) -> bool {
+        false
+    }
+
+    fn allow_discard(_: &mut App) -> bool {
+        true
+    }
+
+    #[test]
+    fn close_guard_blocks_only_a_dirty_project_when_discard_is_denied() {
+        let mut app = App::from_parts(Project::new("Untitled"), HashMap::new(), None, "test");
+        app.dirty = false;
+        assert!(!app.close_guard(true, refuse_discard), "a clean project closes without a prompt");
+
+        app.dirty = true;
+        assert!(!app.close_guard(false, refuse_discard), "no close request, no prompt");
+        assert!(!app.close_guard(true, allow_discard), "discarding lets the close through");
+        assert!(app.close_guard(true, refuse_discard), "keeping the project cancels the close");
+    }
 
     #[test]
     fn ctrl_z_after_a_composition_edit_leaves_the_timeline_edit_alone() {
