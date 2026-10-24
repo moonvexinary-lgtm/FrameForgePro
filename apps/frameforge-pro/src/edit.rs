@@ -16,14 +16,41 @@ use crate::pixels;
 const ROW_H: f32 = 34.0;
 const RULER_H: f32 = 18.0;
 const GENERATOR_SECONDS: f64 = 10.0;
-/// The fixed track-header column: target/source-patch buttons and the track
-/// name. The timeline body (ruler and clips) starts to its right.
-const TRACK_HEAD_W: f32 = 82.0;
+/// The fixed track-header column: target, source-patch, visibility/mute/solo,
+/// lock and the track name. The timeline body (ruler and clips) starts to its
+/// right.
+const TRACK_HEAD_W: f32 = 140.0;
+
+/// The engine's `timeline.setTrack` keys for the header toggles.
+const TRACK_ENABLED: &str = "enabled";
+const TRACK_MUTED: &str = "muted";
+const TRACK_SOLO: &str = "solo";
+const TRACK_LOCKED: &str = "locked";
 
 /// A track-header click, applied after the read-only drawing pass.
 enum TrackAction {
     Target { track: TrackId, on: bool },
     Patch { track: TrackId, on: bool },
+    Setting { track: TrackId, key: &'static str, on: bool },
+}
+
+/// The command a header click runs. Targeting/source patching are editor state;
+/// visibility, mute, solo and lock are real sequence document state and undoable.
+fn track_action_command(action: TrackAction) -> (&'static str, serde_json::Value, &'static str) {
+    match action {
+        TrackAction::Target { track, on } => ("timeline.setTargeting", serde_json::json!({"track": track.0, "targeted": on}), "Target"),
+        TrackAction::Patch { track, on } => ("timeline.setTargeting", serde_json::json!({"track": track.0, "sourcePatch": on}), "Source patch"),
+        TrackAction::Setting { track, key, on } => {
+            let what = match key {
+                TRACK_ENABLED => "Visibility",
+                TRACK_MUTED => "Mute",
+                TRACK_SOLO => "Solo",
+                TRACK_LOCKED => "Lock",
+                _ => "Track setting",
+            };
+            ("timeline.setTrack", serde_json::json!({"track": track.0, key: on}), what)
+        }
+    }
 }
 
 /// Where a placement will go: one time (kept A/V together), the patched
@@ -316,7 +343,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         ui.separator();
         ui.colored_label(
             egui::Color32::GRAY,
-            "Track T/S: target/patch · Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit",
+            "Track T/S: target/patch · V: visible · M: mute · ◉: solo · L: lock · Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit",
         );
     });
 
@@ -387,21 +414,15 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         );
         let targeted = tg.targeted.contains(&track.id);
         let patched = if is_video { tg.video_dest == Some(track.id) } else { tg.audio_dest == Some(track.id) };
-        let target_rect = egui::Rect::from_min_size(egui::pos2(head_rect.left() + 6.0, y + ROW_H / 2.0 - 7.0), egui::vec2(15.0, 15.0));
-        let patch_rect = egui::Rect::from_min_size(egui::pos2(head_rect.left() + 25.0, y + ROW_H / 2.0 - 7.0), egui::vec2(15.0, 15.0));
+        let button_rect = |x: f32| egui::Rect::from_min_size(egui::pos2(head_rect.left() + x, y + ROW_H / 2.0 - 7.0), egui::vec2(15.0, 15.0));
+        let target_rect = button_rect(6.0);
+        let patch_rect = button_rect(25.0);
         let on = ui.visuals().selection.bg_fill;
         let off = ui.visuals().widgets.inactive.bg_fill;
         header_painter.rect_filled(target_rect, 2.0, if targeted { on } else { off });
         header_painter.text(target_rect.center(), egui::Align2::CENTER_CENTER, "T", egui::FontId::monospace(9.0), egui::Color32::WHITE);
         header_painter.rect_filled(patch_rect, 2.0, if patched { egui::Color32::from_rgb(176, 112, 36) } else { off });
         header_painter.text(patch_rect.center(), egui::Align2::CENTER_CENTER, "S", egui::FontId::monospace(9.0), egui::Color32::WHITE);
-        header_painter.text(
-            egui::pos2(head_rect.left() + 47.0, y + ROW_H / 2.0),
-            egui::Align2::LEFT_CENTER,
-            name,
-            egui::FontId::proportional(12.0),
-            ui.visuals().text_color(),
-        );
         let target_hint = if targeted { "Stop targeting this track" } else { "Target this track (navigation, paste, mute/solo)" };
         if ui.interact(target_rect, egui::Id::new(("ff-track-target", track.id.0)), egui::Sense::click()).on_hover_text(target_hint).clicked() {
             actions.push(TrackAction::Target { track: track.id, on: !targeted });
@@ -410,6 +431,58 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         if ui.interact(patch_rect, egui::Id::new(("ff-track-patch", track.id.0)), egui::Sense::click()).on_hover_text(patch_hint).clicked() {
             actions.push(TrackAction::Patch { track: track.id, on: !patched });
         }
+
+        // Visibility / mute, solo and lock: real `timeline.setTrack` document
+        // state (undoable, dirtying), not editor-only targeting state.
+        if is_video {
+            let visible = track.enabled;
+            let visibility_rect = button_rect(44.0);
+            header_painter.rect_filled(visibility_rect, 2.0, if visible { egui::Color32::from_rgb(64, 128, 80) } else { off });
+            header_painter.text(visibility_rect.center(), egui::Align2::CENTER_CENTER, "V", egui::FontId::monospace(9.0), egui::Color32::WHITE);
+            let hint = if visible { "Hide this video track (visibility)" } else { "Show this video track" };
+            if ui.interact(visibility_rect, egui::Id::new(("ff-track-visible", track.id.0)), egui::Sense::click()).on_hover_text(hint).clicked() {
+                actions.push(TrackAction::Setting { track: track.id, key: TRACK_ENABLED, on: !visible });
+            }
+        } else {
+            let muted = track.muted;
+            let mute_rect = button_rect(44.0);
+            header_painter.rect_filled(mute_rect, 2.0, if muted { egui::Color32::from_rgb(170, 80, 60) } else { off });
+            header_painter.text(mute_rect.center(), egui::Align2::CENTER_CENTER, "M", egui::FontId::monospace(9.0), egui::Color32::WHITE);
+            let hint = if muted { "Unmute this audio track" } else { "Mute this audio track" };
+            if ui.interact(mute_rect, egui::Id::new(("ff-track-mute", track.id.0)), egui::Sense::click()).on_hover_text(hint).clicked() {
+                actions.push(TrackAction::Setting { track: track.id, key: TRACK_MUTED, on: !muted });
+            }
+
+            let soloed = track.solo;
+            let solo_rect = button_rect(63.0);
+            header_painter.rect_filled(solo_rect, 2.0, if soloed { egui::Color32::from_rgb(170, 140, 55) } else { off });
+            if soloed {
+                header_painter.circle_filled(solo_rect.center(), 3.8, egui::Color32::WHITE);
+            } else {
+                header_painter.circle_stroke(solo_rect.center(), 3.8, egui::Stroke::new(1.0, ui.visuals().text_color()));
+            }
+            let hint = if soloed { "Stop soloing this audio track" } else { "Solo this audio track" };
+            if ui.interact(solo_rect, egui::Id::new(("ff-track-solo", track.id.0)), egui::Sense::click()).on_hover_text(hint).clicked() {
+                actions.push(TrackAction::Setting { track: track.id, key: TRACK_SOLO, on: !soloed });
+            }
+        }
+
+        let locked = track.locked;
+        let lock_rect = button_rect(82.0);
+        header_painter.rect_filled(lock_rect, 2.0, if locked { egui::Color32::from_rgb(185, 70, 55) } else { off });
+        header_painter.text(lock_rect.center(), egui::Align2::CENTER_CENTER, "L", egui::FontId::monospace(9.0), egui::Color32::WHITE);
+        let hint = if locked { "Unlock this track" } else { "Lock this track (edits rejected)" };
+        if ui.interact(lock_rect, egui::Id::new(("ff-track-lock", track.id.0)), egui::Sense::click()).on_hover_text(hint).clicked() {
+            actions.push(TrackAction::Setting { track: track.id, key: TRACK_LOCKED, on: !locked });
+        }
+
+        header_painter.text(
+            egui::pos2(head_rect.left() + 102.0, y + ROW_H / 2.0),
+            egui::Align2::LEFT_CENTER,
+            name,
+            egui::FontId::proportional(12.0),
+            ui.visuals().text_color(),
+        );
         for item in &track.items {
             let clip_rect = egui::Rect::from_min_max(egui::pos2(to_x(item.start), y + 3.0), egui::pos2(to_x(item.start + item.duration), y + ROW_H - 3.0));
             let selected = app.selection == Some(item.id);
@@ -434,16 +507,17 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     }
 
     // Applying target/source changes after the drawing loop (the sequence was
-    // borrowed read-only above). This is editor state, not the document, so it
-    // is neither undoable nor a dirtying edit — matching the engine.
+    // borrowed read-only above). Targeting is editor state, not the document,
+    // so it is neither undoable nor dirtying — matching the engine. Track
+    // visibility/mute/solo/lock go through App::execute so they are part of the
+    // combined undo history and invalidate the monitor.
     for action in actions {
-        let (track, key, on, what) = match action {
-            TrackAction::Target { track, on } => (track, "targeted", on, "Target"),
-            TrackAction::Patch { track, on } => (track, "sourcePatch", on, "Source patch"),
-        };
-        match app.session.execute("timeline.setTargeting", serde_json::json!({"track": track.0, key: on})) {
+        let (command, params, what) = track_action_command(action);
+        let result =
+            if command == "timeline.setTrack" { app.execute(command, params) } else { app.session.execute(command, params).map_err(|e| e.to_string()) };
+        match result {
             Ok(_) => app.status = format!("{what} updated"),
-            Err(e) => app.status = e.to_string(),
+            Err(e) => app.status = e,
         }
     }
 
@@ -623,8 +697,9 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
 #[cfg(test)]
 mod tests {
-    //! Real engine tests for source-patched placement: no UI, but the exact
-    //! plan and command parameters the timeline's double-click path uses.
+    //! Real engine tests for source-patched placement and the track-header
+    //! settings: no UI, but the exact plan and command parameters the timeline
+    //! uses.
 
     use super::{placement_params, plan_placement};
     use filmcraft_engine::Session;
@@ -638,6 +713,47 @@ mod tests {
         let mut s = Session::default();
         s.execute("file.openDemoProject", json!({})).unwrap();
         s
+    }
+
+    #[test]
+    fn track_header_visibility_mute_solo_and_lock_are_undoable_set_track_edits() {
+        let mut s = demo_session();
+        let (v1, a1) = {
+            let seq = s.active_sequence().unwrap();
+            (seq.video_tracks[0].id, seq.audio_tracks[0].id)
+        };
+
+        // Editor-state buttons still use the targeting command and its keys.
+        let (command, params, _) = super::track_action_command(super::TrackAction::Target { track: v1, on: false });
+        assert_eq!(command, "timeline.setTargeting");
+        assert_eq!(params["targeted"], json!(false));
+        let (command, params, _) = super::track_action_command(super::TrackAction::Patch { track: a1, on: true });
+        assert_eq!(command, "timeline.setTargeting");
+        assert_eq!(params["sourcePatch"], json!(true));
+
+        let cases = [
+            (super::TrackAction::Setting { track: v1, key: super::TRACK_ENABLED, on: false }, super::TRACK_ENABLED, false),
+            (super::TrackAction::Setting { track: a1, key: super::TRACK_MUTED, on: true }, super::TRACK_MUTED, true),
+            (super::TrackAction::Setting { track: a1, key: super::TRACK_SOLO, on: true }, super::TRACK_SOLO, true),
+            (super::TrackAction::Setting { track: v1, key: super::TRACK_LOCKED, on: true }, super::TRACK_LOCKED, true),
+        ];
+        for (action, key, on) in cases {
+            let (command, params, what) = super::track_action_command(action);
+            assert_eq!(command, "timeline.setTrack");
+            assert!(!what.is_empty());
+            assert_eq!(params[key], json!(on), "the dynamic key `{key}` is present");
+            s.execute(command, params).unwrap();
+        }
+        let seq = s.active_sequence().unwrap();
+        assert!(!seq.video_tracks[0].enabled, "V hides video output");
+        assert!(seq.audio_tracks[0].muted, "M mutes the audio track");
+        assert!(seq.audio_tracks[0].solo, "the solo button sets solo");
+        assert!(seq.video_tracks[0].locked, "L locks the track");
+
+        assert!(s.undo().is_some(), "track settings enter the engine history");
+        let seq = s.active_sequence().unwrap();
+        assert!(!seq.video_tracks[0].locked, "undo restores the lock state");
+        assert!(seq.audio_tracks[0].solo, "earlier settings stay");
     }
 
     fn add_tone_item(s: &mut Session) -> ItemId {
