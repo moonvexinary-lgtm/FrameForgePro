@@ -1080,7 +1080,8 @@ mod tests {
         assert_eq!(super::snap_tick(Tick(96), &targets, Tick(8)), Tick(100));
         assert_eq!(super::snap_tick(Tick(205), &targets, Tick(8)), Tick(200));
         assert_eq!(super::snap_tick(Tick(150), &targets, Tick(8)), Tick(150), "nothing near: unchanged");
-        assert_eq!(super::snap_tick(Tick(108), &targets, Tick(8)), Tick(108), "outside the radius is left alone");
+        assert_eq!(super::snap_tick(Tick(109), &targets, Tick(8)), Tick(109), "outside the radius is left alone");
+        assert_eq!(super::snap_tick(Tick(108), &targets, Tick(8)), Tick(100), "the boundary is inside the radius");
     }
 
     #[test]
