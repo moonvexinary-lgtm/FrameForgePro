@@ -31,7 +31,9 @@ use crate::BridgeError;
 /// * 2 — compositions can also hold a full compositing-engine project with
 ///   layers (M4); `ec_project`/`comp`/`source_item` default to `None`, so
 ///   schema-1 files read unchanged.
-pub const FFPROJ_SCHEMA: u32 = 2;
+/// * 3 — compositions can name a cached roto mask (`roto`); schema-2 readers
+///   refuse the project instead of silently dropping the mask.
+pub const FFPROJ_SCHEMA: u32 = 3;
 
 /// A compositing composition attached to a media item: what "open the clip in a
 /// compositing workspace" edits.
@@ -47,7 +49,9 @@ pub const FFPROJ_SCHEMA: u32 = 2;
 ///    compositing engine's layer compositor.
 ///
 /// When a composition has a comp, the clip's frames are the comp's output (the
-/// comp is the picture); without one, the effect chain's output is.
+/// comp is the picture); without one, the effect chain's output is. A cached
+/// roto mask ([`roto`](Composition::roto)) then multiplies the result's alpha
+/// on the one composed-source path preview and export share.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Composition {
     pub effects: Vec<EffectLink>,
@@ -75,10 +79,10 @@ impl Composition {
     pub fn has_comp(&self) -> bool {
         self.comp.is_some() && self.ec_project.is_some()
     }
-    /// True when no enabled effect or composition would change a frame (the
-    /// source is used as is).
+    /// True when no enabled effect, composition or roto mask would change a
+    /// frame (the source is used as is).
     pub fn is_noop(&self) -> bool {
-        !self.effects.iter().any(|e| e.enabled) && !self.has_comp()
+        !self.effects.iter().any(|e| e.enabled) && !self.has_comp() && self.roto.is_none()
     }
 
     /// Set a scalar parameter at `time` (media time), preserving animation.

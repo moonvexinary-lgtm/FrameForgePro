@@ -28,7 +28,7 @@ use filmcraft_time::{FrameRate, Tick};
 use crate::BridgeError;
 use crate::convert::param_to_value;
 use crate::document::{Composition, EffectLink, FrameForgeProject};
-use crate::roto::MaskCache;
+use crate::roto::{MaskCache, MaskFrame, default_cache_root};
 
 /// Runs one effect of a composition.
 ///
@@ -66,7 +66,6 @@ pub struct ComposedSource {
     /// Stable per source, so procedural effects re-render identically.
     seed: u32,
     /// The cached roto mask, or the reason it could not be opened.
-    #[allow(dead_code)]
     roto: Option<Result<MaskCache, String>>,
 }
 
@@ -82,6 +81,59 @@ impl ComposedSource {
         self.roto = Some(Ok(cache));
         self
     }
+
+    /// Remember that the project names a mask cache this host could not open.
+    /// Rendering fails with `reason` instead of silently showing unmasked
+    /// pixels.
+    pub fn with_roto_error(mut self, reason: impl Into<String>) -> Self {
+        self.roto = Some(Err(reason.into()));
+        self
+    }
+
+    /// Fetch the frame, run the effect chain or composition, then multiply the
+    /// result's straight alpha by the cached mask. Preview and export use this
+    /// same method, so they see the same mask bytes.
+    fn apply_roto(&self, frame: VideoFrame, t: Tick) -> Result<VideoFrame, MediaError> {
+        let Some(roto) = &self.roto else { return Ok(frame) };
+        let cache = match roto {
+            Ok(cache) => cache,
+            Err(reason) => return Err(MediaError::Unsupported(reason.clone())),
+        };
+        let Some(mask) = cache.frame(t).map_err(|error| MediaError::Unsupported(error.to_string()))? else {
+            return Ok(frame);
+        };
+        apply_mask(frame, &mask)
+    }
+}
+
+/// Multiply a straight-alpha RGBA frame's alpha by an 8-bit matte.
+///
+/// Dimensions must match: a proxy-sized mask silently stretched onto a
+/// full-resolution export would be a different picture. The worker regenerates
+/// masks at the requested working resolution instead (R3), and the cache key
+/// includes that resolution.
+fn apply_mask(frame: VideoFrame, mask: &MaskFrame) -> Result<VideoFrame, MediaError> {
+    let (width, height) = (frame.width, frame.height);
+    if mask.width() != width || mask.height() != height {
+        return Err(MediaError::Unsupported(format!("roto mask is {}x{} but the clip frame is {width}x{height}", mask.width(), mask.height())));
+    }
+    let pixels =
+        (width as usize).checked_mul(height as usize).ok_or_else(|| MediaError::Unsupported(format!("roto mask frame size {width}x{height} overflows")))?;
+    let alpha = mask.alpha();
+    if alpha.len() != pixels {
+        return Err(MediaError::Unsupported(format!("roto mask carries {} alpha pixels, expected {pixels}", alpha.len())));
+    }
+    let expected_bytes = pixels.checked_mul(4).ok_or_else(|| MediaError::Unsupported(format!("roto mask frame size {width}x{height} overflows")))?;
+    let mut data = frame.to_rgba8();
+    if data.len() != expected_bytes {
+        return Err(MediaError::Unsupported(format!("clip frame carries {} RGBA bytes, expected {expected_bytes}", data.len())));
+    }
+    for (pixel, matte) in data.chunks_exact_mut(4).zip(alpha.iter().copied()) {
+        if let Some(a) = pixel.get_mut(3) {
+            *a = ((u16::from(*a) * u16::from(matte) + 127) / 255) as u8;
+        }
+    }
+    Ok(VideoFrame::rgba8(width, height, data).with_pts(frame.pts))
 }
 
 impl MediaSource for ComposedSource {
@@ -99,7 +151,7 @@ impl MediaSource for ComposedSource {
         // chain ([`ComposedFootage`]); every layer of the comp — text, shapes,
         // solids, nested comps — renders over it with the compositing engine's
         // own layer compositor.
-        if let (Some(project), Some(comp)) = (&self.composition.ec_project, self.composition.comp) {
+        let frame = if let (Some(project), Some(comp)) = (&self.composition.ec_project, self.composition.comp) {
             let footage = ComposedFootage {
                 source_item: self.composition.source_item,
                 inner: self.inner.as_ref(),
@@ -116,15 +168,17 @@ impl MediaSource for ComposedSource {
                 return self.inner.video_frame(req);
             }
             let out = img.to_rgba8();
-            return Ok(Arc::new(VideoFrame::rgba8(w, h, out).with_pts(req.time)));
-        }
-        // Effect-chain-only composition: the chain's output is the picture.
-        let (buf, w, h) = chain_buf(self.inner.as_ref(), &self.composition.effects, req.time, rate, self.seed)?;
-        if w == 0 || h == 0 {
-            return self.inner.video_frame(req);
-        }
-        let out = layer_rgba(&buf, w, h)?;
-        Ok(Arc::new(VideoFrame::rgba8(w, h, out).with_pts(req.time)))
+            VideoFrame::rgba8(w, h, out).with_pts(req.time)
+        } else {
+            // Effect-chain-only composition: the chain's output is the picture.
+            let (buf, w, h) = chain_buf(self.inner.as_ref(), &self.composition.effects, req.time, rate, self.seed)?;
+            if w == 0 || h == 0 {
+                return self.inner.video_frame(req);
+            }
+            let out = layer_rgba(&buf, w, h)?;
+            VideoFrame::rgba8(w, h, out).with_pts(req.time)
+        };
+        Ok(Arc::new(self.apply_roto(frame, req.time)?))
     }
 
     fn audio(&self, start: i64, frames: usize, sample_rate: u32) -> Result<filmcraft_frame::AudioBuffer, MediaError> {
@@ -207,19 +261,28 @@ impl ProjectSources {
     /// and renders, and the media plays again once the file is back. An item
     /// with a composition is wrapped in [`ComposedSource`].
     pub fn build(doc: &FrameForgeProject) -> Result<Self, BridgeError> {
-        ProjectSources::build_from(&doc.project, &doc.compositions)
+        ProjectSources::build_with_roto_root(doc, &default_cache_root())
     }
 
     /// [`ProjectSources::build`] with an explicit roto cache root (tests and
     /// hosts that keep the cache somewhere other than the default).
-    pub fn build_with_roto_root(doc: &FrameForgeProject, _root: &std::path::Path) -> Result<Self, BridgeError> {
-        ProjectSources::build_from(&doc.project, &doc.compositions)
+    pub fn build_with_roto_root(doc: &FrameForgeProject, root: &std::path::Path) -> Result<Self, BridgeError> {
+        ProjectSources::build_from_with_roto_root(&doc.project, &doc.compositions, root)
     }
 
     /// [`ProjectSources::build`] over an editing project and its composition
     /// map directly — for hosts that keep the editing project inside the
     /// engine's session.
     pub fn build_from(project: &filmcraft_project::Project, compositions: &std::collections::HashMap<ItemId, Composition>) -> Result<Self, BridgeError> {
+        ProjectSources::build_from_with_roto_root(project, compositions, &default_cache_root())
+    }
+
+    /// [`ProjectSources::build_from`] with an explicit roto cache root.
+    pub fn build_from_with_roto_root(
+        project: &filmcraft_project::Project,
+        compositions: &std::collections::HashMap<ItemId, Composition>,
+        root: &std::path::Path,
+    ) -> Result<Self, BridgeError> {
         let mut ids = Vec::new();
         project.root.all_items(&mut ids);
         let mut sources = HashMap::new();
@@ -227,7 +290,16 @@ impl ProjectSources {
             let Some((_, clip, _)) = project.resolve_media(id) else { continue };
             let Some(inner) = media_source(clip) else { continue };
             let source: SharedSource = match compositions.get(&id) {
-                Some(comp) if !comp.is_noop() => Arc::new(ComposedSource::new(inner, comp.clone(), id.0 as u32)),
+                Some(comp) if !comp.is_noop() => {
+                    let mut composed = ComposedSource::new(inner, comp.clone(), id.0 as u32);
+                    if let Some(roto) = &comp.roto {
+                        composed = match MaskCache::open(root, &roto.key) {
+                            Ok(cache) => composed.with_roto_cache(cache),
+                            Err(error) => composed.with_roto_error(error.to_string()),
+                        };
+                    }
+                    Arc::new(composed)
+                }
                 _ => inner,
             };
             sources.insert(id, source);
