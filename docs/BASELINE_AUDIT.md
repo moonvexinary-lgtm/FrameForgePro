@@ -54,14 +54,15 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 | Audio mixer | `mixer.setStrip` with `volumeDb`, `pan`, `muted`, `solo` — exact upstream parameter names verified. |
 | Audio playback clock | cpal stream fed by a worker mixing through the engine's mixer, playhead = device frames; honest wall-clock fallback. |
 | Panic containment | `catch_unwind` around the frame; session survives. |
-| Cloud-only build + downloadable dev build | Run `39729926210`: fmt/clippy/check/test/release green, 11 tests, 24 MB artifact. |
+| Cloud-only build + downloadable dev build | Run `40045638522`: fmt/clippy/check/test/release green, 28 tests, 25,229,770-byte artifact. |
 
 Measured in run `39729926210`'s test log:
 
 - **307 of 307** EffectCraft effects ran through the real composed-source path with default parameters
   (0 reported unsupported), on a 32×32 Bars frame.
 - FilmCraft's catalog is asserted at **≥ 60** effect definitions by the same test.
-- 11 tests total across the four suites; all passed.
+- The M8 log behind those measurements ran 11 tests; the M12 suite is **28 tests** across the
+  workspace, all green (run `40045638522`).
 
 These counts are *registry entries exercised through the bridge*, not a claim that every effect is
 artistically complete or parameter-swept at multiple values. Golden-frame coverage exists for Gaussian blur
@@ -73,11 +74,11 @@ and the comp/text path, not for all 307.
 |---|---|---|
 | Media bin | Import generators/files, list, place, remove | folders, search, tags, metadata, thumbnails, waveforms, relink UI, proxy generation |
 | Timeline | 2 video + 2 audio tracks, select, drag-move, trim, razor, delete, scrub, per-track target/source-patch headers, placement on the patched tracks | insert/overwrite, ripple/roll/slip/slide, snapping, markers, transitions UI, speed/freeze/reverse, waveforms, thumbnails |
-| Effect stack | add/remove/toggle, typed params, scalar keyframes, comp layers | undo, reorder, duplicate, reset, presets, full keyframe types (bool/color/choice), graph editor |
+| Effect stack | add/remove/toggle, typed params, scalar keyframes, comp layers, undo through the combined history | reorder, duplicate, reset, presets, full keyframe types (bool/color/choice), graph editor |
 | Color | FilmCraft video-effect stack on the selected clip | scopes, curves UI, wheels, before/after, LUT management |
 | Audio | faders, pan, mute, solo | meters, audio-effect inserts UI, automation lanes, per-clip volume |
-| Export | 5 built-in formats, progress, report | cancel, queue, presets, range selection, overwrite confirmation, progress detail |
-| Project | new/open/save/save-as, atomic write | autosave, crash recovery (this slice adds it), recent files, unsaved-change guard (this slice adds it) |
+| Export | 5 built-in formats, progress, report, overwrite confirmation, cancel (partial file removed) | queue, presets, range selection, progress detail |
+| Project | new/open/save/save-as, atomic write, autosave/recovery, New/Open and window-close guards | recent files |
 | UI | workspaces, resizable gutters, shortcuts (Space, Ctrl+Z/Y, Ctrl+K, Del) | command palette, configurable shortcuts, layout persistence, UI scaling, source monitor, safe areas, accessibility pass |
 
 ## 6. Not implemented at all (no code path exists)
@@ -101,21 +102,23 @@ document mutation. The Color/Audio tabs that were disabled in M5 are now real (M
 | D3 | **S1 — data loss** | `New` / `Open` discard unsaved changes without confirmation; there is no autosave or crash recovery. | `app.rs` |
 | D4 | S2 | Composition/effect edits bypass `Session` history; Ctrl+Z after an effect change undoes an unrelated timeline edit. **Fixed in M11** (one chronological history; tests in `apps/frameforge-pro/src/history.rs` and `app.rs`). | `app.rs`, `effects.rs`, `history.rs` |
 | D5 | S2 | Removing an effect before the selected one leaves `selected_effect` pointing at a different effect. | `effects.rs` |
-| D6 | S2 | Export overwrites an existing file without confirmation; no cancel. | `export.rs` |
+| D6 | S2 | Export overwrites an existing file without confirmation; no cancel. **Fixed in M12** (Yes/No overwrite prompt on the exact resolved path; real `Progress.cancel` with partial-file cleanup; the close-window guard is part of the same slice). | `export.rs`, `app.rs` |
 | D7 | S2 | Track targeting absent; the second video/audio tracks cannot be used from the UI. **Fixed in M10** (track headers + source-patched placement). | `edit.rs` |
 | D8 | S3 | `README.md` still says "milestone M1 — not usable as an editor"; `ARCHITECTURE.md` header still says M1. Documentation lags reality. | docs |
 
 Post-audit status: D1, D2, D3, D5 and D8 were fixed in M9; D7 was fixed in M10 (tests in
 `apps/frameforge-pro/src/edit.rs`); D4 was fixed in M11 (combined timeline/composition history,
-tests in `apps/frameforge-pro/src/history.rs`). D6 (export overwrite confirmation / cancel)
-remains the next correctness work.
+tests in `apps/frameforge-pro/src/history.rs`). D6 was fixed in M12 (export overwrite/cancel in
+`apps/frameforge-pro/src/export.rs`, window-close guard in `app.rs`). No S1/S2 defect from this
+audit remains open.
 
 ## 8. Build, test, CI, sizes
 
 - CI: `windows-2025`, fmt → clippy `-D warnings` → check → test → release → self-test → artifact.
-- Last green code run: **40037973347** (M11); all 25 tests passed. Artifact:
-  `frameforge-pro-windows-dev`, **25,226,843 bytes** ZIP, 7-day retention. The previous extracted
-  exe was **64,305,152 bytes**; M11 added no dependency, so the package stays the same order of
+- Last green code run: **40045638522** (M12); all **28** tests passed. Artifact:
+  `frameforge-pro-windows-dev`, **25,229,770 bytes** ZIP, 7-day retention. The previous M11
+  artifact was 25,226,843 bytes; M12 added no dependency, so the size difference is code only.
+  The previous extracted exe was **64,305,152 bytes**; the M12 package stays the same order of
   size.
 - No installer yet; the tag workflow produces `frameforge-pro-<tag>-windows-x64.zip`.
 - Local storage: no `target/` directory; ~53 GB free on C:.

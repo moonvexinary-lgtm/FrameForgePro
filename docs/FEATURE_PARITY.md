@@ -18,7 +18,8 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 |---|---|---|---|
 | New / open / save / save-as (`.ffproj`) | ✅ | Atomic save with round-trip validation; M2 reopens and renders byte-identical frames; M9 saves and reloads | — |
 | Versioned project schema + refusal of newer files | ✅ | M9 `newer_schema_is_refused` (schema 999 is a named error) | — |
-| Crash recovery / autosave | ✅ | M9 `autosave_round_trip_newer_than_and_clear`, `corrupt_autosave_is_a_clear_error_not_a_crash`; the shell's 20 s timer calls exactly this module | UI close-path prompt (still absent) is separate |
+| Crash recovery / autosave | ✅ | M9 `autosave_round_trip_newer_than_and_clear`, `corrupt_autosave_is_a_clear_error_not_a_crash`; the shell's 20 s timer calls exactly this module | — (window close is guarded in M12) |
+| Window close with unsaved changes | ✅ | M12 `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied` covers the decision table; `App::ui` sends `ViewportCommand::CancelClose`; the dialog offers Save / Discard / Cancel | — (native dialogs are code-inspected) |
 | Undo / redo of timeline edits | ✅ | M11 `history.rs` executes `Session` edits, undoes/redoes them through `EditHistory`, and asserts the project name and document steps; `app::tests::ctrl_z_after_a_composition_edit_leaves_the_timeline_edit_alone` drives the shell's `undo`/`redo` | — (UI automation is a separate gap) |
 | Undo / redo of effect & composition edits | ✅ | M11 `history.rs`: composition undo/redo shares the timeline's order, one drag is one step, a new edit clears redo, limits stay aligned; the App-level test asserts the composition map after undo/redo; the egui gesture bracket is code-inspected | — (UI automation is a separate gap) |
 | Media import (generators, files) | ✅ | M3 fixture export → re-import through `file.import`/codecs → render | — |
@@ -41,7 +42,9 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | Export H.264 + AAC (MP4) | ✅ | M2 re-decodes the export and verifies resolution, rate, duration, pixels and audio | — |
 | Export ProRes / DNxHR / MJPEG / WAV | 🟡 | Real encoders offered; only H.264 is decode-verified in CI | Per-format decode test |
 | Export HEVC / AV1 / alpha | ⬜ | Needs a registered encoder; not offered | Capability-detected hardware or tested software path |
-| Export cancel / queue / presets / overwrite confirm | ⬜ | Progress + report only | Cancel, queue, presets, confirmation |
+| Export overwrite confirmation | ✅ | M12 `export::tests::output_path_adds_the_selected_extension_once` resolves the exact name; `start` asks Yes/No when it exists, and No keeps the existing file and starts nothing | — |
+| Export cancel | ✅ | M12 Cancel stores FilmCraft's `Progress.cancel`; the worker returns `ExportError::Cancelled`; `export::tests::a_cancelled_export_is_reported_as_a_cancellation` checks the sentinel; the truncated partial file is removed | — (UI automation is separate) |
+| Export queue / presets / range selection | ⬜ | One foreground job at a time | Queue, presets, range |
 | Hardware encode/decode | ⬜ | Not assumed on AMD iGPU | Detect, test, fall back |
 
 ## P1 — effects, color, compositing, audio

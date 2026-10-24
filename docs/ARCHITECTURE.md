@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: milestone M11 (2026-10-23) · Branch: `frameforge-rust-rewrite`
+Last updated: milestone M12 (2026-10-23) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -27,7 +27,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 | L6 apps | `frameforge-pro` binary; workspaces: Edit / Effects / Color / Audio / Export | M5–M9: real workspaces, session edits, autosave |
 | L5 ui-egui | unified shell: workspaces, timeline, monitors, panels (egui — same UI stack as both upstreams) | M5–M8: working; docking/layout persistence still planned |
 | L4 engine | unified session: project, commands, undo; timeline items reference compositions | M6: FilmCraft `Session` is the editing authority; M11: composition edits share its undo order |
-| L3 render/export | FilmCraft track compositor + EffectCraft layer compositor behind adapters; one export pipeline | M2/M4: verified; export formats decode-verified for H.264 |
+| L3 render/export | FilmCraft track compositor + EffectCraft layer compositor behind adapters; one export pipeline | M2/M4: verified; H.264 is decode-verified; M12: overwrite confirmation + real cancel |
 | L2 edit/effects | edit algebra; effect-bridge: EffectCraft effects on FilmCraft timeline clips, shared keyframes | M2: verified (307 effects swept) |
 | L1 media | FilmCraft codecs/media (already shared by both engines upstream) | upstream, pinned |
 | L0 foundation | time, geometry, colour | M1: time (verified) |
@@ -282,6 +282,33 @@ M11 gives both kinds of edit one order.
   clone only the affected composition, so undo memory grows with composition
   size, not project size.
 
+## M12 — export safety and the close-window guard (✔ CI-verified, run 40045638522)
+
+M11's export workspace could overwrite an existing file without asking and could
+not stop a render; closing the window also bypassed the M9 unsaved-changes guard.
+
+- **Overwrite confirmation**: `export.rs::output_path` resolves the exact final
+  name — trimmed, with the selected extension added once, and an empty path
+  rejected — before anything is written. `start` asks Yes/No when that file
+  exists; No keeps the existing file and starts nothing.
+- **Real cancel**: the running panel's Cancel button stores FilmCraft's
+  `Progress.cancel` atomic, which the exporter checks between frames/batches.
+  `ExportError::Cancelled` is mapped to a dedicated sentinel; because FilmCraft
+  writes directly to the target, the shell removes the truncated partial file
+  and says so. Once requested, the button is replaced by "Cancelling…".
+- **Close guard**: `App::ui` reads `viewport().close_requested()` and sends
+  `ViewportCommand::CancelClose` unless a dirty document is saved or explicitly
+  discarded. The native dialog offers Save / Discard / Cancel (Yes/No/Cancel);
+  a cancelled Save As or a failed write keeps the window open. Clean projects
+  close silently.
+- **Tests**: `export.rs::tests::output_path_adds_the_selected_extension_once`,
+  `export.rs::tests::a_cancelled_export_is_reported_as_a_cancellation`, and
+  `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
+  The suite is 28 tests.
+- **Limitations**: native dialogs and the viewport command are code-inspected,
+  not UI-automated; export remains one foreground job (no queue/presets); cancel
+  deletes the partial output rather than resuming.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -297,6 +324,7 @@ M11 gives both kinds of edit one order.
 | M9 | durability: crash-recovery autosaves, unsaved-changes guard, keyframe-preserving parameter writes, preview invalidation, measured baseline audit + architecture decision + feature parity + XMem plan | ✔ (CI-verified, run 39878432877) |
 | M10 | source-patched multi-track editing: per-track target/source-patch headers on the engine's `timeline.setTargeting`, placement on patched V2/A2, audio-only and unpatched-destination tests | ✔ (CI-verified, run 39887395556) |
 | M11 | one chronological undo history: composition snapshots paired with project-neutral engine steps, gesture coalescing, limit-aligned redo, composition rollback on failure, seven history tests plus an App-level Ctrl+Z test | ✔ (CI-verified, run 40037973347) |
+| M12 | export safety and close guard: overwrite confirmation on the exact resolved path, real cancellation through `Progress.cancel` with partial-file cleanup, and a Save/Discard/Cancel guard on the window close request | ✔ (CI-verified, run 40045638522) |
 
 ## Dependency policy
 
