@@ -46,16 +46,18 @@ pub struct Player {
 }
 
 impl Player {
+    /// Build a silent, unopened player. The audio device is only touched by
+    /// `play`, so constructing the app (and every test that builds one) never
+    /// opens WASAPI and cannot crash or stall on a machine without a device.
     pub fn new() -> Player {
-        let note = device_config().err();
         Player {
             stream: None,
             slot: Arc::new(Mutex::new(Slot { rx: None, chunk: Vec::new(), idx: 0 })),
             played: Arc::new(AtomicU64::new(0)),
             finished: Arc::new(AtomicBool::new(true)),
-            device_rate: note.is_none().then_some(()).and_then(|_| device_config().ok()).map(|(r, _)| r).unwrap_or(SEQUENCE_RATE),
+            device_rate: SEQUENCE_RATE,
             channels: 2,
-            note,
+            note: None,
         }
     }
 
@@ -78,7 +80,15 @@ impl Player {
             return Err(why.clone());
         }
         if self.stream.is_none() {
-            let (_, channels) = device_config()?; // note is None here, so this succeeds
+            // The device is opened on the first real play, not at construction.
+            let (rate, channels) = match device_config() {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    self.note = Some(e.clone());
+                    return Err(e);
+                }
+            };
+            self.device_rate = rate;
             self.channels = channels;
             let stream = build_stream(self.channels, Arc::clone(&self.slot), Arc::clone(&self.played))?;
             stream.play().map_err(|e| format!("audio: {e}"))?;
