@@ -128,7 +128,7 @@ fn apply_mask(frame: VideoFrame, mask: &MaskFrame) -> Result<VideoFrame, MediaEr
     if data.len() != expected_bytes {
         return Err(MediaError::Unsupported(format!("clip frame carries {} RGBA bytes, expected {expected_bytes}", data.len())));
     }
-    for (pixel, matte) in data.chunks_exact_mut(4).zip(alpha.iter().copied()) {
+    for (pixel, matte) in data.as_chunks_mut::<4>().0.iter_mut().zip(alpha.iter().copied()) {
         if let Some(a) = pixel.get_mut(3) {
             *a = ((u16::from(*a) * u16::from(matte) + 127) / 255) as u8;
         }
@@ -142,7 +142,7 @@ impl MediaSource for ComposedSource {
     }
 
     fn video_frame(&self, req: FrameRequest) -> Result<Arc<VideoFrame>, MediaError> {
-        if self.composition.is_noop() {
+        if self.composition.is_noop() && self.roto.is_none() {
             return self.inner.video_frame(req);
         }
         let rate = self.inner.info().frame_rate();
