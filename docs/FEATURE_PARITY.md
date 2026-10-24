@@ -29,7 +29,7 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | Relink missing media | 🟡 | `FrameForgeProject::relink` and the offline slate are tested (M3); no UI dialog | Relink dialog + offline badge |
 | Multi-track timeline (2V + 2A) | ✅ | Source-patched placement on V2/A2 through `timeline.place`; `edit::tests::placement_uses_the_patched_video_and_audio_tracks` executes the real engine and asserts both destination tracks | — (UI automation is a separate gap) |
 | Track targeting / source patching (choose V2/A2) | ✅ | Timeline headers expose the engine's real targeting (T) and source patch (S) through `timeline.setTargeting`; placement follows the patched tracks; audio-only and unpatched cases tested in `edit.rs` | — |
-| Track mute / solo / lock / visibility in the timeline | ⬜ | Headers currently carry target/source patch only; audio mute/solo exists in the mixer | Track header controls bound to commands |
+| Track mute / solo / lock / visibility in the timeline | 🟡 | T1 (run `40063686209`): header buttons call the real `timeline.setTrack` keys (`enabled`, `muted`, `solo`, `locked`) through the same helper `edit::tests::track_header_visibility_mute_solo_and_lock_are_undoable_set_track_edits` drives; the test asserts the sequence state and undo. UI click-through and a render-difference test are not automated yet | Scripted UI click + hidden/muted/solo render test |
 | Select / delete / razor / drag-move / trim | 🟡 | Engine commands and their upstream tests; M7 shell gestures; no FrameForge gesture test | A scripted edit test per gesture |
 | Insert / overwrite, ripple delete, roll, slip, slide | ⬜ | Engine supports much of this; no shell wiring | Commands wired + timeline tests |
 | Snapping, markers, ranges | ⬜ | — | Toggleable snapping; markers persisted |
@@ -103,7 +103,7 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | XMem Roto AI controls wired to a real worker | ⬜ | — |
 | Mask cache reusable in compositing/export, invalidates on edits | ✅ | R1 `r1_roto.rs`: a synthetic matte changes preview **and** H.264 export; every cache-key input (including ordered correction ids) addresses a different directory; a missing in-range mask is a clear error. No mask UI yet |
 | No placeholder buttons / fake progress | ✅ | M9 audit inspected every enabled control |
-| Unit / integration / render tests pass | ✅ | Run `40059782293`: **36 tests** (M2/M3/M4/M9 durability, M11 history, R1 roto, R2 worker/exporter); CI on windows-2025 |
+| Unit / integration / render tests pass | ✅ | Run `40063686209`: **37 tests** (M2/M3/M4/M9 durability, M11 history, R1 roto, R2 worker/exporter, T1 track state); CI on windows-2025 |
 | CI on Windows; failures documented | ✅ | `ci.yml` + `ci-diagnostics` branch |
 | Licences, sizes, limitations documented | ✅ | `NOTICE`, `docs/PROVENANCE.md`, this file; AI pack sizes pending |
 

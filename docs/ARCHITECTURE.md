@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: R2 (2026-10-24) · Branch: `frameforge-rust-rewrite`
+Last updated: T1 (2026-10-24) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -305,10 +305,30 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
 - **Tests**: `export.rs::tests::output_path_adds_the_selected_extension_once`,
   `export.rs::tests::a_cancelled_export_is_reported_as_a_cancellation`, and
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
-  At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`).
+  At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), and T1 adds
+  one, so the current suite is 37 (run `40063686209`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
+
+## T1 — real track visibility, mute, solo and lock (✔ CI-verified, run 40063686209)
+
+The M10 headers exposed target/source-patch only, so the timeline could not hide a
+video track, mute or solo audio, or lock a track without leaving the Edit workspace.
+
+- **Headers**: each video track has **T** (target), **S** (source patch), **V**
+  (visibility via `enabled`) and **L** (lock); each audio track has **T**, **S**,
+  **M** (mute), the solo circle (`solo`) and **L**. T/S remain editor state through
+  `timeline.setTargeting` (not undoable, not dirtying). V/M/solo/L are real
+  `timeline.setTrack` document edits run through `App::execute`, so they join the
+  combined undo history and invalidate the program monitor.
+- **Test**: `edit::tests::track_header_visibility_mute_solo_and_lock_are_undoable_set_track_edits`
+  builds the command from the same `track_action_command` helper the UI uses,
+  asserts the dynamic JSON key and the engine state, then undoes the lock and
+  confirms the earlier settings remain. The renderer's use of `enabled`, `muted`
+  and `solo` is upstream-tested.
+- **Limitations**: no scripted UI click or hidden/muted/solo render-difference
+  test yet; the header column is fixed at 140 px; sync-lock toggles are not exposed.
 
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
@@ -376,6 +396,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | M12 | export safety and close guard: overwrite confirmation on the exact resolved path, real cancellation through `Progress.cancel` with partial-file cleanup, and a Save/Discard/Cancel guard on the window close request | ✔ (CI-verified, run 40045638522) |
 | R1 | cached roto masks: validated cache key + manifest/PNG reader, alpha in `ComposedSource`, schema 3, preview + H.264 export test and cache-invalidation test | ✔ (CI-verified, run 40056112214) |
 | R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests | ✔ (CI-verified, run 40059782293; XMem CPU benchmark still open) |
+| T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
 
 ## Dependency policy
 
