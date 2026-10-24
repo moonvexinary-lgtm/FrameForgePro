@@ -1,0 +1,4 @@
+    Checking frameforge-core v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\core)
+   Compiling frameforge-pro v0.1.0 (D:\a\FrameForgePro\FrameForgePro\apps\frameforge-pro)
+    Checking frameforge-bridge v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\bridge)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.52s
