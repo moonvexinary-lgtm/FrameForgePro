@@ -127,6 +127,70 @@ pub(crate) fn go_marker(app: &mut App, forward: bool) {
     }
 }
 
+/// Snap radius in screen pixels (converted to ticks with the zoom).
+const SNAP_PX: f32 = 8.0;
+
+/// The nearest target within `tolerance`, or the candidate unchanged.
+fn snap_tick(candidate: Tick, targets: &[Tick], tolerance: Tick) -> Tick {
+    let mut best = candidate;
+    let mut best_distance = tolerance.0.max(0).saturating_add(1);
+    for t in targets {
+        let d = (t.0 - candidate.0).abs();
+        if d <= tolerance.0 && d < best_distance {
+            best_distance = d;
+            best = *t;
+        }
+    }
+    best
+}
+
+/// Everything a move or trim can snap to: zero, the playhead and every clip
+/// edge except the one being dragged.
+fn snap_targets(seq: &Sequence, exclude: Option<filmcraft_project::ClipId>, playhead: Tick) -> Vec<Tick> {
+    let mut targets = vec![Tick::ZERO, playhead.max(Tick::ZERO)];
+    for track in seq.video_tracks.iter().chain(&seq.audio_tracks) {
+        for item in &track.items {
+            if Some(item.id) == exclude {
+                continue;
+            }
+            targets.push(item.start);
+            targets.push(item.start + item.duration);
+        }
+    }
+    targets
+}
+
+fn snap_tolerance(zoom: f32) -> Tick {
+    Tick(((SNAP_PX as f64 / zoom.max(1.0) as f64) * TICKS_PER_SECOND as f64) as i64)
+}
+
+/// Snap a moved clip: whichever of its start or end is closer to a target wins.
+fn snap_move(app: &App, clip: filmcraft_project::ClipId, raw: Tick, zoom: f32) -> Tick {
+    if !app.session.state.snapping {
+        return raw;
+    }
+    let Some(seq) = app.sequence() else { return raw };
+    let targets = snap_targets(seq, Some(clip), app.playhead);
+    let tol = snap_tolerance(zoom);
+    let duration = seq.find_item(clip).map(|(_, i)| i.duration).unwrap_or_default();
+    let by_start = snap_tick(raw, &targets, tol);
+    let by_end = Tick(snap_tick(raw + duration, &targets, tol).0 - duration.0);
+    if (by_start.0 - raw.0).abs() <= (by_end.0 - raw.0).abs() { by_start } else { by_end }
+}
+
+/// Snap a trimmed edge to a nearby target (the delta is adjusted to land there).
+fn snap_trim(app: &App, clip: filmcraft_project::ClipId, edge: &str, delta: Tick, zoom: f32) -> Tick {
+    if !app.session.state.snapping {
+        return delta;
+    }
+    let Some(seq) = app.sequence() else { return delta };
+    let Some((_, item)) = seq.find_item(clip) else { return delta };
+    let base = if edge == "in" { item.start } else { item.start + item.duration };
+    let raw_edge = Tick((base.0 + delta.0).max(0));
+    let targets = snap_targets(seq, Some(clip), app.playhead);
+    Tick(snap_tick(raw_edge, &targets, snap_tolerance(zoom)).0 - base.0)
+}
+
 /// Where a placement will go: one time (kept A/V together), the patched
 /// destination tracks and their names for the status line.
 struct Placement {
@@ -426,6 +490,14 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             clear_marker(app);
         }
         ui.separator();
+        let mut snapping = app.session.state.snapping;
+        if ui.checkbox(&mut snapping, "Snap").on_hover_text("Snap moves and trims to clip edges, the playhead and zero").changed() {
+            match app.session.execute("sequence.snap", serde_json::json!({"on": snapping})) {
+                Ok(_) => app.status = if snapping { "Snapping on".to_string() } else { "Snapping off".to_string() },
+                Err(e) => app.status = e.to_string(),
+            }
+        }
+        ui.separator();
         ui.add(egui::Slider::new(&mut app.zoom, 20.0..=400.0).text("px / s"));
         ui.separator();
         ui.colored_label(
@@ -702,18 +774,20 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         match drag {
             TimelineDrag::Move { clip, track, grab_x, last_x, origin, .. } => {
                 let delta = ((last_x - grab_x) / zoom) as f64 * TICKS_PER_SECOND as f64;
-                let time = Tick((origin.0 as f64 + delta).max(0.0) as i64);
+                let raw = Tick((origin.0 as f64 + delta).max(0.0) as i64);
+                let time = snap_move(app, clip, raw, zoom);
                 let params = serde_json::json!({"moves": [{"clip": clip.0, "track": track.0, "time": time.0}], "insert": false, "linked": true});
                 match app.execute("timeline.move", params) {
-                    Ok(_) => app.status = "Moved clip".to_string(),
+                    Ok(_) => app.status = if time == raw { "Moved clip".to_string() } else { "Moved clip (snapped)".to_string() },
                     Err(e) => app.status = e,
                 }
             }
             TimelineDrag::Trim { clip, edge, grab_x, last_x, .. } => {
                 let delta = Tick((((last_x - grab_x) / zoom) as f64 * TICKS_PER_SECOND as f64) as i64);
-                let params = serde_json::json!({"clip": clip.0, "edge": edge, "mode": "regular", "delta": delta.0});
+                let snapped = snap_trim(app, clip, edge, delta, zoom);
+                let params = serde_json::json!({"clip": clip.0, "edge": edge, "mode": "regular", "delta": snapped.0});
                 match app.execute("timeline.trim", params) {
-                    Ok(_) => app.status = format!("Trimmed {edge} edge"),
+                    Ok(_) => app.status = if snapped == delta { format!("Trimmed {edge} edge") } else { format!("Trimmed {edge} edge (snapped)") },
                     Err(e) => app.status = e,
                 }
             }
@@ -819,8 +893,8 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 #[cfg(test)]
 mod tests {
     //! Real engine tests for source-patched placement, the track-header
-    //! settings and the marker helpers: no UI, but the exact commands the
-    //! timeline uses.
+    //! settings, the marker helpers and the snap maths: no UI, but the exact
+    //! commands and targets the timeline uses.
 
     use super::{placement_params, plan_placement};
     use filmcraft_engine::Session;
@@ -998,5 +1072,25 @@ mod tests {
         assert_eq!(app.session.active_sequence().unwrap().markers.len(), 1, "clear removes the marker at the playhead");
         app.undo();
         assert_eq!(app.session.active_sequence().unwrap().markers.len(), 2, "undo restores the cleared marker");
+    }
+
+    #[test]
+    fn snap_tick_uses_the_nearest_target_inside_the_tolerance() {
+        let targets = [Tick(100), Tick(200), Tick(300)];
+        assert_eq!(super::snap_tick(Tick(96), &targets, Tick(8)), Tick(100));
+        assert_eq!(super::snap_tick(Tick(205), &targets, Tick(8)), Tick(200));
+        assert_eq!(super::snap_tick(Tick(150), &targets, Tick(8)), Tick(150), "nothing near: unchanged");
+        assert_eq!(super::snap_tick(Tick(108), &targets, Tick(8)), Tick(108), "outside the radius is left alone");
+    }
+
+    #[test]
+    fn snap_targets_include_the_playhead_and_skip_the_dragged_clip() {
+        let s = demo_session();
+        let seq = s.active_sequence().unwrap();
+        let clip = seq.video_tracks.iter().chain(&seq.audio_tracks).flat_map(|t| t.items.iter()).map(|i| i.id).next().expect("the demo has clips");
+        let all = super::snap_targets(seq, None, Tick(777));
+        let without = super::snap_targets(seq, Some(clip), Tick(777));
+        assert!(without.contains(&Tick(777)), "the playhead is a target");
+        assert_eq!(all.len() - without.len(), 2, "the dragged clip contributes its start and end, and nothing else");
     }
 }
