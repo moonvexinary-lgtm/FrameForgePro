@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T3 (2026-10-24) · Branch: `frameforge-rust-rewrite`
+Last updated: T4 (2026-10-24) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -306,8 +306,8 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
   `export.rs::tests::a_cancelled_export_is_reported_as_a_cancellation`, and
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
   At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
-  (37 in run `40063686209`), T2 adds one (38 in run `40128137965`) and T3 adds two, so the
-  current suite is 40 (run `40133164791`).
+  (37 in run `40063686209`), T2 adds one (38 in run `40128137965`), T3 adds two (40 in run
+  `40133164791`) and T4 adds one, so the current suite is 41 (run `40138769007`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
@@ -373,6 +373,25 @@ workspace drew none and could not add, clear or navigate them.
   checks the target set against the real demo sequence.
 - **Limitations**: markers are not snap targets yet; only the regular trim mode
   snaps; snapping is not linked-pair aware beyond the single dragged clip.
+
+## T4 — insert / overwrite at the playhead (✔ CI-verified, run 40138769007)
+
+Double-clicking bin media still appends to the patched tracks; the new path is
+the professional source edit that appends cannot express.
+
+- **Selection**: clicking a project-panel media item selects it (highlighted) as
+  the Insert/Overwrite source. Removing that media clears the selection.
+- **Commands**: **Insert** and **Overwrite** in the timeline header place the
+  selected item at the playhead on the patched V/A destinations through
+  `timeline.place` with the engine's `insert` flag. Insert ripples existing clips
+  right; overwrite trims or removes whatever is under the new clip. Both go
+  through `App::execute`, so they are one undo step each.
+- **Test**: `edit::tests::insert_and_overwrite_at_the_playhead_use_the_real_engine_insert_flag`
+  builds a two-clip sequence, drives `place_at_playhead` through a real `App`,
+  checks that insert shifted the first clip and that overwrite trimmed it, with
+  an undo between.
+- **Limitations**: the source item has no in/out marks yet (the whole media is
+  placed); no source monitor; `Insert` does not ripple sequence markers.
 
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
@@ -443,6 +462,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
 | T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |
 | T3 | snapping: a toolbar Snap toggle on `sequence.snap`; moves snap their start or end, trims snap the edge, to zero / the playhead / every other clip edge within 8 screen pixels; pure-function tests | ✔ (CI-verified, run 40133164791) |
+| T4 | insert / overwrite: bin-item selection, Insert and Overwrite at the playhead through the engine's `insert` flag, undoable; test drives a real App | ✔ (CI-verified, run 40138769007) |
 
 ## Dependency policy
 
