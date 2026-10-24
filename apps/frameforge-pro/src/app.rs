@@ -302,8 +302,32 @@ impl App {
 
     /// Whether the window's close request must be cancelled. The confirmation
     /// is a parameter so the decision table is testable without a dialog.
-    fn close_guard(&self, _close_requested: bool, _confirm: fn(&mut App) -> bool) -> bool {
-        false
+    fn close_guard(&mut self, close_requested: bool, confirm: fn(&mut App) -> bool) -> bool {
+        close_requested && self.dirty && !confirm(self)
+    }
+
+    /// The close-button guard: offer to save, discard, or keep editing. A
+    /// clean project closes without a prompt.
+    fn confirm_close(&mut self) -> bool {
+        if !self.dirty {
+            return true;
+        }
+        match rfd::MessageDialog::new()
+            .set_title("Unsaved changes")
+            .set_description("Save changes before closing?\n\nYes saves the project, No discards it, Cancel keeps editing.")
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .set_level(rfd::MessageLevel::Warning)
+            .show()
+        {
+            rfd::MessageDialogResult::Yes => {
+                self.save();
+                // The Save dialog may have been cancelled or the write may
+                // have failed; only close once the document is clean.
+                !self.dirty
+            }
+            rfd::MessageDialogResult::No => true,
+            _ => false,
+        }
     }
 
     /// The unsaved-changes guard in front of New/Open. A clean project never
@@ -541,6 +565,14 @@ impl Default for App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // A close button or Alt+F4 must not discard a dirty document. eframe
+        // delivers the request on this frame; CancelClose keeps the window
+        // open, and saving first is offered in the dialog.
+        let close_requested = ui.ctx().input(|i| i.viewport().close_requested());
+        if self.close_guard(close_requested, App::confirm_close) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+
         // Playback: the audio clock drives the playhead when a stream runs;
         // otherwise the wall clock does.
         if self.playing {

@@ -3,10 +3,11 @@
 //! and a saved-file report. Only formats with built-in encoders are offered;
 //! hardware-only formats are not faked.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use filmcraft_export::{ExportSettings, Format, Progress, export};
+use filmcraft_export::{ExportError, ExportSettings, Format, Progress, export};
 use frameforge_bridge::{FrameForgeProject, ProjectSources};
 
 use crate::app::App;
@@ -24,6 +25,8 @@ const FORMATS: &[(Format, &str, &str)] = &[
 pub struct RunningExport {
     pub progress: Arc<Progress>,
     pub done: Arc<Mutex<Option<Result<String, String>>>>,
+    /// The final path, so a cancelled render can remove its partial file.
+    pub path: PathBuf,
 }
 
 #[derive(Default)]
@@ -42,9 +45,38 @@ pub struct ExportState {
 /// extension exactly once, and reject an empty path. The same function is
 /// used by the overwrite prompt and the render, so the name the user confirms
 /// is the name that is written.
-fn output_path(text: &str, _extension: &str) -> Option<String> {
-    let _path = text.trim();
-    None
+fn output_path(text: &str, extension: &str) -> Option<String> {
+    let path = text.trim();
+    if path.is_empty() {
+        return None;
+    }
+    if Path::new(path).extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(extension)) {
+        Some(path.to_string())
+    } else {
+        Some(format!("{path}.{extension}"))
+    }
+}
+
+/// The cancellation sentinel crosses the worker's string-only result channel.
+const CANCELLED_BY_USER: &str = "Export cancelled by the user";
+
+fn export_error_message(error: ExportError) -> String {
+    match error {
+        ExportError::Cancelled => CANCELLED_BY_USER.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Ask before replacing a file the user already has. The export path was
+/// resolved with [`output_path`] first, so this is the exact final name.
+fn confirm_overwrite(path: &str) -> bool {
+    rfd::MessageDialog::new()
+        .set_title("Replace existing file?")
+        .set_description(format!("{path}\n\nalready exists. Replace it?"))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .set_level(rfd::MessageLevel::Warning)
+        .show()
+        == rfd::MessageDialogResult::Yes
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
@@ -96,14 +128,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
 
     // Poll the running export (draw first, then take the finished result).
     let mut finished = None;
+    let mut finished_path = None;
+    let mut cancel_clicked = false;
     if let Some(running) = &app.export.running {
         let fraction = running.progress.fraction();
         let rect = area.available_rect_before_wrap();
         let bar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction, 14.0));
         area.painter().rect_filled(bar, 3.0, ui.visuals().selection.bg_fill);
-        area.label(format!("Rendering… {:.0}%", fraction * 100.0));
+        area.horizontal(|ui| {
+            ui.label(format!("Rendering… {:.0}%", fraction * 100.0));
+            if running.progress.cancel.load(Ordering::Relaxed) {
+                ui.label("Cancelling…");
+            } else if ui.button("Cancel").clicked() {
+                running.progress.cancel.store(true, Ordering::Relaxed);
+                cancel_clicked = true;
+            }
+        });
         area.ctx().request_repaint();
+        finished_path = Some(running.path.clone());
         finished = running.done.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+    if cancel_clicked {
+        app.status = "Cancelling export…".to_string();
     }
     if let Some(result) = finished {
         match result {
@@ -111,6 +157,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
                 app.export.result = Some(report);
                 app.export.error = None;
                 app.status = "Export finished".to_string();
+            }
+            Err(e) if e == CANCELLED_BY_USER => {
+                // FilmCraft writes straight to the target; a cancelled render
+                // leaves a truncated file, so remove it (overwrite was already
+                // confirmed before the render started).
+                if let Some(path) = &finished_path {
+                    let _ = std::fs::remove_file(path);
+                }
+                app.export.result = None;
+                app.export.error = None;
+                app.status = "Export cancelled; the partial file was removed".to_string();
             }
             Err(e) => {
                 app.export.error = Some(e);
@@ -140,13 +197,14 @@ fn start(app: &mut App) {
     let Some(entry) = FORMATS.get(app.export.format_index) else { return };
     let extension = entry.2;
     let format = entry.0;
-    let mut path = app.export.path_text.trim().to_string();
-    if path.is_empty() {
+    let Some(path) = output_path(&app.export.path_text, extension) else {
+        app.status = "Choose an output file first".to_string();
         return;
-    }
-    if !path.to_lowercase().ends_with(extension) {
-        path = format!("{path}.{extension}");
-        app.export.path_text = path.clone();
+    };
+    app.export.path_text = path.clone();
+    if Path::new(path.as_str()).exists() && !confirm_overwrite(&path) {
+        app.status = "Export cancelled: the existing file was kept".to_string();
+        return;
     }
 
     let doc: FrameForgeProject = app.document();
@@ -167,13 +225,14 @@ fn start(app: &mut App) {
         let result = match ProjectSources::build(&doc) {
             Ok(sources) => export(&Arc::new(doc.project.clone()), seq, &settings, &sources, &worker_progress)
                 .map(|report| format!("{}\n{} frames, {:.2} s, {:.2} MB", report.path, report.frames, report.seconds, report.bytes as f64 / 1_000_000.0))
-                .map_err(|e| e.to_string()),
+                .map_err(export_error_message),
             Err(e) => Err(format!("{e}")),
         };
         *worker_done.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
     });
 
-    app.export.running = Some(RunningExport { progress, done });
+    let running_path = PathBuf::from(path.clone());
+    app.export.running = Some(RunningExport { progress, done, path: running_path });
     app.export.result = None;
     app.export.error = None;
     app.status = format!("Exporting to {path}…");
@@ -181,7 +240,9 @@ fn start(app: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::output_path;
+    use filmcraft_export::ExportError;
+
+    use super::{CANCELLED_BY_USER, export_error_message, output_path};
 
     #[test]
     fn output_path_adds_the_selected_extension_once() {
@@ -190,5 +251,10 @@ mod tests {
         assert_eq!(output_path("  C:\\clips\\shot  ", "mov").as_deref(), Some("C:\\clips\\shot.mov"));
         assert_eq!(output_path("C:\\clips\\shot.notmp4", "mp4").as_deref(), Some("C:\\clips\\shot.notmp4.mp4"));
         assert_eq!(output_path("   ", "mp4"), None);
+    }
+
+    #[test]
+    fn a_cancelled_export_is_reported_as_a_cancellation() {
+        assert_eq!(export_error_message(ExportError::Cancelled), CANCELLED_BY_USER);
     }
 }
