@@ -982,7 +982,7 @@ mod tests {
         };
         assert_eq!(app.playhead, first, "the marker lands on the frame-snapped playhead");
 
-        app.playhead = first + TICKS_PER_SECOND;
+        app.playhead = first + Tick(TICKS_PER_SECOND);
         super::add_marker(&mut app);
         assert_eq!(app.session.active_sequence().unwrap().markers.len(), 2);
 

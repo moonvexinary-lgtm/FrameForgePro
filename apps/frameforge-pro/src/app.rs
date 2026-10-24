@@ -602,7 +602,7 @@ impl eframe::App for App {
         // marker keys are Edit-workspace only and stand down while a text field
         // has focus (they would otherwise fire while typing in a search box).
         let in_edit = self.workspace == Workspace::Edit;
-        let typing = ui.ctx().wants_keyboard_input();
+        let typing = ui.ctx().egui_wants_keyboard_input();
         let (space, undo_key, redo_key, delete, add_edit, save_key, save_as_key, add_marker_key, next_marker_key) = ui.ctx().input(|i| {
             let cmd = i.modifiers.command;
             (
