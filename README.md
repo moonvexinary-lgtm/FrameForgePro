@@ -13,7 +13,8 @@ Premiere Pro-inspired professional workflows.
 > chronological undo history, so Ctrl+Z never undoes an unrelated edit; M12 adds export
 > overwrite confirmation, real cancellation with partial-file cleanup, and a Save /
 > Discard / Cancel guard when the window closes. Timeline headers now bind the engine's
-> real visibility, mute, solo and lock state (T1). R1 adds a validated cached-mask reader
+> real visibility, mute, solo and lock state (T1); T2 adds sequence markers on the ruler
+> with Add / Previous / Next / Clear, the **M** shortcut and click-to-jump. R1 adds a validated cached-mask reader
 > and alpha application in `ComposedSource`, so a synthetic matte changes both preview and
 > H.264 export; R2 adds the JSON-lines worker protocol, a child-process client and the PNG
 > frame exporter (`roto-bench` measures only that Rust path). XMem inference, the Roto AI

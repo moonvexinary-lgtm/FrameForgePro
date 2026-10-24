@@ -32,7 +32,8 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | Track mute / solo / lock / visibility in the timeline | 🟡 | T1 (run `40063686209`): header buttons call the real `timeline.setTrack` keys (`enabled`, `muted`, `solo`, `locked`) through the same helper `edit::tests::track_header_visibility_mute_solo_and_lock_are_undoable_set_track_edits` drives; the test asserts the sequence state and undo. UI click-through and a render-difference test are not automated yet | Scripted UI click + hidden/muted/solo render test |
 | Select / delete / razor / drag-move / trim | 🟡 | Engine commands and their upstream tests; M7 shell gestures; no FrameForge gesture test | A scripted edit test per gesture |
 | Insert / overwrite, ripple delete, roll, slip, slide | ⬜ | Engine supports much of this; no shell wiring | Commands wired + timeline tests |
-| Snapping, markers, ranges | ⬜ | — | Toggleable snapping; markers persisted |
+| Snapping / sequence ranges | ⬜ | — | Toggleable snapping; persisted in/out |
+| Sequence markers | 🟡 | T2: markers drawn on the ruler, click-to-jump, undoable Add/Clear through `markers.add` / `markers.clearCurrent`, Prev/Next navigation and the M shortcut; `edit::tests::marker_helpers_add_clear_and_navigate_through_the_real_engine` covers the real engine. No rename/comment editor, marker drag or CSV export yet | Marker rename editor, ruler drag, CSV/EDL export |
 | Speed / freeze / reverse | ⬜ | — | Engine command + verified timing |
 | Transitions (cross-dissolve etc.) | ⬜ | FilmCraft transition defs exist; no UI | Apply a transition at a cut, render test |
 | Source monitor | ⬜ | Only the program monitor exists | Source monitor with in/out and insert/overwrite |
@@ -103,7 +104,7 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | XMem Roto AI controls wired to a real worker | ⬜ | — |
 | Mask cache reusable in compositing/export, invalidates on edits | ✅ | R1 `r1_roto.rs`: a synthetic matte changes preview **and** H.264 export; every cache-key input (including ordered correction ids) addresses a different directory; a missing in-range mask is a clear error. No mask UI yet |
 | No placeholder buttons / fake progress | ✅ | M9 audit inspected every enabled control |
-| Unit / integration / render tests pass | ✅ | Run `40063686209`: **37 tests** (M2/M3/M4/M9 durability, M11 history, R1 roto, R2 worker/exporter, T1 track state); CI on windows-2025 |
+| Unit / integration / render tests pass | ✅ | Run `40128137965`: **38 tests** (M2/M3/M4/M9 durability, M11 history, R1 roto, R2 worker/exporter, T1 track state, T2 markers); CI on windows-2025 |
 | CI on Windows; failures documented | ✅ | `ci.yml` + `ci-diagnostics` branch |
 | Licences, sizes, limitations documented | ✅ | `NOTICE`, `docs/PROVENANCE.md`, this file; AI pack sizes pending |
 

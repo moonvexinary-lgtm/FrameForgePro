@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T1 (2026-10-24) · Branch: `frameforge-rust-rewrite`
+Last updated: T2 (2026-10-24) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -305,8 +305,9 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
 - **Tests**: `export.rs::tests::output_path_adds_the_selected_extension_once`,
   `export.rs::tests::a_cancelled_export_is_reported_as_a_cancellation`, and
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
-  At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), and T1 adds
-  one, so the current suite is 37 (run `40063686209`).
+  At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
+  (37 in run `40063686209`) and T2 adds one more, so the current suite is 38
+  (run `40128137965`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
@@ -329,6 +330,32 @@ video track, mute or solo audio, or lock a track without leaving the Edit worksp
   and `solo` is upstream-tested.
 - **Limitations**: no scripted UI click or hidden/muted/solo render-difference
   test yet; the header column is fixed at 140 px; sync-lock toggles are not exposed.
+
+## T2 — sequence markers on the ruler (✔ CI-verified, run 40128137965)
+
+The engine had marker commands and the demo project ships markers, but the Edit
+workspace drew none and could not add, clear or navigate them.
+
+- **Ruler markers**: every `Sequence::markers` entry is drawn in the ruler as a
+  label-coloured stem and head; clicking within a few pixels jumps the playhead to
+  it and names it in the status bar. Markers are the engine's real, persisted,
+  `Label`-coloured sequence markers (the demo project's four markers show up).
+- **Commands**: **Add Marker (M)** runs `markers.add` at the frame-snapped
+  playhead through `App::execute` (undoable, dirtying); **Clear Marker** runs
+  `markers.clearCurrent` after putting the engine's own playhead in step;
+  **Previous / Next Marker** are pure editor navigation over the sorted marker
+  list. The **M** and **Shift+M** keys are Edit-workspace-only and stand down while
+  a text field has focus.
+- **Test**: `edit::tests::marker_helpers_add_clear_and_navigate_through_the_real_engine`
+  drives `add_marker`, `go_marker` and `clear_marker` on a fresh project, asserts
+  the frame-snapped placement, navigation order and clearing, then undoes the
+  clear and checks the marker returns.
+- **Also fixed**: `Player::new` no longer opens the audio device at construction.
+  The device is opened on the first real `play`, so app construction (and the app
+  tests) never touch WASAPI; this removed an intermittent
+  `STATUS_ACCESS_VIOLATION` in the test binary.
+- **Limitations**: no marker rename/comment editor or marker drag on the ruler;
+  marker colours are a fixed UI mapping; no CSV/EDL export wiring yet.
 
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
@@ -397,6 +424,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | R1 | cached roto masks: validated cache key + manifest/PNG reader, alpha in `ComposedSource`, schema 3, preview + H.264 export test and cache-invalidation test | ✔ (CI-verified, run 40056112214) |
 | R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests | ✔ (CI-verified, run 40059782293; XMem CPU benchmark still open) |
 | T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
+| T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |
 
 ## Dependency policy
 
