@@ -65,6 +65,9 @@ pub struct Composition {
     /// here (they stay offline).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_item: Option<EcItemId>,
+    /// The cached XMem mask this clip renders with, when one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roto: Option<crate::roto::RotoRef>,
 }
 
 impl Composition {

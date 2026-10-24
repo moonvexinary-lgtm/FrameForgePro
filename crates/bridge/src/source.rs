@@ -28,6 +28,7 @@ use filmcraft_time::{FrameRate, Tick};
 use crate::BridgeError;
 use crate::convert::param_to_value;
 use crate::document::{Composition, EffectLink, FrameForgeProject};
+use crate::roto::MaskCache;
 
 /// Runs one effect of a composition.
 ///
@@ -64,13 +65,22 @@ pub struct ComposedSource {
     composition: Composition,
     /// Stable per source, so procedural effects re-render identically.
     seed: u32,
+    /// The cached roto mask, or the reason it could not be opened.
+    #[allow(dead_code)]
+    roto: Option<Result<MaskCache, String>>,
 }
 
 impl ComposedSource {
     /// Wrap `inner` with `composition`. `seed` identifies the source; it feeds
     /// the effect instances so procedural effects are deterministic per source.
     pub fn new(inner: SharedSource, composition: Composition, seed: u32) -> Self {
-        Self { inner, composition, seed }
+        Self { inner, composition, seed, roto: None }
+    }
+
+    /// Render this source through `cache`'s alpha masks.
+    pub fn with_roto_cache(mut self, cache: MaskCache) -> Self {
+        self.roto = Some(Ok(cache));
+        self
     }
 }
 
@@ -197,6 +207,12 @@ impl ProjectSources {
     /// and renders, and the media plays again once the file is back. An item
     /// with a composition is wrapped in [`ComposedSource`].
     pub fn build(doc: &FrameForgeProject) -> Result<Self, BridgeError> {
+        ProjectSources::build_from(&doc.project, &doc.compositions)
+    }
+
+    /// [`ProjectSources::build`] with an explicit roto cache root (tests and
+    /// hosts that keep the cache somewhere other than the default).
+    pub fn build_with_roto_root(doc: &FrameForgeProject, _root: &std::path::Path) -> Result<Self, BridgeError> {
         ProjectSources::build_from(&doc.project, &doc.compositions)
     }
 
