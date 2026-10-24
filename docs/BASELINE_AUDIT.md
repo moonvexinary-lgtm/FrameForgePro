@@ -1,12 +1,12 @@
 # Baseline audit — FrameForge Pro
 
-Audit date: 2026-10-22 · Updated: 2026-10-24 with R1/R2/T1/T2 evidence · Auditor: coding agent (source inspection + CI evidence, no assumptions)
+Audit date: 2026-10-22 · Updated: 2026-10-24 with R1/R2/T1/T2/T3 evidence · Auditor: coding agent (source inspection + CI evidence, no assumptions)
 
 ## 1. Exact refs inspected
 
 | Ref | Commit | What it is |
 |---|---|---|
-| `frameforge-rust-rewrite` | `851f05d` | **The maintained implementation.** Rust workspace: FilmCraft editing engine + EffectCraft compositing engine + the egui application shell. R1/R2 add the cached roto mask seam and the XMem worker transport; T1 adds real track visibility/mute/solo/lock headers; T2 adds sequence markers. |
+| `frameforge-rust-rewrite` | `ebf14b7` | **The maintained implementation.** Rust workspace: FilmCraft editing engine + EffectCraft compositing engine + the egui application shell. R1/R2 add the cached roto mask seam and the XMem worker transport; T1 adds real track visibility/mute/solo/lock headers; T2 adds sequence markers; T3 adds move/trim snapping. |
 | `frameforge-dev` | `2601eb5` | The original C++/Qt/QML application (a Kdenlive fork, GPL-3.0, 2 003 files). It is an **ancestor** of the Rust branch (`git merge-base --is-ancestor` → true), preserved unchanged, and is not built or linked. |
 | `frameforge-cpp-legacy` (tag, documented in README) | `2601eb5` | Recovery point for the Qt application. |
 | Upstream FilmCraft | `6c3948a36c80e4996d924766ba7157eec4fca85e` | Pinned git dependency (`filmcraft-*`). |
@@ -23,9 +23,9 @@ single fast-forward and should be an explicit decision, not a side effect of thi
 - Verified command shapes against FilmCraft's own tests (`effects.apply`, `effects.setParam`,
   `effects.toggleEnabled`, `effects.remove`, `mixer.setStrip`) rather than trusting the shell's call sites.
 - Read the last green CI run's logs (`39729926210`) for measured test and effect-sweep numbers.
-  R1, R2, T1 and T2 were verified by their own green runs (`40056112214`, `40059782293`,
-  `40063686209`, `40128137965`); the R2, T1 and T2 runs also execute `roto-bench 4` in the binary
-  self-test step.
+  R1, R2, T1, T2 and T3 were verified by their own green runs (`40056112214`, `40059782293`,
+  `40063686209`, `40128137965`, `40133164791`); the R2, T1, T2 and T3 runs also execute
+  `roto-bench 4` in the binary self-test step.
 - **No local Cargo build was run** (storage policy). CI is the compiler. Disk free at audit time: **53.6 GB**.
 
 ## 3. Workspace inventory
@@ -51,6 +51,7 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 | XMem worker transport and frame exporter | R2 (`40059782293`): protocol-1 JSON lines over a real child process (fake worker), typed events, 1 MiB line cap, stderr tail, `export_frames` PNGs verified for count/size/order; `roto-bench` runs in CI. **No XMem inference or weights.** |
 | Timeline track state | T1 (`40063686209`): header buttons call real `timeline.setTrack` keys for video visibility (`enabled`), audio mute (`muted`), solo and lock; the edit test asserts sequence state and undo. UI click-through and render-difference tests are still open. |
 | Sequence markers | T2: markers are drawn on the ruler and click-to-jump; Add/Clear run the real undoable `markers.add` / `markers.clearCurrent`; Prev/Next navigate. The edit test asserts placement, navigation, clear and undo. No rename editor or marker drag yet. |
+| Snapping | T3: a toolbar Snap checkbox drives the engine's `sequence.snap` editor state; moves snap their start or end and trims snap the edge to zero, the playhead or another clip edge within 8 screen pixels. The pure snap functions are unit-tested; markers are not targets yet. |
 | Real export with verified output | H.264 + AAC export, decoded back and checked (resolution, rate, duration, audio peak, blur present) in `m2_poc.rs`. |
 | File media, offline slate, relink, `.fcproj` / `.ecproj` import | `m3_media_catalog.rs`, `m4_comp.rs`; missing files render the offline slate and heal on relink. |
 | Compositions with real layers | EffectCraft comp renders over FilmCraft footage at identical ticks; keyframed text measured moving; byte-identical reopen. |
@@ -61,7 +62,7 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 | Audio mixer | `mixer.setStrip` with `volumeDb`, `pan`, `muted`, `solo` — exact upstream parameter names verified. |
 | Audio playback clock | cpal stream fed by a worker mixing through the engine's mixer, playhead = device frames; honest wall-clock fallback. T2 opens the device lazily on the first play (construction never touches WASAPI), which removed an intermittent test-binary `STATUS_ACCESS_VIOLATION`. |
 | Panic containment | `catch_unwind` around the frame; session survives. |
-| Cloud-only build + downloadable dev build | Run `40128137965`: fmt/clippy/check/test/release green, self-test + `roto-bench 4` green, **38 tests**, 25,521,671-byte artifact. |
+| Cloud-only build + downloadable dev build | Run `40133164791`: fmt/clippy/check/test/release green, self-test + `roto-bench 4` green, **40 tests**, 25,521,206-byte artifact. |
 
 Measured in run `39729926210`'s test log:
 
@@ -69,8 +70,8 @@ Measured in run `39729926210`'s test log:
   (0 reported unsupported), on a 32×32 Bars frame.
 - FilmCraft's catalog is asserted at **≥ 60** effect definitions by the same test.
 - The M8 log behind those measurements ran 11 tests; the M12 suite was **28 tests**, R2 took it to
-  **36 tests** (run `40059782293`), T1 took it to **37** (run `40063686209`) and T2 adds one more,
-  so the current suite is **38 tests** (run `40128137965`).
+  **36 tests** (run `40059782293`), T1 took it to **37** (run `40063686209`), T2 to **38**
+  (run `40128137965`) and T3 to **40** (run `40133164791`).
 
 These counts are *registry entries exercised through the bridge*, not a claim that every effect is
 artistically complete or parameter-swept at multiple values. Golden-frame coverage exists for Gaussian blur
@@ -81,7 +82,7 @@ and the comp/text path, not for all 307.
 | Area | What exists | What is missing |
 |---|---|---|
 | Media bin | Import generators/files, list, place, remove | folders, search, tags, metadata, thumbnails, waveforms, relink UI, proxy generation |
-| Timeline | 2 video + 2 audio tracks, select, drag-move, trim, razor, delete, scrub, per-track target/source-patch and visibility/mute/solo/lock headers, placement on the patched tracks, ruler markers with add/prev/next/clear | insert/overwrite, ripple/roll/slip/slide, snapping, marker rename/drag, transitions UI, speed/freeze/reverse, waveforms, thumbnails |
+| Timeline | 2 video + 2 audio tracks, select, drag-move, trim, razor, delete, scrub, per-track target/source-patch and visibility/mute/solo/lock headers, placement on the patched tracks, ruler markers with add/prev/next/clear, move/trim snapping | insert/overwrite, ripple/roll/slip/slide, marker rename/drag, transitions UI, speed/freeze/reverse, waveforms, thumbnails |
 | Effect stack | add/remove/toggle, typed params, scalar keyframes, comp layers, undo through the combined history | reorder, duplicate, reset, presets, full keyframe types (bool/color/choice), graph editor |
 | Color | FilmCraft video-effect stack on the selected clip | scopes, curves UI, wheels, before/after, LUT management |
 | Audio | faders, pan, mute, solo | meters, audio-effect inserts UI, automation lanes, per-clip volume |
@@ -125,12 +126,12 @@ audit remains open.
 ## 8. Build, test, CI, sizes
 
 - CI: `windows-2025`, fmt → clippy `-D warnings` → check → test → release → self-test → artifact.
-- Last green code run: **40128137965** (T2); all **38** tests passed and the artifact is
-  `frameforge-pro-windows-dev`, **25,521,671 bytes** ZIP, 7-day retention. The T1 artifact was
-  25,517,128 bytes, R2 25,512,804, R1 25,418,672 and M12 25,229,770; R1/R2/T1/T2 added no new
-  external crate (`image` was already a workspace/app dependency; the bridge now uses it too).
-  The last extracted exe was **64,305,152 bytes** (M10/M12 measurement); the T2 ZIP is the same order
-  of size, but the T2 exe was not extracted locally.
+- Last green code run: **40133164791** (T3); all **40** tests passed and the artifact is
+  `frameforge-pro-windows-dev`, **25,521,206 bytes** ZIP, 7-day retention. The T2 artifact was
+  25,521,671 bytes, T1 25,517,128, R2 25,512,804, R1 25,418,672 and M12 25,229,770; the feature
+  slices added no new external crate (`image` was already a workspace/app dependency; the bridge
+  now uses it too). The last extracted exe was **64,305,152 bytes** (M10/M12 measurement); the T3
+  ZIP is the same order of size, but the T3 exe was not extracted locally.
 - `frameforge-pro roto-bench 4` runs in the binary self-test; it measures the Rust decode/scale/PNG
   path only and prints "XMem CPU inference: not measured". No XMem speed figure exists.
 - No installer yet; the tag workflow produces `frameforge-pro-<tag>-windows-x64.zip`.
@@ -179,7 +180,7 @@ fixed in M10), XMem (needs its own staged plan and a real worker benchmark). The
 `docs/FEATURE_PARITY.md` with priorities.
 
 Subsequent sessions completed R1 (mask cache/alpha), R2 (worker transport/exporter), T1 (real track
-visibility/mute/solo/lock headers) and T2 (sequence markers on the ruler). The next highest-impact
-work is the rest of timeline depth (insert/overwrite, ripple/roll/slip/slide, snapping, source monitor,
-transitions), followed by R3's real XMem CPU run once the optional runtime and weights are installed
-with consent.
+visibility/mute/solo/lock headers), T2 (sequence markers on the ruler) and T3 (move/trim snapping).
+The next highest-impact work is the rest of timeline depth (insert/overwrite, ripple/roll/slip/slide,
+source monitor, transitions), followed by R3's real XMem CPU run once the optional runtime and weights
+are installed with consent.

@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T2 (2026-10-24) · Branch: `frameforge-rust-rewrite`
+Last updated: T3 (2026-10-24) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -306,8 +306,8 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
   `export.rs::tests::a_cancelled_export_is_reported_as_a_cancellation`, and
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
   At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
-  (37 in run `40063686209`) and T2 adds one more, so the current suite is 38
-  (run `40128137965`).
+  (37 in run `40063686209`), T2 adds one (38 in run `40128137965`) and T3 adds two, so the
+  current suite is 40 (run `40133164791`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
@@ -356,6 +356,23 @@ workspace drew none and could not add, clear or navigate them.
   `STATUS_ACCESS_VIOLATION` in the test binary.
 - **Limitations**: no marker rename/comment editor or marker drag on the ruler;
   marker colours are a fixed UI mapping; no CSV/EDL export wiring yet.
+
+## T3 — snapping moves and trims (✔ CI-verified, run 40133164791)
+
+- **Toggle**: a **Snap** checkbox in the timeline toolbar writes the engine's own
+  `sequence.snap` editor state (not an undoable document edit, matching the
+  engine).
+- **Targets**: zero, the playhead and every clip start/end except the clip being
+  dragged. A moved clip snaps by whichever of its start or end is closer to a
+  target; a trimmed edge snaps to the target and the delta is adjusted to land
+  there. The radius is 8 screen pixels at the current zoom, so snapping stays
+  visually constant as the timeline zooms.
+- **Test**: `edit::tests::snap_tick_uses_the_nearest_target_inside_the_tolerance`
+  pins the radius and boundary behaviour, and
+  `edit::tests::snap_targets_include_the_playhead_and_skip_the_dragged_clip`
+  checks the target set against the real demo sequence.
+- **Limitations**: markers are not snap targets yet; only the regular trim mode
+  snaps; snapping is not linked-pair aware beyond the single dragged clip.
 
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
@@ -425,6 +442,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests | ✔ (CI-verified, run 40059782293; XMem CPU benchmark still open) |
 | T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
 | T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |
+| T3 | snapping: a toolbar Snap toggle on `sequence.snap`; moves snap their start or end, trims snap the edge, to zero / the playhead / every other clip edge within 8 screen pixels; pure-function tests | ✔ (CI-verified, run 40133164791) |
 
 ## Dependency policy
 
