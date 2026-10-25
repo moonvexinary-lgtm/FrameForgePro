@@ -641,6 +641,7 @@ impl eframe::App for App {
             undo_key,
             redo_key,
             delete,
+            ripple_delete,
             add_edit,
             save_key,
             save_as_key,
@@ -659,7 +660,8 @@ impl eframe::App for App {
                 i.key_pressed(egui::Key::Space),
                 cmd && i.key_pressed(egui::Key::Z) && !i.modifiers.shift,
                 (cmd && i.key_pressed(egui::Key::Z) && i.modifiers.shift) || (cmd && i.key_pressed(egui::Key::Y)),
-                i.key_pressed(egui::Key::Delete),
+                i.key_pressed(egui::Key::Delete) && !i.modifiers.shift,
+                i.key_pressed(egui::Key::Delete) && i.modifiers.shift,
                 cmd && i.key_pressed(egui::Key::K),
                 cmd && i.key_pressed(egui::Key::S) && !i.modifiers.shift,
                 cmd && i.key_pressed(egui::Key::S) && i.modifiers.shift,
@@ -694,7 +696,9 @@ impl eframe::App for App {
         if redo_key {
             self.redo();
         }
-        if delete {
+        if ripple_delete {
+            crate::edit::ripple_delete_selected(self);
+        } else if delete {
             self.delete_selected_clip();
         }
         if add_edit {

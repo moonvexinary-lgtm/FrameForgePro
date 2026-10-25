@@ -563,6 +563,29 @@ pub(crate) fn source_edit(app: &mut App, insert: bool) {
     }
 }
 
+/// Ripple delete the selected clip through `edit.rippleDelete`: remove it (the
+/// engine expands to its linked A/V), then close the gap on the tracks that lost
+/// material plus every sync-locked track. A locked track refuses the whole edit
+/// rather than letting a linked pair drift apart.
+pub(crate) fn ripple_delete_selected(app: &mut App) {
+    let Some((clip, _)) = app.selected_clip() else {
+        app.status = "Select a clip to ripple delete".to_string();
+        return;
+    };
+    let locked = app.sequence().is_some_and(|q| q.video_tracks.iter().chain(&q.audio_tracks).any(|t| t.locked && t.items.iter().any(|i| i.id == clip)));
+    if locked {
+        app.status = "Ripple Delete refused: the clip's track is locked".to_string();
+        return;
+    }
+    match app.execute("edit.rippleDelete", serde_json::json!({"clips": [clip.0]})) {
+        Ok(_) => {
+            app.selection = None;
+            app.status = "Ripple deleted: gap closed on the affected and sync-locked tracks".to_string();
+        }
+        Err(e) => app.status = e,
+    }
+}
+
 /// Remove `media` and its clips (undoable). Its composition stays keyed: an
 /// undo restores the item under the same id, and the composition with it.
 fn remove_media(app: &mut App, media: ItemId) {
@@ -708,6 +731,10 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
         if ui.button("Clear Marker").on_hover_text("Clear the marker at the playhead").clicked() {
             clear_marker(app);
+        }
+        ui.separator();
+        if ui.add_enabled(app.selection.is_some(), egui::Button::new("Ripple Delete")).on_hover_text("Remove the selected clip and close the gap (Shift+Delete)").clicked() {
+            ripple_delete_selected(app);
         }
         ui.separator();
         let mut snapping = app.session.state.snapping;
@@ -1631,5 +1658,73 @@ mod tests {
         let (_, clip, _) = loaded.project.resolve_media(src).unwrap();
         assert_eq!((clip.mark_in, clip.mark_out), (Some(Tick(1000)), Some(Tick(2000))));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ripple_delete_closes_the_gap_across_linked_av_and_markers_and_refuses_locks() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "Ripple"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let a = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 2.0})).unwrap()["item"].as_u64().unwrap());
+        let b = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 1.0})).unwrap()["item"].as_u64().unwrap());
+        let seq = s.state.active_sequence.unwrap();
+        let tg = s.targeting();
+        let plan = {
+            let q = s.active_sequence().unwrap();
+            let mut p = plan_placement(&s.project, q, a, &tg).unwrap();
+            p.at = Tick::ZERO;
+            p
+        };
+        s.execute("timeline.place", placement_params(a, seq, &plan)).unwrap();
+
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+        let two_seconds = Tick(2 * TICKS_PER_SECOND);
+        app.playhead = two_seconds;
+        super::place_at_playhead(&mut app, b, false);
+        app.execute("markers.add", json!({"time": TICKS_PER_SECOND / 2, "name": "inside"})).unwrap();
+        app.execute("markers.add", json!({"time": two_seconds.0, "name": "edge"})).unwrap();
+        app.execute("markers.add", json!({"time": 3 * TICKS_PER_SECOND, "name": "after"})).unwrap();
+
+        let first = {
+            let q = app.session.active_sequence().unwrap();
+            let first = q.video_tracks[0].items.iter().find(|i| i.item == a).unwrap().id;
+            assert!(q.audio_tracks[0].items.iter().any(|i| i.item == a), "the fixture is a linked A/V pair");
+            first
+        };
+        app.selection = Some(first);
+        super::ripple_delete_selected(&mut app);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let v1 = &q.video_tracks[0];
+            assert!(!v1.items.iter().any(|i| i.item == a), "ripple delete removes A's picture");
+            assert_eq!(v1.items.iter().find(|i| i.item == b).unwrap().start, Tick::ZERO, "B closes the gap");
+            let a1 = &q.audio_tracks[0];
+            assert!(!a1.items.iter().any(|i| i.item == a), "ripple delete removes A's linked sound");
+            assert_eq!(a1.items.iter().find(|i| i.item == b).unwrap().start, Tick::ZERO, "linked sound stays in sync");
+            let marker_at = |name: &str| q.markers.iter().find(|m| m.name == name).unwrap().start;
+            assert_eq!(marker_at("inside"), Tick(TICKS_PER_SECOND / 2), "a marker inside the removed span stays");
+            assert_eq!(marker_at("edge"), Tick::ZERO, "a marker at the removed span's end moves to the gap start");
+            assert_eq!(marker_at("after"), Tick(TICKS_PER_SECOND), "later markers move left by the gap");
+        }
+
+        app.undo();
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(q.video_tracks[0].items.iter().find(|i| i.item == a).unwrap().start, Tick::ZERO, "undo restores A");
+            assert_eq!(q.video_tracks[0].items.iter().find(|i| i.item == b).unwrap().start, two_seconds, "undo restores B");
+            assert_eq!(q.markers.iter().find(|m| m.name == "edge").unwrap().start, two_seconds, "undo restores marker positions");
+        }
+
+        // A locked track refuses the whole edit rather than desynchronising the pair.
+        let (first, video_track) = {
+            let q = app.session.active_sequence().unwrap();
+            (q.video_tracks[0].items.iter().find(|i| i.item == a).unwrap().id, q.video_tracks[0].id)
+        };
+        app.execute("timeline.setTrack", json!({"track": video_track.0, "locked": true})).unwrap();
+        app.selection = Some(first);
+        super::ripple_delete_selected(&mut app);
+        assert!(app.status.contains("locked"), "the status explains the refusal, got {:?}", app.status);
+        let q = app.session.active_sequence().unwrap();
+        assert!(q.video_tracks[0].items.iter().any(|i| i.item == a), "the locked clip is untouched");
     }
 }
