@@ -15,6 +15,7 @@ use crate::pixels;
 
 const ROW_H: f32 = 34.0;
 const RULER_H: f32 = 18.0;
+const TIMELINE_HEADER_H: f32 = 54.0;
 const GENERATOR_SECONDS: f64 = 10.0;
 /// The fixed track-header column: target, source-patch, visibility/mute/solo,
 /// lock and the track name. The timeline body (ruler and clips) starts to its
@@ -563,6 +564,68 @@ pub(crate) fn source_edit(app: &mut App, insert: bool) {
     }
 }
 
+/// The edit point next to the selected clip: its own out edge with the following
+/// clip, or the previous clip's out edge with its in edge.
+fn roll_pair(app: &App) -> Option<(ClipId, ClipId)> {
+    let (clip, _) = app.selected_clip()?;
+    let q = app.sequence()?;
+    for track in q.video_tracks.iter().chain(&q.audio_tracks) {
+        let Some(idx) = track.items.iter().position(|i| i.id == clip) else { continue };
+        let item = &track.items[idx];
+        if let Some(next) = track.items.get(idx + 1).filter(|n| n.start == item.end()) {
+            return Some((clip, next.id));
+        }
+        if let Some(prev) = idx.checked_sub(1).map(|i| &track.items[i]).filter(|p| p.end() == item.start) {
+            return Some((prev.id, clip));
+        }
+    }
+    None
+}
+
+/// Roll the selected edit point by `frames` (one frame per step) through the
+/// engine's `timeline.roll`. The clips' surrounding timeline positions and the
+/// sequence duration stay fixed.
+pub(crate) fn roll_selected(app: &mut App, frames: i64) {
+    let Some((left, right)) = roll_pair(app) else {
+        app.status = "Roll needs a selected clip with an adjacent clip".to_string();
+        return;
+    };
+    match app.execute("timeline.roll", serde_json::json!({"left": left.0, "right": right.0, "deltaFrames": frames})) {
+        Ok(value) => {
+            let applied = value["delta"].as_i64().unwrap_or(0);
+            let step = app.session.sequence_rate().frame_duration().0.max(1);
+            app.status = format!("Rolled {} frame(s){}", applied / step, if applied == 0 { " (clamped)" } else { "" });
+        }
+        Err(e) => app.status = e,
+    }
+}
+
+/// Slip the selected clip by `frames`: its timeline start/end and duration stay
+/// put while its source In/Out move together.
+pub(crate) fn slip_selected(app: &mut App, frames: i64) {
+    let Some((clip, _)) = app.selected_clip() else {
+        app.status = "Select a clip to slip".to_string();
+        return;
+    };
+    match app.execute("timeline.slip", serde_json::json!({"clip": clip.0, "deltaFrames": frames})) {
+        Ok(_) => app.status = format!("Slipped {frames} frame(s)"),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Slide the selected clip by `frames`: it moves in timeline time while the
+/// adjacent clips' source ranges absorb the change, keeping the sequence bounds.
+pub(crate) fn slide_selected(app: &mut App, frames: i64) {
+    let Some((clip, _)) = app.selected_clip() else {
+        app.status = "Select a clip to slide".to_string();
+        return;
+    };
+    match app.execute("timeline.slide", serde_json::json!({"clip": clip.0, "deltaFrames": frames})) {
+        Ok(_) => app.status = format!("Slid {frames} frame(s)"),
+        Err(e) => app.status = e,
+    }
+}
+
 /// Ripple delete the selected clip through `edit.rippleDelete`: remove it (the
 /// engine expands to its linked A/V), then close the gap on the tracks that lost
 /// material plus every sync-locked track. A locked track refuses the whole edit
@@ -698,8 +761,8 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
     ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
-    let mut header =
-        ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), 26.0))).id_salt("timeline-head"));
+    let mut header = ui
+        .new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), TIMELINE_HEADER_H))).id_salt("timeline-head"));
     header.add_space(4.0);
     header.horizontal(|ui| {
         ui.label("Timeline");
@@ -760,14 +823,42 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             "Track T/S: target/patch · V: visible · M: mute · ◉: solo · L: lock · Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit",
         );
     });
+    let has_clip = app.selection.is_some();
+    let has_pair = roll_pair(app).is_some();
+    header.horizontal(|ui| {
+        ui.label("Trim");
+        if ui.add_enabled(has_pair, egui::Button::new("Roll -1")).on_hover_text("Roll the selected edit point one frame left (Alt+Ctrl+Left)").clicked() {
+            roll_selected(app, -1);
+        }
+        if ui.add_enabled(has_pair, egui::Button::new("Roll +1")).on_hover_text("Roll the selected edit point one frame right (Alt+Ctrl+Right)").clicked() {
+            roll_selected(app, 1);
+        }
+        ui.separator();
+        if ui.add_enabled(has_clip, egui::Button::new("Slip -1")).on_hover_text("Slip the selected clip one frame back in its source (Alt+Left)").clicked() {
+            slip_selected(app, -1);
+        }
+        if ui.add_enabled(has_clip, egui::Button::new("Slip +1")).on_hover_text("Slip the selected clip one frame forward in its source (Alt+Right)").clicked()
+        {
+            slip_selected(app, 1);
+        }
+        ui.separator();
+        if ui.add_enabled(has_clip, egui::Button::new("Slide -1")).on_hover_text("Slide the selected clip one frame left (Alt+Shift+Left)").clicked() {
+            slide_selected(app, -1);
+        }
+        if ui.add_enabled(has_clip, egui::Button::new("Slide +1")).on_hover_text("Slide the selected clip one frame right (Alt+Shift+Right)").clicked() {
+            slide_selected(app, 1);
+        }
+        ui.separator();
+        ui.colored_label(egui::Color32::GRAY, "Alt+Left/Right: slip · Alt+Shift: slide · Alt+Ctrl: roll");
+    });
 
     let Some(s) = app.sequence() else {
-        let mut body = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(rect.min + egui::vec2(0.0, 26.0), rect.max)));
+        let mut body = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(rect.min + egui::vec2(0.0, TIMELINE_HEADER_H), rect.max)));
         body.label("No sequence");
         return;
     };
     let rows = s.video_tracks.len() + s.audio_tracks.len();
-    let strip = egui::Rect::from_min_max(rect.min + egui::vec2(0.0, 26.0), rect.max);
+    let strip = egui::Rect::from_min_max(rect.min + egui::vec2(0.0, TIMELINE_HEADER_H), rect.max);
     let head_w = TRACK_HEAD_W.min((strip.width() * 0.4).max(0.0));
     let head = egui::Rect::from_min_max(strip.min, egui::pos2(strip.min.x + head_w, strip.max.y));
     let body = egui::Rect::from_min_max(egui::pos2(strip.min.x + head_w, strip.min.y), strip.max);
@@ -1701,8 +1792,8 @@ mod tests {
             let a1 = &q.audio_tracks[0];
             assert!(!a1.items.iter().any(|i| i.item == a), "ripple delete removes A's linked sound");
             assert_eq!(a1.items.iter().find(|i| i.item == b).unwrap().start, Tick::ZERO, "linked sound stays in sync");
+            assert!(q.markers.iter().all(|m| m.name != "inside"), "a marker inside the removed span is removed");
             let marker_at = |name: &str| q.markers.iter().find(|m| m.name == name).unwrap().start;
-            assert_eq!(marker_at("inside"), Tick(TICKS_PER_SECOND / 2), "a marker inside the removed span stays");
             assert_eq!(marker_at("edge"), Tick::ZERO, "a marker at the removed span's end moves to the gap start");
             assert_eq!(marker_at("after"), Tick(TICKS_PER_SECOND), "later markers move left by the gap");
         }
@@ -1713,6 +1804,11 @@ mod tests {
             assert_eq!(q.video_tracks[0].items.iter().find(|i| i.item == a).unwrap().start, Tick::ZERO, "undo restores A");
             assert_eq!(q.video_tracks[0].items.iter().find(|i| i.item == b).unwrap().start, two_seconds, "undo restores B");
             assert_eq!(q.markers.iter().find(|m| m.name == "edge").unwrap().start, two_seconds, "undo restores marker positions");
+            assert_eq!(
+                q.markers.iter().find(|m| m.name == "inside").unwrap().start,
+                Tick(TICKS_PER_SECOND / 2),
+                "undo restores the marker removed inside the span"
+            );
         }
 
         // A locked track refuses the whole edit rather than desynchronising the pair.
@@ -1726,5 +1822,96 @@ mod tests {
         assert!(app.status.contains("locked"), "the status explains the refusal, got {:?}", app.status);
         let q = app.session.active_sequence().unwrap();
         assert!(q.video_tracks[0].items.iter().any(|i| i.item == a), "the locked clip is untouched");
+    }
+
+    /// `count` adjacent 2 s clips cut from 4 s media (so each keeps a 2 s handle),
+    /// placed through the Source monitor's real three-point edit.
+    fn trimmed_clip_app(count: usize) -> (crate::app::App, Vec<ItemId>, Vec<ClipId>) {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "Trim"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let items: Vec<ItemId> =
+            (0..count).map(|_| ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 4.0})).unwrap()["item"].as_u64().unwrap())).collect();
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+        let two_seconds = Tick(2 * TICKS_PER_SECOND);
+        let fd = FrameRate::FPS_24.frame_duration();
+        for (k, item) in items.iter().enumerate() {
+            app.playhead = Tick(two_seconds.0 * k as i64);
+            super::open_source(&mut app, *item);
+            super::source_set_playhead(&mut app, Tick::ZERO);
+            super::source_mark(&mut app, true);
+            super::source_set_playhead(&mut app, two_seconds - fd);
+            super::source_mark(&mut app, false);
+            super::source_edit(&mut app, false);
+        }
+        let clips = app.session.active_sequence().unwrap().video_tracks[0].items.iter().map(|i| i.id).collect();
+        (app, items, clips)
+    }
+
+    #[test]
+    fn roll_moves_only_the_shared_edit_point_and_undoes() {
+        let (mut app, _items, clips) = trimmed_clip_app(2);
+        let two_seconds = Tick(2 * TICKS_PER_SECOND);
+        let half = FrameRate::FPS_24.tick_of(12);
+        app.selection = Some(clips[0]);
+        super::roll_selected(&mut app, 12);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let a = q.video_tracks[0].items.iter().find(|i| i.id == clips[0]).unwrap();
+            let b = q.video_tracks[0].items.iter().find(|i| i.id == clips[1]).unwrap();
+            assert_eq!(a.start, Tick::ZERO, "roll leaves the left clip's start fixed");
+            assert_eq!(a.end(), two_seconds + half, "roll extends the left clip");
+            assert_eq!(b.start, two_seconds + half, "the shared edit point moved");
+            assert_eq!(b.end(), Tick(4 * TICKS_PER_SECOND), "roll leaves the right clip's end fixed");
+            assert_eq!(b.source_in, half, "the right clip loses the rolled head frames");
+        }
+        app.undo();
+        let q = app.session.active_sequence().unwrap();
+        assert_eq!(q.video_tracks[0].items.iter().find(|i| i.id == clips[0]).unwrap().end(), two_seconds, "undo restores the edit point");
+        assert_eq!(q.video_tracks[0].items.iter().find(|i| i.id == clips[1]).unwrap().start, two_seconds, "undo restores the right clip");
+    }
+
+    #[test]
+    fn slip_and_slide_keep_the_right_things_fixed() {
+        let (mut app, _items, clips) = trimmed_clip_app(3);
+        let two_seconds = Tick(2 * TICKS_PER_SECOND);
+        let four_seconds = Tick(4 * TICKS_PER_SECOND);
+        let six_seconds = Tick(6 * TICKS_PER_SECOND);
+        let half = FrameRate::FPS_24.tick_of(12);
+
+        // Slip: only the selected clip's source range moves.
+        app.selection = Some(clips[1]);
+        super::slip_selected(&mut app, 12);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let a = q.video_tracks[0].items.iter().find(|i| i.id == clips[0]).unwrap();
+            let b = q.video_tracks[0].items.iter().find(|i| i.id == clips[1]).unwrap();
+            let c = q.video_tracks[0].items.iter().find(|i| i.id == clips[2]).unwrap();
+            assert_eq!((b.start, b.end()), (two_seconds, four_seconds), "slip keeps B's timeline span");
+            assert_eq!(b.source_in, half, "slip moves B's source In");
+            assert_eq!((a.start, a.end()), (Tick::ZERO, two_seconds), "slip leaves the left neighbour alone");
+            assert_eq!((c.start, c.end()), (four_seconds, six_seconds), "slip leaves the right neighbour alone");
+        }
+        app.undo();
+
+        // Slide: B moves, and the neighbours absorb the move in their source ranges.
+        app.selection = Some(clips[1]);
+        super::slide_selected(&mut app, 12);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let a = q.video_tracks[0].items.iter().find(|i| i.id == clips[0]).unwrap();
+            let b = q.video_tracks[0].items.iter().find(|i| i.id == clips[1]).unwrap();
+            let c = q.video_tracks[0].items.iter().find(|i| i.id == clips[2]).unwrap();
+            assert_eq!((b.start, b.end()), (two_seconds + half, four_seconds + half), "slide moves B by 12 frames");
+            assert_eq!(a.start, Tick::ZERO, "slide keeps the sequence start");
+            assert_eq!(a.end(), two_seconds + half, "slide extends the left neighbour");
+            assert_eq!(c.start, four_seconds + half, "slide moves the right neighbour's start");
+            assert_eq!(c.end(), six_seconds, "slide keeps the sequence end");
+            assert_eq!(c.source_in, half, "slide trims the right neighbour's head");
+        }
+        app.undo();
+        let q = app.session.active_sequence().unwrap();
+        assert_eq!(q.video_tracks[0].items.iter().find(|i| i.id == clips[1]).unwrap().start, two_seconds, "undo restores B");
+        assert_eq!(q.video_tracks[0].items.iter().find(|i| i.id == clips[2]).unwrap().start, four_seconds, "undo restores C");
     }
 }

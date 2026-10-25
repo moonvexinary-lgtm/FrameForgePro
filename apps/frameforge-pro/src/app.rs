@@ -675,6 +675,27 @@ impl eframe::App for App {
                 edit && !cmd && i.key_pressed(egui::Key::Period),
             )
         });
+        // Alt+Left/Right nudge the selected clip: slip by default, slide with
+        // Shift, roll the adjacent edit point with Ctrl.
+        let nudge = ui.ctx().input(|i| {
+            if !(in_edit && !typing) || !i.modifiers.alt {
+                return None;
+            }
+            let dir = if i.key_pressed(egui::Key::ArrowLeft) {
+                -1
+            } else if i.key_pressed(egui::Key::ArrowRight) {
+                1
+            } else {
+                return None;
+            };
+            Some(if i.modifiers.command {
+                ("roll", dir)
+            } else if i.modifiers.shift {
+                ("slide", dir)
+            } else {
+                ("slip", dir)
+            })
+        });
         if save_key {
             self.save();
         }
@@ -700,6 +721,13 @@ impl eframe::App for App {
             crate::edit::ripple_delete_selected(self);
         } else if delete {
             self.delete_selected_clip();
+        }
+        if let Some((tool, dir)) = nudge {
+            match tool {
+                "roll" => crate::edit::roll_selected(self, dir),
+                "slide" => crate::edit::slide_selected(self, dir),
+                _ => crate::edit::slip_selected(self, dir),
+            }
         }
         if add_edit {
             self.add_edit_all_tracks();
