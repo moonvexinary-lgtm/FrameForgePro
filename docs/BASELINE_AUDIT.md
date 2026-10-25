@@ -1,12 +1,12 @@
 # Baseline audit — FrameForge Pro
 
-Audit date: 2026-10-22 · Updated: 2026-10-25 with R1/R2/T1–T5 evidence · Auditor: coding agent (source inspection + CI evidence, no assumptions)
+Audit date: 2026-10-22 · Updated: 2026-10-25 with R1/R2/T1-T8 evidence · Auditor: coding agent (source inspection + CI evidence, no assumptions)
 
 ## 1. Exact refs inspected
 
 | Ref | Commit | What it is |
 |---|---|---|
-| `frameforge-rust-rewrite` | `82283f6` | **The maintained implementation.** Rust workspace: FilmCraft editing engine + EffectCraft compositing engine + the egui application shell. R1/R2 add the cached roto mask seam and the XMem worker transport; T1 adds real track visibility/mute/solo/lock headers; T2 adds sequence markers; T3 adds move/trim snapping; T4 adds insert/overwrite at the playhead; T5 adds the Source monitor with source In/Out and marker ripple. |
+| `frameforge-rust-rewrite` | `805a968` | **The maintained implementation.** Rust workspace: FilmCraft editing engine + EffectCraft compositing engine + the egui application shell. R1/R2 add the cached roto mask seam and the XMem worker transport; T1 adds real track visibility/mute/solo/lock headers; T2 adds sequence markers; T3 adds move/trim snapping; T4 adds insert/overwrite at the playhead; T5 adds the Source monitor with source In/Out and marker ripple; T6 adds ripple delete; T7 adds roll/slip/slide; T8 adds real video/audio transitions. |
 | `frameforge-dev` | `2601eb5` | The original C++/Qt/QML application (a Kdenlive fork, GPL-3.0, 2 003 files). It is an **ancestor** of the Rust branch (`git merge-base --is-ancestor` → true), preserved unchanged, and is not built or linked. |
 | `frameforge-cpp-legacy` (tag, documented in README) | `2601eb5` | Recovery point for the Qt application. |
 | Upstream FilmCraft | `6c3948a36c80e4996d924766ba7157eec4fca85e` | Pinned git dependency (`filmcraft-*`). |
@@ -23,8 +23,8 @@ single fast-forward and should be an explicit decision, not a side effect of thi
 - Verified command shapes against FilmCraft's own tests (`effects.apply`, `effects.setParam`,
   `effects.toggleEnabled`, `effects.remove`, `mixer.setStrip`) rather than trusting the shell's call sites.
 - Read the last green CI run's logs (`39729926210`) for measured test and effect-sweep numbers.
-  R1, R2 and T1–T4 were verified by their own green runs (`40056112214`, `40059782293`, `40063686209`,
-  `40128137965`, `40133164791`, `40138769007`, `40156687200`); the R2 and T1–T4 runs also execute `roto-bench 4` in
+  R1, R2 and T1-T8 were verified by their own green runs (`40056112214`, `40059782293`, `40063686209`,
+  `40128137965`, `40133164791`, `40138769007`, `40156687200`, `40163011141`); the R2 and T1–T8 runs also execute `roto-bench 4` in
   the binary self-test step.
 - **No local Cargo build was run** (storage policy). CI is the compiler. Disk free at audit time: **53.6 GB**.
 
@@ -52,6 +52,9 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 | Timeline track state | T1 (`40063686209`): header buttons call real `timeline.setTrack` keys for video visibility (`enabled`), audio mute (`muted`), solo and lock; the edit test asserts sequence state and undo. UI click-through and render-difference tests are still open. |
 | Sequence markers | T2: markers are drawn on the ruler and click-to-jump; Add/Clear run the real undoable `markers.add` / `markers.clearCurrent`; Prev/Next navigate. The edit test asserts placement, navigation, clear and undo. T5 adds optional ripple on source insert. No rename editor or marker drag yet. |
 | Source monitor + source In/Out + marker ripple | T5: the Edit monitor area is split Program/Source; the Source panel renders `render_item` previews, has source timecode, transport, seek and In/Out marks (I/O, Shift+I/O, go/clear) stored on the media item so they persist; source Insert/Overwrite place the marked range and a Ripple Markers toggle (default on) moves sequence markers at/after the insert point. Source playback is video-only/silent. |
+| Ripple delete | T6: **Ripple Delete** (button + Shift+Delete) runs `edit.rippleDelete`; linked A/V is removed together, affected and sync-locked tracks close the gap, markers inside the removed span are removed while markers at/after it move, and undo restores clips and markers. The shell refuses the edit when the selected clip's track is locked; a locked linked partner is left to the engine. |
+| Roll / slip / slide | T7: the timeline Trim row and Alt+arrow nudges run distinct engine commands (`timeline.roll`, `timeline.slip`, `timeline.slide`). Roll moves the shared edit point, slip moves only the source range, slide moves the clip between fixed neighbours; tests assert exact 12-frame results and undo. One-frame steps only, no drag. |
+| Transitions | T8: **Dissolve** / **Crossfade** (Ctrl/Cmd+D, Ctrl/Cmd+Shift+D) apply a real 12-frame `cross_dissolve` / `constant_power` transition at the selected clip's In edge, resolving a linked partner automatically. Render tests sample actual red/blue pixels at the cut and the mixed audio RMS; each transition is one undo step. No transition browser, custom duration or alignment UI yet. |
 | Snapping | T3: a toolbar Snap checkbox drives the engine's `sequence.snap` editor state; moves snap their start or end and trims snap the edge to zero, the playhead or another clip edge within 8 screen pixels. The pure snap functions are unit-tested; markers are not targets yet. |
 | Insert / overwrite | T4: a project-panel selection plus timeline **Insert** / **Overwrite** buttons place the selected media at the playhead through `timeline.place`'s `insert` flag (undoable). The test drives a real `App` and checks ripple vs trim. T5 adds the Source panel's Insert/Overwrite over the marked source range. |
 | Real export with verified output | H.264 + AAC export, decoded back and checked (resolution, rate, duration, audio peak, blur present) in `m2_poc.rs`. |
@@ -64,7 +67,7 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 | Audio mixer | `mixer.setStrip` with `volumeDb`, `pan`, `muted`, `solo` — exact upstream parameter names verified. |
 | Audio playback clock | cpal stream fed by a worker mixing through the engine's mixer, playhead = device frames; honest wall-clock fallback. T2 opens the device lazily on the first play (construction never touches WASAPI), which removed an intermittent test-binary `STATUS_ACCESS_VIOLATION`. |
 | Panic containment | `catch_unwind` around the frame; session survives. |
-| Cloud-only build + downloadable dev build | Run `40156687200`: fmt/clippy/check/test/release green, self-test + `roto-bench 4` green, **45 tests**, 25,544,460-byte artifact. |
+| Cloud-only build + downloadable dev build | Run `40163011141`: fmt/clippy/check/test/release green, self-test + `roto-bench 4` green, **50 tests**, 25,550,477-byte artifact. |
 
 Measured in run `39729926210`'s test log:
 
@@ -73,7 +76,7 @@ Measured in run `39729926210`'s test log:
 - FilmCraft's catalog is asserted at **≥ 60** effect definitions by the same test.
 - The M8 log behind those measurements ran 11 tests; the M12 suite was **28 tests**, R2 took it to
   **36 tests** (run `40059782293`), T1 took it to **37** (run `40063686209`), T2 to **38**
-  (run `40128137965`), T3 to **40** (run `40133164791`), T4 to **41** (run `40138769007`) and T5 to **45** (run `40156687200`).
+  (run `40128137965`), T3 to **40** (run `40133164791`), T4 to **41** (run `40138769007`), T5 to **45** (run `40156687200`) and T6-T8 to **50** (run `40163011141`).
 
 These counts are *registry entries exercised through the bridge*, not a claim that every effect is
 artistically complete or parameter-swept at multiple values. Golden-frame coverage exists for Gaussian blur
@@ -128,13 +131,13 @@ audit remains open.
 ## 8. Build, test, CI, sizes
 
 - CI: `windows-2025`, fmt → clippy `-D warnings` → check → test → release → self-test → artifact.
-- Last green code run: **40156687200** (T5); all **45** tests passed and the artifact is
-  `frameforge-pro-windows-dev`, **25,544,460 bytes** ZIP, 7-day retention. The T4 artifact was
-  25,521,310 bytes and the T3 artifact was
-  25,521,206 bytes, T2 25,521,671, T1 25,517,128, R2 25,512,804, R1 25,418,672 and M12 25,229,770;
-  the feature slices added no new external crate (`image` was already a workspace/app dependency; the
-  bridge now uses it too). The last extracted exe was **64,305,152 bytes** (M10/M12 measurement); the
-  T5 ZIP is the same order of size, but the T5 exe was not extracted locally.
+- Last green code run: **40163011141** (T6-T8); all **50** tests passed and the artifact is
+  `frameforge-pro-windows-dev`, **25,550,477 bytes** ZIP, 7-day retention. The T5 artifact was
+  25,544,460 bytes, T4 25,521,310, T3 25,521,206, T2 25,521,671, T1 25,517,128, R2 25,512,804,
+  R1 25,418,672 and M12 25,229,770; the feature slices added no new external crate (`image` was
+  already a workspace/app dependency; the bridge now uses it too). The last extracted exe was
+  **64,305,152 bytes** (M10/M12 measurement); the T8 ZIP is the same order of size, but the T8 exe
+  was not extracted locally.
 - `frameforge-pro roto-bench 4` runs in the binary self-test; it measures the Rust decode/scale/PNG
   path only and prints "XMem CPU inference: not measured". No XMem speed figure exists.
 - No installer yet; the tag workflow produces `frameforge-pro-<tag>-windows-x64.zip`.
@@ -184,7 +187,8 @@ fixed in M10), XMem (needs its own staged plan and a real worker benchmark). The
 
 Subsequent sessions completed R1 (mask cache/alpha), R2 (worker transport/exporter), T1 (real track
 visibility/mute/solo/lock headers), T2 (sequence markers on the ruler), T3 (move/trim snapping) and
-T4 (insert/overwrite at the playhead) and T5 (Source monitor with source In/Out and marker ripple).
-The next highest-impact work is the rest of timeline depth (ripple delete, roll/slip/slide,
-transitions), followed by R3's real XMem CPU run once the
+T4 (insert/overwrite at the playhead), T5 (Source monitor with source In/Out and marker ripple),
+T6 (ripple delete), T7 (roll/slip/slide) and T8 (real video/audio transitions).
+The next highest-impact work is sequence In/Out UI, source-marker and marker editing, a transition
+browser/custom duration, and UI automation/screenshots, followed by R3's real XMem CPU run once the
 optional runtime and weights are installed with consent.

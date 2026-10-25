@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T5 (2026-10-25) · Branch: `frameforge-rust-rewrite`
+Last updated: T8 (2026-10-25) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -307,7 +307,7 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
   At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
   (37 in run `40063686209`), T2 adds one (38 in run `40128137965`), T3 adds two (40 in run
-  `40133164791`), T4 adds one and T5 adds four, so the current suite is 45 (run `40156687200`).
+  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two and T8 adds two, so the current suite is 50 (run `40163011141`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
@@ -433,6 +433,79 @@ the editor no longer has to guess a duration for Insert/Overwrite.
   or source range drag; the Program monitor still owns In/Out for the sequence
   (sequence in/out UI is still open).
 
+## T6 - Ripple delete with linked A/V and marker ripple (CI-verified, run 40163011141)
+
+`Shift+Delete` and the timeline **Ripple Delete** button call the engine's real
+`edit.rippleDelete`. The engine expands the selection to linked A/V, deletes the
+clips, then closes the gap on every track that lost material and on sync-locked
+tracks; tracks that lost nothing are not shifted.
+
+- **Locked tracks**: the shell refuses the whole edit when the selected clip's
+  track is locked, instead of letting the linked pair desynchronise. The engine
+  would skip a locked track, so the pre-check gives the reason in the status
+  line. The pre-check only inspects the selected clip's track; a locked linked
+  partner is left to the engine and is a known edge case.
+- **Markers**: with Ripple Markers on (default), markers strictly inside the
+  removed span are removed; markers at the span's end or later move left by the
+  removed duration; earlier markers stay. Off leaves markers untouched. Undo
+  restores both clips and markers.
+- **Scope**: the gap closes on the tracks that lost clips plus sync-locked tracks
+  (engine `ripple_delete_spans` / `shift_track_from`); other tracks are untouched.
+- **Test**: `ripple_delete_closes_the_gap_across_linked_av_and_markers_and_refuses_locks`
+  drives a real linked Bars & Tone pair, asserts the picture and sound move
+  together, the before/inside/at/after marker policy, one-step undo, and the
+  locked-track refusal.
+- **Limitations**: no targeting-only ripple (it follows the engine's affected +
+  sync-locked policy); a transition selected alone cannot be ripple-deleted.
+
+## T7 - Roll, slip and slide (CI-verified, run 40163011141)
+
+The timeline header's **Trim** row and `Alt+Left/Right` (slip), `Alt+Shift+Left/Right`
+(slide) and `Alt+Ctrl+Left/Right` (roll) drive the engine's separate
+`timeline.roll`, `timeline.slip` and `timeline.slide` commands with
+`deltaFrames`, so the arithmetic uses the sequence rate's exact tick count and
+the engine clamps to the media handles.
+
+- **Roll**: `roll_pair` finds the adjacent pair on the selected clip's track -
+  its out edge with the next clip, or the previous clip's out edge with its in -
+  and rolls that shared edit point. The surrounding clip positions and the
+  sequence duration do not change.
+- **Slip**: only the selected clip's source In/Out move; its timeline span and
+  both neighbours stay put.
+- **Slide**: the selected clip moves; the left neighbour's out and the right
+  neighbour's source In absorb the move, so the sequence's outer boundaries stay
+  fixed.
+- **Tests**: `roll_moves_only_the_shared_edit_point_and_undoes` and
+  `slip_and_slide_keep_the_right_things_fixed` build 2 s clips with 2 s handles
+  through the Source monitor's three-point edit, then assert the exact 12-frame
+  results and one-step undo for each operation.
+- **Limitations**: the buttons and keyboard nudge one frame at a time (no drag
+  gesture or arbitrary edit-point picking yet); roll uses the nearest adjacent
+  pair only; the engine's clamped delta is reported in the status line.
+
+## T8 - Real video cross-dissolve and audio crossfade (CI-verified, run 40163011141)
+
+The **Dissolve** and **Crossfade** buttons (and Ctrl/Cmd+D,
+Ctrl/Cmd+Shift+D) apply a 12-frame transition at the selected clip's In edge
+through `sequence.applyVideoTransition` / `sequence.applyAudioTransition`.
+Selecting either half of a linked pair finds the other half, so picture and
+sound can be treated separately.
+
+- **Video**: the engine applies `cross_dissolve` centred on the cut
+  (start = cut - 6 frames, duration = 12 frames). `render_sequence` is the same
+  path the Program monitor and export use. The test renders colour mattes at
+  1.5 s (red), 2.0 s (a real red/blue mix) and 2.5 s (blue), then undoes the
+  transition and confirms the cut is a hard blue frame.
+- **Audio**: the engine applies `constant_power` gains over the same centred
+  range and `audio::mix_sequence` is the real mixer path. The test selects the
+  incoming picture, resolves its linked sound, and measures stereo RMS around
+  the cut. Both 1 kHz sides are phase-aligned in this fixture, so the overlap is
+  louder than either side, proving both sample streams are mixed.
+- **Undo**: each transition is one engine edit; applying both is two steps.
+- **Limitations**: only the default cross-dissolve/constant-power transition and
+  a fixed 12-frame duration are exposed; there is no effect browser, custom
+  duration, alignment control or transition handle in the UI yet.
+
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
 The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
@@ -504,6 +577,9 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | T3 | snapping: a toolbar Snap toggle on `sequence.snap`; moves snap their start or end, trims snap the edge, to zero / the playhead / every other clip edge within 8 screen pixels; pure-function tests | ✔ (CI-verified, run 40133164791) |
 | T4 | insert / overwrite: bin-item selection, Insert and Overwrite at the playhead through the engine's `insert` flag, undoable; test drives a real App | ✔ (CI-verified, run 40138769007) |
 | T5 | Source monitor: real `render_item` preview, source timecode/transport/seek, engine-backed In/Out marks that persist, source Insert/Overwrite over the marked range, and the Ripple Markers toggle (default on) with boundary tests | CI-verified, run 40156687200 |
+| T6 | Ripple Delete (button + Shift+Delete) through `edit.rippleDelete`: linked A/V removal, gap closing on affected/sync-locked tracks, marker removal/move policy, locked-track refusal and one-step undo | CI-verified, run 40163011141 |
+| T7 | Separate Roll, Slip and Slide through the engine's `timeline.roll` / `timeline.slip` / `timeline.slide`, with trim-row buttons, Alt/Shift/Ctrl arrow nudges and model-level undo tests | CI-verified, run 40163011141 |
+| T8 | Real 12-frame video cross-dissolve and audio crossfade at the selected In edge (`sequence.applyVideoTransition` / `sequence.applyAudioTransition`), with deterministic rendered-pixel and mixed-sample tests | CI-verified, run 40163011141 |
 
 ## Dependency policy
 
