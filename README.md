@@ -16,7 +16,8 @@ Premiere Pro-inspired professional workflows.
 > real visibility, mute, solo and lock state (T1); T2 adds sequence markers on the ruler
 > with Add / Previous / Next / Clear, the **M** shortcut and click-to-jump; T3 adds move/trim
 > snapping to clip edges, the playhead and zero; T4 adds bin selection with Insert / Overwrite at
-> the playhead through the engine's real `insert` flag. R1 adds a validated cached-mask reader
+> the playhead through the engine's real `insert` flag; T5 adds a real Source monitor with
+> source In/Out marks, source-range Insert/Overwrite and a Ripple Markers toggle. R1 adds a validated cached-mask reader
 > and alpha application in `ComposedSource`, so a synthetic matte changes both preview and
 > H.264 export; R2 adds the JSON-lines worker protocol, a child-process client and the PNG
 > frame exporter (`roto-bench` measures only that Rust path). XMem inference, the Roto AI

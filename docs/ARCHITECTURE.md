@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T4 (2026-10-24) · Branch: `frameforge-rust-rewrite`
+Last updated: T5 (2026-10-25) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -307,7 +307,7 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
   At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
   (37 in run `40063686209`), T2 adds one (38 in run `40128137965`), T3 adds two (40 in run
-  `40133164791`) and T4 adds one, so the current suite is 41 (run `40138769007`).
+  `40133164791`), T4 adds one and T5 adds four, so the current suite is 45 (run `40156687200`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
@@ -390,8 +390,48 @@ the professional source edit that appends cannot express.
   builds a two-clip sequence, drives `place_at_playhead` through a real `App`,
   checks that insert shifted the first clip and that overwrite trimmed it, with
   an undo between.
-- **Limitations**: the source item has no in/out marks yet (the whole media is
-  placed); no source monitor; `Insert` does not ripple sequence markers.
+- **Limitations (resolved by T5)**: T4 itself placed the whole media item because
+  the shell had no source monitor or source marks. T5 adds both, and the Source
+  panel now places exactly the marked range.
+
+## T5 — Source monitor, source In/Out and marker ripple (CI-verified, run 40156687200)
+
+The engine already owns a real Source monitor (`source.open`/`source.inspect`/
+`source.setPlayhead`, media-item `mark_in`/`mark_out`, `source.insert` /
+`source.overwrite` with three-point editing and marker ripple). T5 wires it in:
+the editor no longer has to guess a duration for Insert/Overwrite.
+
+- **Panel**: the Edit workspace's monitor area is split into Program and Source
+  with a draggable gutter. The Source panel renders the open item through the
+  engine's own `filmcraft_render::render_item` path (same decode/colour path the
+  renderer uses), with source timecode, frame-step, a seek slider, Play/Pause and
+  In/Out controls. Playback is a **video-only wall clock**: the audio clock is
+  bound to the Program sequence, so source playback is silent and labelled so.
+- **Independence**: source seeking and marking act on `state.source_playhead` and
+  never move the Program monitor's playhead; the two previews are separate
+  textures. `I`/`O` set the source marks, `Shift+I`/`Shift+O` go to them, and
+  `,`/`.` are the engine's Insert/Overwrite shortcuts (Edit workspace only, and
+  they stand down while a text field has focus).
+- **Marks**: marks live on the media item (`mark_in`/`mark_out`), so they persist
+  through save/reopen with the project file (no schema change). The effective
+  range clamps one-sided marks to the source edges, collapses reversed marks to an
+  empty selection, and the panel says "No In/Out marks - using full source" when
+  neither is set.
+- **Placement**: the Source panel's **Insert (,)** / **Overwrite (.)** use
+  `source.insert` / `source.overwrite`, so they place exactly the marked range and
+  honor the engine's three-point edit. The T4 bin buttons still place the whole
+  item; double-click still appends.
+- **Marker ripple**: a **Ripple Markers** checkbox drives the engine's
+  `markers.rippleSequenceMarkers` state. FrameForge defaults it **on**
+  (Premiere-like). On insert, markers at or after the insert point move by the
+  inserted range; earlier markers stay. Overwrite does not ripple.
+- **Tests**: `source_open_previews_real_frames_and_its_marks_stay_off_the_program_playhead`,
+  `source_insert_places_the_marked_range_and_ripples_markers_with_undo` (with
+  before/at/after markers, undo, and ripple-off), `source_mark_edges_are_normalized_and_one_sided_marks_use_the_source_edges`
+  and `source_marks_survive_project_save_and_reopen`.
+- **Limitations**: source playback has no audio; there is no source-marker panel
+  or source range drag; the Program monitor still owns In/Out for the sequence
+  (sequence in/out UI is still open).
 
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
@@ -463,6 +503,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |
 | T3 | snapping: a toolbar Snap toggle on `sequence.snap`; moves snap their start or end, trims snap the edge, to zero / the playhead / every other clip edge within 8 screen pixels; pure-function tests | ✔ (CI-verified, run 40133164791) |
 | T4 | insert / overwrite: bin-item selection, Insert and Overwrite at the playhead through the engine's `insert` flag, undoable; test drives a real App | ✔ (CI-verified, run 40138769007) |
+| T5 | Source monitor: real `render_item` preview, source timecode/transport/seek, engine-backed In/Out marks that persist, source Insert/Overwrite over the marked range, and the Ripple Markers toggle (default on) with boundary tests | CI-verified, run 40156687200 |
 
 ## Dependency policy
 
