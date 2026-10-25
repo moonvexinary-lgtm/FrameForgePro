@@ -653,6 +653,8 @@ impl eframe::App for App {
             source_go_out,
             source_insert,
             source_overwrite,
+            lift_io,
+            extract_io,
         ) = ui.ctx().input(|i| {
             let cmd = i.modifiers.command;
             let edit = in_edit && !typing;
@@ -673,6 +675,8 @@ impl eframe::App for App {
                 edit && !cmd && i.modifiers.shift && i.key_pressed(egui::Key::O),
                 edit && !cmd && i.key_pressed(egui::Key::Comma),
                 edit && !cmd && i.key_pressed(egui::Key::Period),
+                edit && !cmd && i.key_pressed(egui::Key::Semicolon),
+                edit && !cmd && i.key_pressed(egui::Key::Quote),
             )
         });
         // Alt+Left/Right nudge the selected clip: slip by default, slide with
@@ -748,11 +752,22 @@ impl eframe::App for App {
         if next_marker_key {
             crate::edit::go_marker(self, true);
         }
+        // `I`/`O` mark the open source clip when there is one; with no source
+        // clip they mark the sequence's Program In/Out instead, so the keys
+        // are never a no-op.
         if source_in {
-            crate::edit::source_mark(self, true);
+            if self.session.state.source_item.is_some() {
+                crate::edit::source_mark(self, true);
+            } else {
+                crate::edit::program_mark(self, true);
+            }
         }
         if source_out {
-            crate::edit::source_mark(self, false);
+            if self.session.state.source_item.is_some() {
+                crate::edit::source_mark(self, false);
+            } else {
+                crate::edit::program_mark(self, false);
+            }
         }
         if source_go_in {
             crate::edit::source_goto(self, false);
@@ -765,6 +780,12 @@ impl eframe::App for App {
         }
         if source_overwrite {
             crate::edit::source_edit(self, false);
+        }
+        if lift_io {
+            crate::edit::lift_in_out(self);
+        }
+        if extract_io {
+            crate::edit::extract_in_out(self);
         }
 
         // Recovery autosave (throttled; only for saved, dirty projects).

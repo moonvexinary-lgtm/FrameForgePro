@@ -110,6 +110,56 @@ pub(crate) fn clear_marker(app: &mut App) {
     }
 }
 
+/// Set the sequence (Program) In or Out point at the playhead through
+/// `markers.markIn` / `markers.markOut` (frame-snapped, undoable). The Source
+/// panel uses the same commands with `target: "source"` when a source clip is
+/// open; this is the Program side.
+pub(crate) fn program_mark(app: &mut App, is_in: bool) {
+    if app.sequence().is_none() {
+        app.status = "No sequence".to_string();
+        return;
+    }
+    let at = app.session.sequence_rate().snap_nearest(app.playhead.max(Tick::ZERO));
+    app.playhead = at;
+    app.session.set_playhead(at);
+    let command = if is_in { "markers.markIn" } else { "markers.markOut" };
+    match app.execute(command, serde_json::json!({"time": at.0})) {
+        Ok(_) => app.status = if is_in { "Sequence In marked".to_string() } else { "Sequence Out marked".to_string() },
+        Err(e) => app.status = e,
+    }
+}
+
+/// Clear the sequence (Program) In/Out points through `markers.clearInOut`
+/// (undoable). Source marks on media items are untouched.
+pub(crate) fn program_clear_in_out(app: &mut App) {
+    match app.execute("markers.clearInOut", serde_json::json!({"target": "program"})) {
+        Ok(_) => app.status = "Sequence In/Out cleared".to_string(),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Lift the sequence In/Out range through `sequence.lift`: the targeted tracks
+/// lose the range and keep a gap. The marks stay set.
+pub(crate) fn lift_in_out(app: &mut App) {
+    match app.execute("sequence.lift", serde_json::json!({})) {
+        Ok(_) => app.status = "Lifted the In/Out range (gap kept)".to_string(),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Extract the sequence In/Out range through `sequence.extract`: targeted and
+/// sync-locked tracks lose the range and close the gap. The engine clears the
+/// marks and parks its playhead at the range start, which the shell follows.
+pub(crate) fn extract_in_out(app: &mut App) {
+    match app.execute("sequence.extract", serde_json::json!({})) {
+        Ok(_) => {
+            app.playhead = app.session.playhead();
+            app.status = "Extracted the In/Out range (gap closed)".to_string();
+        }
+        Err(e) => app.status = e,
+    }
+}
+
 /// Jump to the next / previous marker (editor navigation, no document edit).
 pub(crate) fn go_marker(app: &mut App, forward: bool) {
     let next = app.sequence().and_then(|s| {
@@ -845,6 +895,23 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
         if ui.button("Clear Marker").on_hover_text("Clear the marker at the playhead").clicked() {
             clear_marker(app);
+        }
+        ui.separator();
+        let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
+        if ui.button("Mark In").on_hover_text("Set the sequence In point at the playhead (I when no source clip is open)").clicked() {
+            program_mark(app, true);
+        }
+        if ui.button("Mark Out").on_hover_text("Set the sequence Out point at the playhead (O when no source clip is open)").clicked() {
+            program_mark(app, false);
+        }
+        if ui.add_enabled(marked, egui::Button::new("Clear I/O")).on_hover_text("Clear the sequence In/Out points").clicked() {
+            program_clear_in_out(app);
+        }
+        if ui.add_enabled(marked, egui::Button::new("Lift (;)")).on_hover_text("Remove the In/Out range and leave a gap (;)").clicked() {
+            lift_in_out(app);
+        }
+        if ui.add_enabled(marked, egui::Button::new("Extract (')")).on_hover_text("Remove the In/Out range and close the gap (')").clicked() {
+            extract_in_out(app);
         }
         ui.separator();
         if ui.add_enabled(app.selection.is_some(), egui::Button::new("Ripple Delete")).on_hover_text("Remove the selected clip and close the gap (Shift+Delete)").clicked() {
@@ -2075,5 +2142,73 @@ mod tests {
         assert!(before > 0.01, "the fixture has sound: {before}");
         assert!(mid > before * 1.15, "the crossfade overlaps both sides at the cut: {mid} vs {before}");
         assert!(mid > after * 1.15, "the crossfade is real on the incoming side too: {mid} vs {after}");
+    }
+
+    #[test]
+    fn sequence_in_out_marks_lift_leaves_a_gap_and_extract_closes_it_and_undoes() {
+        let (mut app, _items, clips) = trimmed_clip_app(3);
+        let two_seconds = Tick(2 * TICKS_PER_SECOND);
+        let four_seconds = Tick(4 * TICKS_PER_SECOND);
+        let fd = FrameRate::FPS_24.frame_duration();
+
+        // Program In at 2 s, Out on the last frame of the 2 s clip (Out is inclusive).
+        app.playhead = two_seconds;
+        super::program_mark(&mut app, true);
+        app.playhead = four_seconds - fd;
+        super::program_mark(&mut app, false);
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(q.mark_in, Some(two_seconds), "Program In lands at the playhead");
+            assert_eq!(q.mark_out, Some(four_seconds - fd), "Program Out is inclusive");
+        }
+
+        // Lift removes B from the targeted V1/A1 tracks and leaves a gap: C stays put.
+        super::lift_in_out(&mut app);
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert!(!q.video_tracks[0].items.iter().any(|i| i.id == clips[1]), "B is gone");
+            assert_eq!(
+                q.video_tracks[0].items.iter().map(|i| i.start).collect::<Vec<_>>(),
+                vec![Tick::ZERO, four_seconds],
+                "lift leaves C where it was (the gap stays)"
+            );
+            assert_eq!(
+                q.audio_tracks[0].items.iter().map(|i| i.start).collect::<Vec<_>>(),
+                vec![Tick::ZERO, four_seconds],
+                "the linked sound lifts with the picture"
+            );
+            assert_eq!(q.mark_in, Some(two_seconds), "lift keeps the marks");
+        }
+
+        app.undo();
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(q.video_tracks[0].items.iter().map(|i| i.start).collect::<Vec<_>>(), vec![Tick::ZERO, two_seconds, four_seconds], "undo restores B");
+        }
+
+        // Extract closes the gap, clears the marks and parks the playhead at the range start.
+        super::extract_in_out(&mut app);
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(
+                q.video_tracks[0].items.iter().map(|i| i.start).collect::<Vec<_>>(),
+                vec![Tick::ZERO, two_seconds],
+                "extract closes the gap (C moves to B's start)"
+            );
+            assert_eq!(q.audio_tracks[0].items.iter().map(|i| i.start).collect::<Vec<_>>(), vec![Tick::ZERO, two_seconds], "the linked sound stays in sync");
+            assert_eq!((q.mark_in, q.mark_out), (None, None), "extract clears the marks");
+        }
+        assert_eq!(app.playhead, two_seconds, "the shell follows the engine playhead to the range start");
+
+        app.undo();
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(
+                q.video_tracks[0].items.iter().map(|i| i.start).collect::<Vec<_>>(),
+                vec![Tick::ZERO, two_seconds, four_seconds],
+                "undo restores the extracted range"
+            );
+            assert_eq!(q.mark_in, Some(two_seconds), "undo restores the cleared marks");
+        }
     }
 }
