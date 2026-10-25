@@ -549,8 +549,16 @@ pub(crate) fn source_edit(app: &mut App, insert: bool) {
         return;
     }
     let command = if insert { "source.insert" } else { "source.overwrite" };
+    // The engine's three-point edit uses its own sequence playhead; keep it in
+    // step with the timeline playhead the user sees.
+    app.session.set_playhead(app.playhead);
     match app.execute(command, serde_json::json!({})) {
-        Ok(_) => app.status = if insert { "Inserted from Source".to_string() } else { "Overwrote from Source".to_string() },
+        Ok(_) => {
+            // The three-point edit parks the engine playhead at the end of the
+            // placed range; follow it so the timeline stays in step.
+            app.playhead = app.session.playhead();
+            app.status = if insert { "Inserted from Source".to_string() } else { "Overwrote from Source".to_string() };
+        }
         Err(e) => app.status = e,
     }
 }
