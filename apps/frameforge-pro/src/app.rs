@@ -68,6 +68,14 @@ pub struct App {
     pub selection: Option<ClipId>,
     /// The media item selected in the project panel (the Insert/Overwrite source).
     pub bin_selection: Option<ItemId>,
+    /// The cached Source-monitor texture and what it was rendered from.
+    pub source_monitor: Option<SourceMonitor>,
+    /// Source-monitor playback: a video-only wall clock (the audio clock is
+    /// bound to the Program monitor's sequence).
+    pub source_playing: bool,
+    pub source_last: Option<Instant>,
+    /// The Source-monitor panel width (draggable gutter).
+    pub source_w: f32,
     pub seq: Option<ItemId>,
     pub status: String,
     pub export: ExportState,
@@ -101,6 +109,14 @@ pub struct Monitor {
     pub size: (u32, u32),
 }
 
+/// The cached Source-monitor texture and what it was rendered from.
+pub struct SourceMonitor {
+    pub texture: egui::TextureHandle,
+    pub item: ItemId,
+    pub time: Tick,
+    pub size: (u32, u32),
+}
+
 impl App {
     pub fn new() -> App {
         App::from_parts(Project::new("Untitled"), HashMap::new(), None, "Ready")
@@ -112,6 +128,9 @@ impl App {
         session.project = Arc::new(project);
         let seq = session.project.sequences().next().map(|it| it.id);
         session.state.active_sequence = seq;
+        // Premiere-like default: ripple edits move sequence markers too. It is
+        // editor state (not saved in the document) and the toolbar can turn it off.
+        session.state.ripple_sequence_markers = true;
         App {
             session,
             compositions,
@@ -131,6 +150,10 @@ impl App {
             status: status.to_string(),
             export: ExportState { include_audio: true, ..Default::default() },
             monitor: None,
+            source_monitor: None,
+            source_playing: false,
+            source_last: None,
+            source_w: 420.0,
             effects_item: None,
             selected_effect: None,
             effect_search: String::new(),
@@ -600,14 +623,38 @@ impl eframe::App for App {
             ui.ctx().request_repaint();
         }
 
+        // Source-monitor playback is a separate, video-only clock; it never
+        // moves the Program monitor's playhead.
+        crate::edit::source_tick(self);
+        if self.source_playing {
+            ui.ctx().request_repaint();
+        }
+
         // Transport keys everywhere: Space, Ctrl+Z / Ctrl+Shift+Z, Delete,
         // Ctrl+K (add edit on all tracks), Ctrl+S / Ctrl+Shift+S (save). The
-        // marker keys are Edit-workspace only and stand down while a text field
-        // has focus (they would otherwise fire while typing in a search box).
+        // marker and Source keys are Edit-workspace only and stand down while a
+        // text field has focus (they would otherwise fire while typing).
         let in_edit = self.workspace == Workspace::Edit;
         let typing = ui.ctx().egui_wants_keyboard_input();
-        let (space, undo_key, redo_key, delete, add_edit, save_key, save_as_key, add_marker_key, next_marker_key) = ui.ctx().input(|i| {
+        let (
+            space,
+            undo_key,
+            redo_key,
+            delete,
+            add_edit,
+            save_key,
+            save_as_key,
+            add_marker_key,
+            next_marker_key,
+            source_in,
+            source_out,
+            source_go_in,
+            source_go_out,
+            source_insert,
+            source_overwrite,
+        ) = ui.ctx().input(|i| {
             let cmd = i.modifiers.command;
+            let edit = in_edit && !typing;
             (
                 i.key_pressed(egui::Key::Space),
                 cmd && i.key_pressed(egui::Key::Z) && !i.modifiers.shift,
@@ -616,8 +663,14 @@ impl eframe::App for App {
                 cmd && i.key_pressed(egui::Key::K),
                 cmd && i.key_pressed(egui::Key::S) && !i.modifiers.shift,
                 cmd && i.key_pressed(egui::Key::S) && i.modifiers.shift,
-                in_edit && !typing && !cmd && !i.modifiers.shift && i.key_pressed(egui::Key::M),
-                in_edit && !typing && !cmd && i.modifiers.shift && i.key_pressed(egui::Key::M),
+                edit && !cmd && !i.modifiers.shift && i.key_pressed(egui::Key::M),
+                edit && !cmd && i.modifiers.shift && i.key_pressed(egui::Key::M),
+                edit && !cmd && !i.modifiers.shift && i.key_pressed(egui::Key::I),
+                edit && !cmd && !i.modifiers.shift && i.key_pressed(egui::Key::O),
+                edit && !cmd && i.modifiers.shift && i.key_pressed(egui::Key::I),
+                edit && !cmd && i.modifiers.shift && i.key_pressed(egui::Key::O),
+                edit && !cmd && i.key_pressed(egui::Key::Comma),
+                edit && !cmd && i.key_pressed(egui::Key::Period),
             )
         });
         if save_key {
@@ -652,6 +705,24 @@ impl eframe::App for App {
         }
         if next_marker_key {
             crate::edit::go_marker(self, true);
+        }
+        if source_in {
+            crate::edit::source_mark(self, true);
+        }
+        if source_out {
+            crate::edit::source_mark(self, false);
+        }
+        if source_go_in {
+            crate::edit::source_goto(self, false);
+        }
+        if source_go_out {
+            crate::edit::source_goto(self, true);
+        }
+        if source_insert {
+            crate::edit::source_edit(self, true);
+        }
+        if source_overwrite {
+            crate::edit::source_edit(self, false);
         }
 
         // Recovery autosave (throttled; only for saved, dirty projects).

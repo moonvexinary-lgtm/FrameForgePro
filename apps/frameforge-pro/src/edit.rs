@@ -289,9 +289,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     let timeline = egui::Rect::from_min_max(egui::pos2(rest.min.x, rest.max.y - timeline_h), rest.max);
     let monitor = egui::Rect::from_min_max(rest.min, egui::pos2(rest.max.x, timeline.min.y));
 
+    let source_w = app.source_w.clamp(220.0, (monitor.width() - 220.0).max(220.0));
+    let program = egui::Rect::from_min_max(monitor.min, egui::pos2(monitor.max.x - source_w, monitor.max.y));
+    let source = egui::Rect::from_min_max(egui::pos2(program.max.x, monitor.min.y), monitor.max);
+
     project_panel(app, ui, project);
     crate::app::gutter_v(ui, body.min.x + project_w, body.min.y, body.max.y, &mut app.project_w);
-    monitor_panel(app, ui, monitor);
+    monitor_panel(app, ui, program);
+    crate::app::gutter_v(ui, program.max.x, monitor.min.y, monitor.max.y, &mut app.source_w);
+    source_monitor_panel(app, ui, source);
     crate::app::gutter_h(ui, monitor.max.y, rest.min.x, rest.max.x, &mut app.timeline_h);
     timeline_panel(app, ui, timeline);
 }
@@ -411,6 +417,144 @@ pub(crate) fn place_at_playhead(app: &mut App, media: ItemId, insert: bool) {
     }
 }
 
+/// The engine's Source-monitor view (`source.inspect`), or `None` when nothing
+/// is open. This is the engine's own view, so the panel cannot drift from the
+/// state the source commands act on.
+pub(crate) fn source_inspect(app: &mut App) -> Option<serde_json::Value> {
+    let value = app.session.execute("source.inspect", serde_json::json!({})).ok()?;
+    value.get("item").is_some_and(|i| !i.is_null()).then_some(value)
+}
+
+fn source_rate(view: &serde_json::Value) -> filmcraft_time::FrameRate {
+    filmcraft_time::FrameRate::from_f64(view["fps"].as_f64().unwrap_or(24.0))
+}
+
+/// The effective selected range with the marks applied (Out is inclusive).
+fn source_selected(app: &mut App) -> Option<filmcraft_time::TimeRange> {
+    let view = source_inspect(app)?;
+    let rate = source_rate(&view);
+    let start = Tick(view["start"].as_i64()?);
+    let end = Tick(view["end"].as_i64()?);
+    let a = view["markIn"].as_i64().map(Tick).unwrap_or(start).clamp(start, end);
+    let fd = rate.frame_duration();
+    let b = view["markOut"].as_i64().map(|o| Tick(o) + fd).unwrap_or(end).clamp(a, end);
+    Some(filmcraft_time::TimeRange::from_bounds(a, b.max(a)))
+}
+
+/// Open `item` in the Source monitor. Editor state: not undoable, not dirtying.
+pub(crate) fn open_source(app: &mut App, item: ItemId) {
+    match app.session.execute("source.open", serde_json::json!({"item": item.0})) {
+        Ok(_) => {
+            app.source_monitor = None;
+            app.source_playing = false;
+            app.bin_selection = Some(item);
+            app.status = "Opened in the Source monitor".to_string();
+        }
+        Err(e) => app.status = e.to_string(),
+    }
+}
+
+pub(crate) fn close_source(app: &mut App) {
+    let _ = app.session.execute("source.closeAll", serde_json::json!({}));
+    app.source_monitor = None;
+    app.source_playing = false;
+    app.status = "Source monitor closed".to_string();
+}
+
+pub(crate) fn source_set_playhead(app: &mut App, t: Tick) {
+    let _ = app.session.execute("source.setPlayhead", serde_json::json!({"time": t.0}));
+}
+
+/// Step the source playhead by `frames` on the source's frame grid.
+pub(crate) fn source_step(app: &mut App, frames: i64) {
+    let Some(view) = source_inspect(app) else { return };
+    let rate = source_rate(&view);
+    let start = Tick(view["start"].as_i64().unwrap_or(0));
+    let end = Tick(view["end"].as_i64().unwrap_or(0));
+    let last = Tick((end.0 - rate.frame_duration().0).max(start.0));
+    let frame = rate.frame_at(app.session.state.source_playhead) + frames;
+    source_set_playhead(app, rate.tick_of(frame).clamp(start, last));
+}
+
+pub(crate) fn source_goto(app: &mut App, to_out: bool) {
+    let command = if to_out { "markers.goToOut" } else { "markers.goToIn" };
+    let _ = app.session.execute(command, serde_json::json!({"target": "source"}));
+}
+
+pub(crate) fn source_mark(app: &mut App, is_in: bool) {
+    let command = if is_in { "markers.markIn" } else { "markers.markOut" };
+    match app.session.execute(command, serde_json::json!({"target": "source"})) {
+        Ok(_) => app.status = if is_in { "Source In set".to_string() } else { "Source Out set".to_string() },
+        Err(e) => app.status = e.to_string(),
+    }
+}
+
+/// Clear Source marks: `markers.clearIn`, `markers.clearOut` or
+/// `markers.clearInOut`.
+pub(crate) fn source_clear(app: &mut App, command: &str) {
+    let _ = app.session.execute(command, serde_json::json!({"target": "source"}));
+    app.status = "Source marks cleared".to_string();
+}
+
+/// Play / pause the Source monitor. A video-only wall clock: the audio clock is
+/// bound to the Program monitor's sequence, so source playback is silent.
+pub(crate) fn source_toggle_play(app: &mut App) {
+    if app.session.state.source_item.is_none() {
+        app.status = "Open a clip in the Source monitor first".to_string();
+        return;
+    }
+    if app.source_playing {
+        app.source_playing = false;
+        app.source_last = None;
+        return;
+    }
+    if let Some(range) = source_selected(app)
+        && app.session.state.source_playhead >= range.end()
+    {
+        app.session.state.source_playhead = range.start;
+    }
+    app.source_playing = true;
+    app.source_last = None;
+    app.status = "Source playing (silent)".to_string();
+}
+
+/// Advance source playback (called once per frame from `App::ui`).
+pub(crate) fn source_tick(app: &mut App) {
+    if !app.source_playing {
+        return;
+    }
+    let Some(range) = source_selected(app) else {
+        app.source_playing = false;
+        return;
+    };
+    let now = std::time::Instant::now();
+    let elapsed = app.source_last.map_or(std::time::Duration::ZERO, |last| now.duration_since(last));
+    app.source_last = Some(now);
+    let ticks = Tick::from_units(i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX / 4).min(i64::MAX / 8), 1_000_000_000);
+    let next = app.session.state.source_playhead + ticks;
+    if next >= range.end() {
+        app.session.state.source_playhead = Tick((range.end().0 - 1).max(range.start.0));
+        app.source_playing = false;
+    } else {
+        app.session.state.source_playhead = next;
+    }
+}
+
+/// Insert or overwrite the open source at the sequence playhead. This is the
+/// engine's three-point edit: the source marks define the range and the
+/// ripple-sequence-markers state is honored.
+pub(crate) fn source_edit(app: &mut App, insert: bool) {
+    if app.session.state.source_item.is_none() {
+        app.status = "Open a clip in the Source monitor first".to_string();
+        return;
+    }
+    let command = if insert { "source.insert" } else { "source.overwrite" };
+    match app.execute(command, serde_json::json!({})) {
+        Ok(_) => app.status = if insert { "Inserted from Source".to_string() } else { "Overwrote from Source".to_string() },
+        Err(e) => app.status = e,
+    }
+}
+
 /// Remove `media` and its clips (undoable). Its composition stays keyed: an
 /// undo restores the item under the same id, and the composition with it.
 fn remove_media(app: &mut App, media: ItemId) {
@@ -463,6 +607,16 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             add_file(app, path);
         }
     });
+    panel.horizontal(|ui| {
+        if ui.add_enabled(app.bin_selection.is_some(), egui::Button::new("Open Source")).on_hover_text("Open the selected item in the Source monitor").clicked()
+            && let Some(id) = app.bin_selection
+        {
+            open_source(app, id);
+        }
+        if ui.button("Close Source").clicked() {
+            close_source(app);
+        }
+    });
     panel.separator();
 
     let mut ids = Vec::new();
@@ -507,7 +661,7 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
     }
     panel.separator();
-    panel.colored_label(egui::Color32::GRAY, "Click a media item, then Insert/Overwrite in the timeline header; double-click appends to the patched tracks (all undoable). Select a clip, then the Effects workspace.");
+    panel.colored_label(egui::Color32::GRAY, "Click a media item: Open Source previews it with In/Out marks; Insert/Overwrite in the timeline header places the whole item; double-click appends (all undoable). Select a clip, then the Effects workspace.");
 }
 
 fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -552,6 +706,14 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         if ui.checkbox(&mut snapping, "Snap").on_hover_text("Snap moves and trims to clip edges, the playhead and zero").changed() {
             match app.session.execute("sequence.snap", serde_json::json!({"on": snapping})) {
                 Ok(_) => app.status = if snapping { "Snapping on".to_string() } else { "Snapping off".to_string() },
+                Err(e) => app.status = e.to_string(),
+            }
+        }
+        ui.separator();
+        let mut ripple = app.session.state.ripple_sequence_markers;
+        if ui.checkbox(&mut ripple, "Ripple Markers").on_hover_text("Insert moves sequence markers at or after the insert point").changed() {
+            match app.session.execute("markers.rippleSequenceMarkers", serde_json::json!({"on": ripple})) {
+                Ok(_) => app.status = if ripple { "Ripple markers on".to_string() } else { "Ripple markers off".to_string() },
                 Err(e) => app.status = e.to_string(),
             }
         }
@@ -896,6 +1058,149 @@ fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
     }
 }
 
+/// The Source monitor: a real `render_item` preview of the open media at the
+/// engine's source playhead, its transport and the source In/Out marks.
+pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
+    ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
+    ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("source").layout(egui::Layout::top_down(egui::Align::Min)));
+    area.add_space(4.0);
+
+    let Some(view) = source_inspect(app) else {
+        area.horizontal(|ui| {
+            ui.strong("Source");
+            ui.colored_label(egui::Color32::GRAY, "no clip open");
+        });
+        area.label("Click a media item, then Open Source (or the Source panel button).");
+        return;
+    };
+    let item = ItemId(view["item"].as_u64().unwrap_or(0));
+    let rate = source_rate(&view);
+    let start = Tick(view["start"].as_i64().unwrap_or(0));
+    let end = Tick(view["end"].as_i64().unwrap_or(0));
+    let t = app.session.state.source_playhead.clamp(start, end);
+    let mark_in = view["markIn"].as_i64();
+    let mark_out = view["markOut"].as_i64();
+    let playing = app.source_playing;
+
+    area.horizontal(|ui| {
+        ui.strong("Source");
+        if ui.button("Open Source").on_hover_text("Open the selected bin item here").clicked()
+            && let Some(selected) = app.bin_selection
+        {
+            open_source(app, selected);
+        }
+        if ui.button("Close").clicked() {
+            close_source(app);
+        }
+    });
+
+    // The picture, through the engine's own Source-monitor renderer.
+    let pic_h = (area.available_rect_before_wrap().height() - 120.0).max(70.0);
+    let (pic_rect, _) = area.allocate_exact_size(egui::vec2(area.available_width(), pic_h), egui::Sense::hover());
+    let needs = app.source_monitor.as_ref().is_none_or(|m| m.item != item || m.time != t);
+    if needs {
+        let rendered = app
+            .with_sources(|project, sources| filmcraft_render::render_item(project, item, t, 0.5, sources as &dyn filmcraft_render::SourceProvider))
+            .flatten();
+        if let Some(image) = rendered {
+            let size = (image.w as u32, image.h as u32);
+            let color = pixels::to_color_image(&image);
+            if let Some(m) = app.source_monitor.as_mut().filter(|m| m.item == item) {
+                m.texture.set(color, egui::TextureOptions::default());
+            } else {
+                let texture = ui.ctx().load_texture("source-monitor", color, egui::TextureOptions::default());
+                app.source_monitor = Some(crate::app::SourceMonitor { texture, item, time: t, size });
+            }
+            if let Some(m) = app.source_monitor.as_mut() {
+                m.time = t;
+                m.size = size;
+            }
+        }
+    }
+    if let Some(m) = &app.source_monitor {
+        let scale = (pic_rect.width() / m.size.0.max(1) as f32).min(pic_rect.height() / m.size.1.max(1) as f32);
+        let shown = egui::vec2(m.size.0 as f32 * scale, m.size.1 as f32 * scale);
+        let at = pic_rect.min + egui::vec2((pic_rect.width() - shown.x) / 2.0, (pic_rect.height() - shown.y) / 2.0);
+        area.painter().image(
+            m.texture.id(),
+            egui::Rect::from_min_size(at, shown),
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
+
+    area.horizontal(|ui| {
+        if ui.button("|<").on_hover_text("Source start").clicked() {
+            source_set_playhead(app, start);
+        }
+        if ui.button("<|").on_hover_text("Previous frame").clicked() {
+            source_step(app, -1);
+        }
+        if ui.button(if playing { "Pause" } else { "Play" }).clicked() {
+            source_toggle_play(app);
+        }
+        if ui.button("|>").on_hover_text("Next frame").clicked() {
+            source_step(app, 1);
+        }
+        if ui.button(">|").on_hover_text("Source end").clicked() {
+            source_set_playhead(app, Tick((end.0 - rate.frame_duration().0).max(start.0)));
+        }
+    });
+    let frames = rate.frame_at(t) - rate.frame_at(start);
+    let total = rate.frame_at(end) - rate.frame_at(start);
+    area.label(egui::RichText::new(format!("frame {frames} / {total}  ({:.2}s)", (t - start).seconds())).monospace());
+    let mut seek = t.0 as f64;
+    if area.add(egui::Slider::new(&mut seek, start.0 as f64..=end.0 as f64).show_value(false)).changed() {
+        source_set_playhead(app, Tick(seek.round() as i64));
+    }
+
+    area.horizontal(|ui| {
+        if ui.button("Mark In (I)").clicked() {
+            source_mark(app, true);
+        }
+        if ui.button("Mark Out (O)").clicked() {
+            source_mark(app, false);
+        }
+        if ui.button("Go In").clicked() {
+            source_goto(app, false);
+        }
+        if ui.button("Go Out").clicked() {
+            source_goto(app, true);
+        }
+    });
+    area.horizontal(|ui| {
+        if ui.button("Clear In").clicked() {
+            source_clear(app, "markers.clearIn");
+        }
+        if ui.button("Clear Out").clicked() {
+            source_clear(app, "markers.clearOut");
+        }
+        if ui.button("Clear Both").clicked() {
+            source_clear(app, "markers.clearInOut");
+        }
+    });
+    if let Some(selected) = source_selected(app) {
+        let text = if mark_in.is_none() && mark_out.is_none() {
+            format!("No In/Out marks - using full source ({:.2}s)", selected.duration.seconds())
+        } else {
+            format!("Selected range {:.2}s", selected.duration.seconds())
+        };
+        area.colored_label(egui::Color32::GRAY, text);
+    }
+    area.horizontal(|ui| {
+        if ui.button("Insert (,)").on_hover_text("Insert the source range at the sequence playhead").clicked() {
+            source_edit(app, true);
+        }
+        if ui.button("Overwrite (.)").on_hover_text("Overwrite with the source range at the sequence playhead").clicked() {
+            source_edit(app, false);
+        }
+    });
+    if playing {
+        ui.ctx().request_repaint();
+    }
+}
+
 /// The program monitor — shared by the Edit and Color workspaces.
 pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let Some(seq_id) = app.sequence_id() else {
@@ -951,15 +1256,16 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 #[cfg(test)]
 mod tests {
     //! Real engine tests for source-patched placement (append and
-    //! insert/overwrite), the track-header settings, the marker helpers and the
-    //! snap maths: no UI, but the exact commands and targets the timeline uses.
+    //! insert/overwrite), the track-header settings, the marker helpers, the
+    //! snap maths and the Source monitor (marks, range edits, marker ripple,
+    //! persistence): no UI, but the exact commands the panels use.
 
     use super::{placement_params, plan_placement};
     use filmcraft_engine::Session;
     use filmcraft_media::generators::GeneratorSource;
     use filmcraft_media::{Generator, MediaSource};
     use filmcraft_project::{ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef};
-    use filmcraft_time::{TICKS_PER_SECOND, Tick};
+    use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
     use serde_json::json;
 
     fn demo_session() -> Session {
@@ -1191,5 +1497,131 @@ mod tests {
             assert!(v1.items.iter().any(|i| i.item == b && i.start == Tick::ZERO), "overwrite lands B at the playhead");
             assert!(v1.items.iter().filter(|i| i.item == a).all(|i| i.start >= one_second), "overwrite trims A under B");
         }
+    }
+
+    /// A fresh project with one sequence and a 4 s Bars & Tone media item.
+    fn source_fixture() -> (crate::app::App, ItemId) {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "Source"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let src = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 4.0})).unwrap()["item"].as_u64().unwrap());
+        let app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+        (app, src)
+    }
+
+    #[test]
+    fn source_open_previews_real_frames_and_its_marks_stay_off_the_program_playhead() {
+        let (mut app, src) = source_fixture();
+        app.playhead = Tick(2 * TICKS_PER_SECOND);
+        super::open_source(&mut app, src);
+        assert_eq!(app.session.state.source_item, Some(src));
+        let preview = app
+            .with_sources(|project, sources| filmcraft_render::render_item(project, src, Tick::ZERO, 0.5, sources as &dyn filmcraft_render::SourceProvider))
+            .flatten();
+        assert!(preview.is_some_and(|i| i.w > 0 && i.h > 0), "the Source monitor renders a real frame");
+
+        super::source_set_playhead(&mut app, Tick(TICKS_PER_SECOND));
+        assert_eq!(app.playhead, Tick(2 * TICKS_PER_SECOND), "source seeking must not move the Program playhead");
+        super::source_mark(&mut app, true);
+        assert_eq!(app.playhead, Tick(2 * TICKS_PER_SECOND), "source marking must not move the Program playhead");
+        super::source_set_playhead(&mut app, Tick(2 * TICKS_PER_SECOND));
+        super::source_mark(&mut app, false);
+
+        let selected = super::source_selected(&mut app).expect("a selected range");
+        assert_eq!(selected.start, Tick(TICKS_PER_SECOND));
+        assert_eq!(selected.duration, Tick(TICKS_PER_SECOND) + FrameRate::FPS_24.frame_duration());
+    }
+
+    #[test]
+    fn source_insert_places_the_marked_range_and_ripples_markers_with_undo() {
+        let (mut app, src) = source_fixture();
+        super::open_source(&mut app, src);
+        let fd = FrameRate::FPS_24.frame_duration();
+        super::source_set_playhead(&mut app, Tick(TICKS_PER_SECOND));
+        super::source_mark(&mut app, true);
+        super::source_set_playhead(&mut app, Tick(2 * TICKS_PER_SECOND));
+        super::source_mark(&mut app, false);
+        let inserted = Tick(TICKS_PER_SECOND) + fd;
+
+        let before = Tick(TICKS_PER_SECOND / 2);
+        let at = Tick(2 * TICKS_PER_SECOND);
+        let after = Tick(4 * TICKS_PER_SECOND);
+        app.execute("markers.add", json!({"time": before.0, "name": "before"})).unwrap();
+        app.execute("markers.add", json!({"time": at.0, "name": "at"})).unwrap();
+        app.execute("markers.add", json!({"time": after.0, "name": "after"})).unwrap();
+
+        app.playhead = at;
+        assert!(app.session.state.ripple_sequence_markers, "FrameForge defaults Ripple Markers on");
+        super::source_edit(&mut app, true);
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(q.video_tracks[0].items.len(), 1, "one inserted picture clip");
+            assert_eq!(q.video_tracks[0].items[0].duration, inserted, "the clip carries exactly the marked range");
+            let marker_at = |name: &str| q.markers.iter().find(|m| m.name == name).unwrap().start;
+            assert_eq!(marker_at("before"), before, "markers before the insert point stay");
+            assert_eq!(marker_at("at"), at + inserted, "a marker exactly at the insert point moves");
+            assert_eq!(marker_at("after"), after + inserted, "later markers move by the inserted range");
+        }
+
+        app.undo();
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert!(q.video_tracks[0].items.is_empty(), "undo removes the inserted clip");
+            assert_eq!(q.markers.iter().find(|m| m.name == "at").unwrap().start, at, "undo restores marker positions");
+        }
+
+        app.session.state.ripple_sequence_markers = false;
+        app.playhead = at;
+        super::source_edit(&mut app, true);
+        let q = app.session.active_sequence().unwrap();
+        assert_eq!(q.markers.iter().find(|m| m.name == "after").unwrap().start, after, "ripple off leaves marker positions alone");
+    }
+
+    #[test]
+    fn source_mark_edges_are_normalized_and_one_sided_marks_use_the_source_edges() {
+        let (mut app, src) = source_fixture();
+        super::open_source(&mut app, src);
+        let view = super::source_inspect(&mut app).unwrap();
+        let start = Tick(view["start"].as_i64().unwrap());
+        let end = Tick(view["end"].as_i64().unwrap());
+
+        // One-sided In: [In, end)
+        super::source_set_playhead(&mut app, Tick(2 * TICKS_PER_SECOND));
+        super::source_mark(&mut app, true);
+        let selected = super::source_selected(&mut app).unwrap();
+        assert_eq!((selected.start, selected.end()), (Tick(2 * TICKS_PER_SECOND), end));
+
+        // Reversed marks collapse to an empty selection, never a backwards edit.
+        super::source_set_playhead(&mut app, Tick(TICKS_PER_SECOND));
+        super::source_mark(&mut app, false);
+        let selected = super::source_selected(&mut app).unwrap();
+        assert_eq!(selected.duration, Tick::ZERO, "In after Out is an empty selection");
+
+        // Clearing both returns the full source.
+        super::source_clear(&mut app, "markers.clearInOut");
+        let selected = super::source_selected(&mut app).unwrap();
+        assert_eq!((selected.start, selected.end()), (start, end));
+    }
+
+    #[test]
+    fn source_marks_survive_project_save_and_reopen() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "Marks"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1"})).unwrap();
+        let src = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 2.0})).unwrap()["item"].as_u64().unwrap());
+        s.state.source_item = Some(src);
+        s.execute("project.setMarks", json!({"item": src.0, "in": 1000, "out": 2000})).unwrap();
+
+        let doc = frameforge_bridge::FrameForgeProject {
+            schema: frameforge_bridge::FFPROJ_SCHEMA,
+            project: (*s.project).clone(),
+            compositions: std::collections::HashMap::new(),
+        };
+        let path = std::env::temp_dir().join(format!("ff_source_marks_{}.ffproj", std::process::id()));
+        doc.save(&path).unwrap();
+        let loaded = frameforge_bridge::FrameForgeProject::load(&path).unwrap();
+        let (_, clip, _) = loaded.project.resolve_media(src).unwrap();
+        assert_eq!((clip.mark_in, clip.mark_out), (Some(Tick(1000)), Some(Tick(2000))));
+        let _ = std::fs::remove_file(&path);
     }
 }
