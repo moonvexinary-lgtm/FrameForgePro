@@ -2056,9 +2056,9 @@ mod tests {
     #[test]
     fn audio_crossfade_changes_the_rendered_samples_at_the_cut() {
         let (mut app, clips) = transition_app(false);
-        // Select the picture; the helper finds its linked sound and applies the
-        // audio transition there.
-        app.selection = Some(clips[0]);
+        // Select the incoming picture; the helper finds its linked sound and
+        // applies the audio transition at that same In edge.
+        app.selection = Some(clips[1]);
         super::apply_dissolve(&mut app, false);
         let q = app.session.active_sequence().unwrap().clone();
         assert_eq!(q.audio_tracks[0].transitions.len(), 1, "one real transition on A1");
