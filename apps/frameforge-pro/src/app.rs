@@ -696,6 +696,16 @@ impl eframe::App for App {
                 ("slip", dir)
             })
         });
+        let (dissolve, crossfade) = ui.ctx().input(|i| {
+            let d = in_edit && !typing && i.modifiers.command && i.key_pressed(egui::Key::D);
+            (d && !i.modifiers.shift, d && i.modifiers.shift)
+        });
+        if dissolve {
+            crate::edit::apply_dissolve(self, true);
+        }
+        if crossfade {
+            crate::edit::apply_dissolve(self, false);
+        }
         if save_key {
             self.save();
         }

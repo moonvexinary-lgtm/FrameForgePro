@@ -6,7 +6,7 @@
 use filmcraft_engine::Targeting;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_media::{Generator, MediaSource};
-use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project, Sequence, TrackId};
+use filmcraft_project::{ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef, Project, Sequence, TrackId};
 use filmcraft_time::TICKS_PER_SECOND;
 use filmcraft_time::Tick;
 
@@ -626,6 +626,57 @@ pub(crate) fn slide_selected(app: &mut App, frames: i64) {
     }
 }
 
+fn clip_is_video(app: &App, clip: ClipId) -> Option<bool> {
+    let q = app.sequence()?;
+    if q.video_tracks.iter().any(|t| t.items.iter().any(|i| i.id == clip)) {
+        Some(true)
+    } else if q.audio_tracks.iter().any(|t| t.items.iter().any(|i| i.id == clip)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn linked_clip(app: &App, clip: ClipId, video: bool) -> Option<ClipId> {
+    let q = app.sequence()?;
+    let (_, item) = q.find_item(clip)?;
+    let link = item.link?;
+    let tracks = if video { &q.video_tracks } else { &q.audio_tracks };
+    tracks.iter().flat_map(|t| &t.items).find(|i| i.id != clip && i.link == Some(link)).map(|i| i.id)
+}
+
+/// Apply a real transition at the selected clip's In edge: `sequence.applyVideoTransition`
+/// (cross dissolve) or `sequence.applyAudioTransition` (constant-power crossfade).
+/// With a linked pair selected, the matching half is found automatically, so
+/// selecting either the picture or the sound applies the right kind.
+pub(crate) fn apply_dissolve(app: &mut App, video: bool) {
+    let Some((clip, _)) = app.selected_clip() else {
+        app.status = if video { "Select a clip for the video cross-dissolve" } else { "Select a clip for the audio crossfade" }.to_string();
+        return;
+    };
+    let Some(selected_video) = clip_is_video(app, clip) else {
+        app.status = "The selected clip is no longer in the sequence".to_string();
+        return;
+    };
+    let target = if selected_video == video { Some(clip) } else { linked_clip(app, clip, video) };
+    let Some(target) = target else {
+        app.status = if video {
+            "Select a linked A/V clip or a video clip for the cross-dissolve".to_string()
+        } else {
+            "Select a linked A/V clip or an audio clip for the crossfade".to_string()
+        };
+        return;
+    };
+    let (command, label) = if video { ("sequence.applyVideoTransition", "Video cross-dissolve") } else { ("sequence.applyAudioTransition", "Audio crossfade") };
+    match app.execute(command, serde_json::json!({"clip": target.0, "edge": "in", "frames": 12})) {
+        Ok(value) => {
+            let id = value["transition"].as_u64().unwrap_or(0);
+            app.status = format!("{label} applied at the selected edit (12 frames, transition {id})");
+        }
+        Err(e) => app.status = e,
+    }
+}
+
 /// Ripple delete the selected clip through `edit.rippleDelete`: remove it (the
 /// engine expands to its linked A/V), then close the gap on the tracks that lost
 /// material plus every sync-locked track. A locked track refuses the whole edit
@@ -847,6 +898,21 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
         if ui.add_enabled(has_clip, egui::Button::new("Slide +1")).on_hover_text("Slide the selected clip one frame right (Alt+Shift+Right)").clicked() {
             slide_selected(app, 1);
+        }
+        ui.separator();
+        if ui
+            .add_enabled(has_clip, egui::Button::new("Dissolve"))
+            .on_hover_text("Apply a 12-frame video cross-dissolve at the selected clip's In edge (Ctrl/Cmd+D)")
+            .clicked()
+        {
+            apply_dissolve(app, true);
+        }
+        if ui
+            .add_enabled(has_clip, egui::Button::new("Crossfade"))
+            .on_hover_text("Apply a 12-frame audio crossfade at the selected edit (Ctrl/Cmd+Shift+D)")
+            .clicked()
+        {
+            apply_dissolve(app, false);
         }
         ui.separator();
         ui.colored_label(egui::Color32::GRAY, "Alt+Left/Right: slip · Alt+Shift: slide · Alt+Ctrl: roll");
@@ -1913,5 +1979,101 @@ mod tests {
         let q = app.session.active_sequence().unwrap();
         assert_eq!(q.video_tracks[0].items.iter().find(|i| i.id == clips[1]).unwrap().start, two_seconds, "undo restores B");
         assert_eq!(q.video_tracks[0].items.iter().find(|i| i.id == clips[2]).unwrap().start, four_seconds, "undo restores C");
+    }
+
+    /// Place exactly `src_in..src_out` of `item` at timeline `at` through the
+    /// Source monitor, leaving the media's unused head/tail as handles.
+    fn place_source_range(app: &mut crate::app::App, item: ItemId, at: Tick, src_in: Tick, src_out: Tick) {
+        app.playhead = at;
+        super::open_source(app, item);
+        super::source_set_playhead(app, src_in);
+        super::source_mark(app, true);
+        super::source_set_playhead(app, src_out - FrameRate::FPS_24.frame_duration());
+        super::source_mark(app, false);
+        super::source_edit(app, false);
+    }
+
+    /// Two adjacent 2 s clips with handles on both sides. The color-matte
+    /// version has a hard red→blue cut; the Bars & Tone version has the same
+    /// picture/sound pair for the audio transition test.
+    fn transition_app(video: bool) -> (crate::app::App, Vec<ClipId>) {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "Transitions"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let new = |s: &mut Session, color: Option<&str>| {
+            let v = match color {
+                Some(color) => s.execute("file.newColorMatte", json!({"color": color, "seconds": 4.0})).unwrap(),
+                None => s.execute("file.newBarsAndTone", json!({"seconds": 4.0})).unwrap(),
+            };
+            ItemId(v["item"].as_u64().unwrap())
+        };
+        let a = new(&mut s, video.then_some("#ff0000"));
+        let b = new(&mut s, video.then_some("#0000ff"));
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+        let two_seconds = Tick(2 * TICKS_PER_SECOND);
+        place_source_range(&mut app, a, Tick::ZERO, Tick::ZERO, two_seconds);
+        place_source_range(&mut app, b, two_seconds, Tick(TICKS_PER_SECOND), Tick(3 * TICKS_PER_SECOND));
+        let clips = app.session.active_sequence().unwrap().video_tracks[0].items.iter().map(|i| i.id).collect();
+        (app, clips)
+    }
+
+    #[test]
+    fn video_cross_dissolve_changes_the_rendered_pixels_at_the_cut() {
+        let (mut app, clips) = transition_app(true);
+        let two_seconds = Tick(2 * TICKS_PER_SECOND);
+        let six_frames = FrameRate::FPS_24.tick_of(6);
+        app.selection = Some(clips[1]);
+        super::apply_dissolve(&mut app, true);
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(q.video_tracks[0].transitions.len(), 1, "one real transition on V1");
+            let tr = &q.video_tracks[0].transitions[0];
+            assert_eq!((tr.start, tr.duration), (two_seconds - six_frames, Tick(six_frames.0 * 2)), "a 12-frame dissolve centred on the cut");
+            assert_eq!((tr.from, tr.to), (Some(clips[0]), Some(clips[1])), "the transition names the outgoing and incoming clips");
+        }
+
+        let seq_id = app.sequence_id().unwrap();
+        let at = |app: &mut crate::app::App, secs: f64| {
+            let t = FrameRate::FPS_24.tick_of((secs * 24.0).round() as i64);
+            app.with_sources(|p, sources| {
+                filmcraft_render::render_sequence(p, seq_id, t, filmcraft_render::RenderOptions { scale: 0.25, ..Default::default() }, sources)
+            })
+            .unwrap()
+        };
+        let px = |img: &filmcraft_render::Image| img.get(img.w / 2, img.h / 2);
+        let before = px(&at(&mut app, 1.5));
+        let mid = px(&at(&mut app, 2.0));
+        let after = px(&at(&mut app, 2.5));
+        assert!(before[0] > 0.9 && before[2] < 0.1, "before the dissolve is red: {before:?}");
+        assert!(after[2] > 0.9 && after[0] < 0.1, "after the dissolve is blue: {after:?}");
+        assert!(mid[0] > 0.2 && mid[2] > 0.2 && mid[1] < 0.1, "the cut is a real red/blue mix: {mid:?}");
+
+        app.undo();
+        let hard_cut = px(&at(&mut app, 2.0));
+        assert!(hard_cut[2] > 0.9 && hard_cut[0] < 0.1, "undo removes the dissolve and the cut is blue: {hard_cut:?}");
+    }
+
+    #[test]
+    fn audio_crossfade_changes_the_rendered_samples_at_the_cut() {
+        let (mut app, clips) = transition_app(false);
+        // Select the picture; the helper finds its linked sound and applies the
+        // audio transition there.
+        app.selection = Some(clips[0]);
+        super::apply_dissolve(&mut app, false);
+        let q = app.session.active_sequence().unwrap().clone();
+        assert_eq!(q.audio_tracks[0].transitions.len(), 1, "one real transition on A1");
+        let sr = q.settings.sample_rate as i64;
+        let mix_at = |app: &mut crate::app::App, secs: f64| {
+            let start = (secs * sr as f64).round() as i64;
+            app.with_sources(|p, sources| filmcraft_render::audio::mix_sequence(p, &q, start, 4800, sources)).unwrap()
+        };
+        let rms = |samples: &[f32]| (samples.iter().map(|x| x * x).sum::<f32>() / samples.len().max(1) as f32).sqrt();
+        let before = mix_at(&mut app, 1.5);
+        let mid = mix_at(&mut app, 2.0);
+        let after = mix_at(&mut app, 2.5);
+        let (before, mid, after) = (rms(&before.channels[0]), rms(&mid.channels[0]), rms(&after.channels[0]));
+        assert!(before > 0.01, "the fixture has sound: {before}");
+        assert!(mid > before * 1.15, "the crossfade overlaps both sides at the cut: {mid} vs {before}");
+        assert!(mid > after * 1.15, "the crossfade is real on the incoming side too: {mid} vs {after}");
     }
 }
