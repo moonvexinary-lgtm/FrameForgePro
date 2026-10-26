@@ -154,6 +154,75 @@ pub(crate) fn rename_marker_at_playhead(app: &mut App) {
     }
 }
 
+/// RFC 4180 field: always quoted, with embedded quotes doubled. Free-text
+/// fields (name and comment) always take this path so commas, quotes and
+/// newlines in a user's marker name cannot break the columns.
+fn csv_field(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+/// SMPTE-ish timecode for a marker start, at the sequence rate.
+fn marker_timecode(rate: filmcraft_time::FrameRate, at: Tick) -> String {
+    let total = rate.frame_at(at);
+    let fps = rate.as_f64().round().max(1.0) as i64;
+    format!("{}:{:02}:{:02}:{:02}", total / (fps * 3600), (total / (fps * 60)) % 60, (total / fps) % 60, total % fps)
+}
+
+/// The sequence markers as CSV: a header plus one row per marker, sorted as the
+/// engine keeps them (by start). Ticks are exact; the timecode column is for
+/// people and NLE-side checks.
+pub(crate) fn markers_csv(q: &Sequence) -> String {
+    let rate = q.settings.frame_rate;
+    let mut out = String::from("name,comment,start_ticks,duration_ticks,start_timecode,label\n");
+    for m in &q.markers {
+        out.push_str(&csv_field(&m.name));
+        out.push(',');
+        out.push_str(&csv_field(&m.comment));
+        out.push(',');
+        out.push_str(&m.start.0.to_string());
+        out.push(',');
+        out.push_str(&m.duration.0.to_string());
+        out.push(',');
+        out.push_str(&marker_timecode(rate, m.start));
+        out.push(',');
+        out.push_str(m.color.name());
+        out.push('\n');
+    }
+    out
+}
+
+/// Write the sequence markers to `path`; returns the number of markers written.
+/// Kept separate from the file dialog so the bytes can be tested.
+pub(crate) fn write_markers_csv(app: &mut App, path: &std::path::Path) -> std::io::Result<usize> {
+    let Some(q) = app.sequence() else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no sequence"));
+    };
+    let count = q.markers.len();
+    let csv = markers_csv(q);
+    std::fs::write(path, csv)?;
+    app.status = format!("Exported {count} markers to {}", path.display());
+    Ok(count)
+}
+
+/// Export the sequence markers to a CSV chosen by the user. Nothing is written
+/// for a sequence with no markers, so an empty export cannot look successful.
+pub(crate) fn export_markers_csv(app: &mut App) {
+    let Some(q) = app.sequence() else {
+        app.status = "No sequence".to_string();
+        return;
+    };
+    if q.markers.is_empty() {
+        app.status = "No markers to export".to_string();
+        return;
+    }
+    let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_file_name("markers.csv").save_file() else {
+        return;
+    };
+    if let Err(e) = write_markers_csv(app, &path) {
+        app.status = format!("Marker CSV export failed: {e}");
+    }
+}
+
 /// Set the sequence (Program) In or Out point at the playhead through
 /// `markers.markIn` / `markers.markOut` (frame-snapped, undoable). The Source
 /// panel uses the same commands with `target: "source"` when a source clip is
@@ -979,6 +1048,13 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         ui.add(egui::TextEdit::singleline(&mut app.marker_comment).desired_width(130.0).hint_text("comment"));
         if ui.button("Rename Marker").on_hover_text("Rename the marker at the playhead and set its comment").clicked() {
             rename_marker_at_playhead(app);
+        }
+        if ui
+            .add_enabled(app.sequence().is_some_and(|q| !q.markers.is_empty()), egui::Button::new("Markers CSV"))
+            .on_hover_text("Export the sequence markers as CSV")
+            .clicked()
+        {
+            export_markers_csv(app);
         }
         ui.separator();
         let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
@@ -2395,5 +2471,43 @@ mod tests {
         app.marker_name = "Elsewhere".to_string();
         super::rename_marker_at_playhead(&mut app);
         assert!(app.status.contains("No marker"), "status says why: {}", app.status);
+    }
+
+    #[test]
+    fn marker_csv_export_escapes_text_and_writes_the_file() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "MarkerCsv"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+        app.execute(
+            "markers.add",
+            json!({
+                "time": TICKS_PER_SECOND,
+                "durationFrames": 12,
+                "name": "A, \"B\"",
+                "comment": "line1\nline2",
+                "color": "Blue"
+            }),
+        )
+        .unwrap();
+
+        let csv = {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(q.markers.len(), 1);
+            super::markers_csv(q)
+        };
+        let expected = format!(
+            "name,comment,start_ticks,duration_ticks,start_timecode,label\n\"A, \"\"B\"\"\",\"line1\nline2\",{},{},00:00:01:00,Blue\n",
+            TICKS_PER_SECOND,
+            TICKS_PER_SECOND / 2
+        );
+        assert_eq!(csv, expected, "RFC 4180 quoting keeps the columns intact");
+
+        let path = std::env::temp_dir().join(format!("frameforge-markers-{}.csv", std::process::id()));
+        let written = super::write_markers_csv(&mut app, &path).unwrap();
+        assert_eq!(written, 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected, "the file has the tested bytes");
+        let _ = std::fs::remove_file(&path);
+        assert!(app.status.contains("Exported 1 markers"));
     }
 }
