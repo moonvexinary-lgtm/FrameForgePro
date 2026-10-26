@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T8 (2026-10-25) · Branch: `frameforge-rust-rewrite`
+Last updated: T9 (2026-10-25) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -307,7 +307,7 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
   At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
   (37 in run `40063686209`), T2 adds one (38 in run `40128137965`), T3 adds two (40 in run
-  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two and T8 adds two, so the current suite is 50 (run `40163011141`).
+  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two, T8 adds two and T9 adds one, so the current suite is 51 (run `40236814552`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
@@ -506,6 +506,37 @@ sound can be treated separately.
   a fixed 12-frame duration are exposed; there is no effect browser, custom
   duration, alignment control or transition handle in the UI yet.
 
+## T9 - Sequence In/Out marks with Lift and Extract (CI-verified, run 40236814552)
+
+The timeline header's **Mark In**, **Mark Out**, **Clear I/O**, **Lift (;)** and
+**Extract (')** buttons drive the engine's real Program marks and range edits.
+`I`/`O` mark the open source clip when one is open; with no source clip they mark
+the sequence's Program In/Out instead, so the keys are never a no-op. Marking
+snaps the playhead to the sequence frame grid first, and every action is one
+undo step.
+
+- **Marks**: `markers.markIn` / `markers.markOut` write `q.mark_in` / `q.mark_out`
+  on the active sequence (Out is inclusive, so the effective range ends one frame
+  past Out). `markers.clearInOut` clears both; media-item source marks are
+  untouched. The engine also drops a previously set opposite mark when the new
+  one would invert the range.
+- **Lift**: `sequence.lift` removes the In/Out range on the targeted tracks
+  (default: all tracks) and leaves the gap, so later clips keep their time. The
+  marks stay set for a follow-up edit.
+- **Extract**: `sequence.extract` removes the range on targeted **and
+  sync-locked** tracks and closes the gap, so later clips move left; it also
+  ripples sequence markers when Ripple Markers is on, clears the marks, and parks
+  the engine playhead at the range start, which the shell follows.
+- **Test**: `sequence_in_out_marks_lift_leaves_a_gap_and_extract_closes_it_and_undoes`
+  drives a real three-clip linked Bars & Tone sequence: it marks In/Out through
+  the helpers, asserts lift removes the middle picture and sound while leaving the
+  last clip at 4 s, that extract closes the gap to 2 s, clears the marks and moves
+  the shell playhead, and that undo restores the clips and marks.
+- **Limitations**: no sequence In/Out drag in the ruler, no split (video-only or
+  audio-only) In/Out, and no keyboard shortcut for Program marking while a source
+  clip is open (use the buttons); Lift/Extract follow the engine's targeting, so
+  untargeted tracks are untouched.
+
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
 The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
@@ -580,6 +611,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | T6 | Ripple Delete (button + Shift+Delete) through `edit.rippleDelete`: linked A/V removal, gap closing on affected/sync-locked tracks, marker removal/move policy, locked-track refusal and one-step undo | CI-verified, run 40163011141 |
 | T7 | Separate Roll, Slip and Slide through the engine's `timeline.roll` / `timeline.slip` / `timeline.slide`, with trim-row buttons, Alt/Shift/Ctrl arrow nudges and model-level undo tests | CI-verified, run 40163011141 |
 | T8 | Real 12-frame video cross-dissolve and audio crossfade at the selected In edge (`sequence.applyVideoTransition` / `sequence.applyAudioTransition`), with deterministic rendered-pixel and mixed-sample tests | CI-verified, run 40163011141 |
+| T9 | Program In/Out marks (`markers.markIn`/`markOut`/`clearInOut`) with Lift (`sequence.lift`) and Extract (`sequence.extract`), toolbar buttons plus `;`/`'` shortcuts and a model-level linked-A/V undo test | CI-verified, run 40236814552 |
 
 ## Dependency policy
 
