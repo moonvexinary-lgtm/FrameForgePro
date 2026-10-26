@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T9 (2026-10-25) · Branch: `frameforge-rust-rewrite`
+Last updated: T10 (2026-10-25) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -307,7 +307,7 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
   At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
   (37 in run `40063686209`), T2 adds one (38 in run `40128137965`), T3 adds two (40 in run
-  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two, T8 adds two and T9 adds one, so the current suite is 51 (run `40236814552`).
+  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two, T8 adds two, T9 adds one and T10 adds one, so the current suite is 52 (run `40252471033`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
@@ -537,6 +537,30 @@ undo step.
   clip is open (use the buttons); Lift/Extract follow the engine's targeting, so
   untargeted tracks are untouched.
 
+## T10 - Marker rename and comment editing (CI-verified, run 40252471033)
+
+The timeline header's marker row now has **marker name** and **comment** fields
+plus a **Rename Marker** button. The button edits the sequence marker at the
+playhead, so a normal click-to-jump (or `M` to add) selects the work target.
+
+- **Engine boundary**: the engine has no marker-edit command, so the shell uses
+  the existing `Session::edit` custom-edit path (`App::edit_project`) and mutates
+  the active sequence's marker list. The edit is a whole-project snapshot, so one
+  **Rename Marker** click is exactly one undo step and redo restores both fields.
+- **Identity**: the helper finds the marker by name-time equality and updates it
+  by `MarkerId`, not by index, so markers keep their identity across ripples and
+  marker-list reordering.
+- **Guard rails**: an empty name is refused (the engine's `markers.add` default
+  is an empty string, so blanks are real); with no marker at the playhead the
+  status bar says so rather than creating one. The helper snaps the playhead to
+  the sequence frame grid before matching.
+- **Test**: `marker_rename_is_an_undoable_project_edit` adds a real marker through
+  `markers.add`, renames it through the helper, asserts the name and comment, then
+  undoes and asserts the original empty name/comment with the marker still
+  present; finally it moves the playhead away and asserts the no-marker status.
+- **Limitations**: only the marker at the playhead is editable (no marker-list
+  selection), and colour, duration and CSV/EDL marker export are still absent.
+
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
 The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
@@ -612,6 +636,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | T7 | Separate Roll, Slip and Slide through the engine's `timeline.roll` / `timeline.slip` / `timeline.slide`, with trim-row buttons, Alt/Shift/Ctrl arrow nudges and model-level undo tests | CI-verified, run 40163011141 |
 | T8 | Real 12-frame video cross-dissolve and audio crossfade at the selected In edge (`sequence.applyVideoTransition` / `sequence.applyAudioTransition`), with deterministic rendered-pixel and mixed-sample tests | CI-verified, run 40163011141 |
 | T9 | Program In/Out marks (`markers.markIn`/`markOut`/`clearInOut`) with Lift (`sequence.lift`) and Extract (`sequence.extract`), toolbar buttons plus `;`/`'` shortcuts and a model-level linked-A/V undo test | CI-verified, run 40236814552 |
+| T10 | Rename and comment the sequence marker at the playhead through a custom undoable project edit, with name/comment fields in the marker row and an undo test | CI-verified, run 40252471033 |
 
 ## Dependency policy
 
