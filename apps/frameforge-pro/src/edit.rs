@@ -165,7 +165,7 @@ fn csv_field(value: &str) -> String {
 fn marker_timecode(rate: filmcraft_time::FrameRate, at: Tick) -> String {
     let total = rate.frame_at(at);
     let fps = rate.as_f64().round().max(1.0) as i64;
-    format!("{}:{:02}:{:02}:{:02}", total / (fps * 3600), (total / (fps * 60)) % 60, (total / fps) % 60, total % fps)
+    format!("{:02}:{:02}:{:02}:{:02}", total / (fps * 3600), (total / (fps * 60)) % 60, (total / fps) % 60, total % fps)
 }
 
 /// The sequence markers as CSV: a header plus one row per marker, sorted as the
