@@ -110,6 +110,50 @@ pub(crate) fn clear_marker(app: &mut App) {
     }
 }
 
+/// Rename the sequence marker at the playhead and set its comment through a
+/// custom, undoable project edit. The engine has no marker-edit command, so the
+/// shell edits the sequence's marker list by id (the identity ripples keep);
+/// the name and comment come from the header's marker fields.
+pub(crate) fn rename_marker_at_playhead(app: &mut App) {
+    let name = app.marker_name.trim().to_string();
+    if name.is_empty() {
+        app.status = "Type a marker name first".to_string();
+        return;
+    }
+    let comment = app.marker_comment.trim().to_string();
+    let at = app.session.sequence_rate().snap_nearest(app.playhead.max(Tick::ZERO));
+    let Some(seq_id) = app.sequence_id() else {
+        app.status = "No sequence".to_string();
+        return;
+    };
+    let found = app.session.project.sequence(seq_id).and_then(|q| q.markers.iter().find(|m| m.start == at).map(|m| (m.id, m.name.clone())));
+    let Some((marker_id, old_name)) = found else {
+        app.status = "No marker at the playhead".to_string();
+        return;
+    };
+    let new_name = name.clone();
+    let new_comment = comment.clone();
+    let result = app.edit_project("Rename Marker", move |project, _| {
+        if let Some(item) = project.items.get_mut(&seq_id)
+            && let ItemKind::Sequence(seq) = &mut item.kind
+        {
+            let q = std::sync::Arc::make_mut(seq);
+            if let Some(m) = q.markers.iter_mut().find(|m| m.id == marker_id) {
+                m.name = new_name;
+                m.comment = new_comment;
+            }
+        }
+        Ok(())
+    });
+    match result {
+        Ok(_) => {
+            app.playhead = at;
+            app.status = if old_name == name { format!("Marker \"{name}\" updated") } else { format!("Marker renamed to \"{name}\"") };
+        }
+        Err(e) => app.status = e.to_string(),
+    }
+}
+
 /// Set the sequence (Program) In or Out point at the playhead through
 /// `markers.markIn` / `markers.markOut` (frame-snapped, undoable). The Source
 /// panel uses the same commands with `target: "source"` when a source clip is
@@ -895,6 +939,11 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
         if ui.button("Clear Marker").on_hover_text("Clear the marker at the playhead").clicked() {
             clear_marker(app);
+        }
+        ui.add(egui::TextEdit::singleline(&mut app.marker_name).desired_width(100.0).hint_text("marker name"));
+        ui.add(egui::TextEdit::singleline(&mut app.marker_comment).desired_width(130.0).hint_text("comment"));
+        if ui.button("Rename Marker").on_hover_text("Rename the marker at the playhead and set its comment").clicked() {
+            rename_marker_at_playhead(app);
         }
         ui.separator();
         let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
@@ -2210,5 +2259,45 @@ mod tests {
             );
             assert_eq!(q.mark_in, Some(two_seconds), "undo restores the cleared marks");
         }
+    }
+
+    #[test]
+    fn marker_rename_is_an_undoable_project_edit() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "MarkerEdit"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1"})).unwrap();
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+
+        app.playhead = Tick(3 * TICKS_PER_SECOND);
+        super::add_marker(&mut app);
+        let (marker_id, before_name) = {
+            let q = app.session.active_sequence().unwrap();
+            (q.markers[0].id, q.markers[0].name.clone())
+        };
+        assert_eq!(before_name, "", "markers.add defaults to an empty name");
+
+        app.marker_name = "Shot 1".to_string();
+        app.marker_comment = "pickup".to_string();
+        super::rename_marker_at_playhead(&mut app);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let m = q.markers.iter().find(|m| m.id == marker_id).unwrap();
+            assert_eq!(m.name, "Shot 1");
+            assert_eq!(m.comment, "pickup");
+        }
+
+        app.undo();
+        {
+            let q = app.session.active_sequence().unwrap();
+            let m = q.markers.iter().find(|m| m.id == marker_id).unwrap();
+            assert_eq!(m.name, before_name, "undo restores the old name");
+            assert_eq!(m.comment, "", "undo restores the old comment");
+        }
+
+        // Away from a marker the helper reports why nothing happened.
+        app.playhead = Tick(9 * TICKS_PER_SECOND);
+        app.marker_name = "Elsewhere".to_string();
+        super::rename_marker_at_playhead(&mut app);
+        assert!(app.status.contains("No marker"), "status says why: {}", app.status);
     }
 }

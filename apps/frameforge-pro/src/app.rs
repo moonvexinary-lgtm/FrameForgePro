@@ -83,6 +83,10 @@ pub struct App {
     pub effects_item: Option<ItemId>,
     pub selected_effect: Option<usize>,
     pub effect_search: String,
+    /// The marker-name field in the timeline header (T10 marker editing).
+    pub marker_name: String,
+    /// The marker-comment field in the timeline header.
+    pub marker_comment: String,
     pub project_w: f32,
     pub timeline_h: f32,
     pub player: Player,
@@ -157,6 +161,8 @@ impl App {
             effects_item: None,
             selected_effect: None,
             effect_search: String::new(),
+            marker_name: String::new(),
+            marker_comment: String::new(),
             project_w: 250.0,
             timeline_h: 220.0,
             player: Player::new(),
