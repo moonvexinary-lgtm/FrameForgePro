@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T11 (2026-10-25) · Branch: `frameforge-rust-rewrite`
+Last updated: T12 (2026-10-25) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -307,7 +307,7 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
   At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
   (37 in run `40063686209`), T2 adds one (38 in run `40128137965`), T3 adds two (40 in run
-  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two, T8 adds two, T9 adds one, T10 adds one and T11 adds one, so the current suite is 53 (run `40256569182`).
+  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two, T8 adds two, T9 adds one, T10 adds one, T11 adds one and T12 adds one, so the current suite is 54 (run `40260600879`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
   not UI-automated; export remains one foreground job (no queue/presets); cancel
   deletes the partial output rather than resuming.
@@ -586,6 +586,32 @@ Transition** edits the transition already at the selected clip's In edge.
   always centred), the UI caps length at 600 frames, and there is still no
   transition browser, drag handle or per-transition list selection.
 
+## T12 - Marker CSV export (CI-verified, run 40260600879)
+
+The marker row's **Markers CSV** button exports the active sequence's markers to
+a CSV file chosen through the normal save dialog. The button is disabled when the
+sequence has no markers, and the helper refuses an empty list rather than writing
+a header-only file that looks like a successful export.
+
+- **Columns**: `name,comment,start_ticks,duration_ticks,start_timecode,label`,
+  one row per marker in the engine's order (sorted by start). Ticks are exact;
+  `start_timecode` is a people-readable `HH:MM:SS:FF` at the sequence rate, and
+  `label` is the marker colour's engine name.
+- **Escaping**: name and comment are always quoted as RFC 4180 fields with
+  embedded quotes doubled, so a comma, quote or newline in a marker cannot shift
+  the columns. Numbers, timecode and label are written unquoted.
+- **Boundary**: `markers_csv` is a pure function tested byte-for-byte, and
+  `write_markers_csv(app, path)` does the file write (returning the marker count
+  and setting the status) without the dialog, so the test exercises the real
+  bytes. The dialog path reports an I/O failure in the status bar.
+- **Test**: `marker_csv_export_escapes_text_and_writes_the_file` adds one marker
+  named `A, "B"` with a two-line comment, a 12-frame duration and the Blue label,
+  asserts the exact CSV text (including `00:00:01:00` at 24 fps), writes it to a
+  temp file, reads the same bytes back and checks the status line.
+- **Limitations**: export only (no CSV import), no EDL/XML/FCPXML, no column or
+  delimiter choice, and only the active sequence's markers; marker drag is still
+  absent.
+
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
 The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
@@ -663,6 +689,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | T9 | Program In/Out marks (`markers.markIn`/`markOut`/`clearInOut`) with Lift (`sequence.lift`) and Extract (`sequence.extract`), toolbar buttons plus `;`/`'` shortcuts and a model-level linked-A/V undo test | CI-verified, run 40236814552 |
 | T10 | Rename and comment the sequence marker at the playhead through a custom undoable project edit, with name/comment fields in the marker row and an undo test | CI-verified, run 40252471033 |
 | T11 | Chosen transition length (1-600 frames) on Dissolve/Crossfade plus `sequence.setTransition` duration/alignment editing for the transition at the selected clip's In edge, with an apply/update/undo test | CI-verified, run 40256569182 |
+| T12 | Marker CSV export with RFC 4180 quoting, exact ticks, padded start timecode and a byte-for-byte file test | CI-verified, run 40260600879 |
 
 ## Dependency policy
 
