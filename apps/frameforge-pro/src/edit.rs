@@ -762,11 +762,46 @@ pub(crate) fn apply_dissolve(app: &mut App, video: bool) {
         return;
     };
     let (command, label) = if video { ("sequence.applyVideoTransition", "Video cross-dissolve") } else { ("sequence.applyAudioTransition", "Audio crossfade") };
-    match app.execute(command, serde_json::json!({"clip": target.0, "edge": "in", "frames": 12})) {
+    let frames = app.transition_frames.clamp(1, 600);
+    match app.execute(command, serde_json::json!({"clip": target.0, "edge": "in", "frames": frames})) {
         Ok(value) => {
             let id = value["transition"].as_u64().unwrap_or(0);
-            app.status = format!("{label} applied at the selected edit (12 frames, transition {id})");
+            app.status = format!("{label} applied at the selected edit ({frames} frames, transition {id})");
         }
+        Err(e) => app.status = e,
+    }
+}
+
+/// Set the frames and alignment of the transition at the selected clip's In
+/// edge through `sequence.setTransition` (one engine edit, one undo step).
+/// Applying a transition only takes frames, so alignment is chosen here.
+pub(crate) fn update_transition(app: &mut App) {
+    let Some((clip, _)) = app.selected_clip() else {
+        app.status = "Select the incoming clip of a transition".to_string();
+        return;
+    };
+    let Some(video) = clip_is_video(app, clip) else {
+        app.status = "The selected clip is no longer in the sequence".to_string();
+        return;
+    };
+    let frames = app.transition_frames.clamp(1, 600) as i64;
+    let align = match app.transition_align {
+        filmcraft_project::TransitionAlign::CenterAtCut => "center",
+        filmcraft_project::TransitionAlign::StartAtCut => "start",
+        filmcraft_project::TransitionAlign::EndAtCut => "end",
+    };
+    let found = app.sequence().and_then(|q| {
+        let tracks = if video { &q.video_tracks } else { &q.audio_tracks };
+        tracks
+            .iter()
+            .find_map(|t| t.transitions.iter().find(|x| x.to == Some(clip)).map(|x| (x.id, x.effect.def().map_or("Transition", |d| d.name).to_string())))
+    });
+    let Some((id, name)) = found else {
+        app.status = "No transition at the selected clip's In edge (apply one first)".to_string();
+        return;
+    };
+    match app.execute("sequence.setTransition", serde_json::json!({"transition": id.0, "frames": frames, "align": align})) {
+        Ok(_) => app.status = format!("{name} at transition {} is now {frames} frames, {align} at the cut", id.0),
         Err(e) => app.status = e,
     }
 }
@@ -1016,19 +1051,38 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             slide_selected(app, 1);
         }
         ui.separator();
+        ui.label("Transition:");
+        ui.add(egui::DragValue::new(&mut app.transition_frames).range(1..=600).suffix(" fr"));
+        let align_label = match app.transition_align {
+            filmcraft_project::TransitionAlign::CenterAtCut => "Center",
+            filmcraft_project::TransitionAlign::StartAtCut => "Start",
+            filmcraft_project::TransitionAlign::EndAtCut => "End",
+        };
+        egui::ComboBox::from_id_salt("transition-align").selected_text(align_label).show_ui(ui, |ui| {
+            ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::CenterAtCut, "Center at cut");
+            ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::StartAtCut, "Start at cut");
+            ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::EndAtCut, "End at cut");
+        });
         if ui
             .add_enabled(has_clip, egui::Button::new("Dissolve"))
-            .on_hover_text("Apply a 12-frame video cross-dissolve at the selected clip's In edge (Ctrl/Cmd+D)")
+            .on_hover_text("Apply a video cross-dissolve of the chosen length at the selected clip's In edge (Ctrl/Cmd+D)")
             .clicked()
         {
             apply_dissolve(app, true);
         }
         if ui
             .add_enabled(has_clip, egui::Button::new("Crossfade"))
-            .on_hover_text("Apply a 12-frame audio crossfade at the selected edit (Ctrl/Cmd+Shift+D)")
+            .on_hover_text("Apply an audio crossfade of the chosen length at the selected edit (Ctrl/Cmd+Shift+D)")
             .clicked()
         {
             apply_dissolve(app, false);
+        }
+        if ui
+            .add_enabled(has_clip, egui::Button::new("Update Transition"))
+            .on_hover_text("Set the transition at the selected clip's In edge to these frames and alignment")
+            .clicked()
+        {
+            update_transition(app);
         }
         ui.separator();
         ui.colored_label(egui::Color32::GRAY, "Alt+Left/Right: slip · Alt+Shift: slide · Alt+Ctrl: roll");
@@ -1572,7 +1626,7 @@ mod tests {
     use filmcraft_engine::Session;
     use filmcraft_media::generators::GeneratorSource;
     use filmcraft_media::{Generator, MediaSource};
-    use filmcraft_project::{ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef};
+    use filmcraft_project::{ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef, TransitionAlign};
     use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
     use serde_json::json;
 
@@ -2191,6 +2245,48 @@ mod tests {
         assert!(before > 0.01, "the fixture has sound: {before}");
         assert!(mid > before * 1.15, "the crossfade overlaps both sides at the cut: {mid} vs {before}");
         assert!(mid > after * 1.15, "the crossfade is real on the incoming side too: {mid} vs {after}");
+    }
+
+    #[test]
+    fn transition_duration_and_alignment_are_editable_through_the_engine() {
+        let (mut app, clips) = transition_app(true);
+        let cut = Tick(2 * TICKS_PER_SECOND);
+        let frames = |n: i64| FrameRate::FPS_24.tick_of(n);
+
+        app.selection = Some(clips[1]);
+        app.transition_frames = 24;
+        super::apply_dissolve(&mut app, true);
+        let id = {
+            let q = app.session.active_sequence().unwrap();
+            let tr = &q.video_tracks[0].transitions[0];
+            assert_eq!((tr.start, tr.duration), (cut - frames(12), frames(24)), "a 24-frame dissolve is centred on the cut");
+            assert_eq!(tr.align, TransitionAlign::CenterAtCut);
+            tr.id
+        };
+
+        app.transition_frames = 8;
+        app.transition_align = TransitionAlign::EndAtCut;
+        super::update_transition(&mut app);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let tr = &q.video_tracks[0].transitions[0];
+            assert_eq!(tr.id, id, "the same transition was edited");
+            assert_eq!((tr.start, tr.duration), (cut - frames(8), frames(8)), "8 frames ending at the cut");
+            assert_eq!(tr.align, TransitionAlign::EndAtCut);
+        }
+
+        app.undo();
+        {
+            let q = app.session.active_sequence().unwrap();
+            let tr = &q.video_tracks[0].transitions[0];
+            assert_eq!((tr.start, tr.duration), (cut - frames(12), frames(24)), "undo restores the 24-frame centred span");
+            assert_eq!(tr.align, TransitionAlign::CenterAtCut);
+        }
+
+        // The outgoing clip's In edge has no transition to edit.
+        app.selection = Some(clips[0]);
+        super::update_transition(&mut app);
+        assert!(app.status.contains("No transition"), "status says why: {}", app.status);
     }
 
     #[test]
