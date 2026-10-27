@@ -1,1 +1,5 @@
 /target
+
+# Python worker/probe bytecode
+__pycache__/
+*.pyc
