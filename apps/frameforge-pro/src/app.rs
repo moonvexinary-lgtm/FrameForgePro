@@ -87,6 +87,10 @@ pub struct App {
     pub marker_name: String,
     /// The marker-comment field in the timeline header.
     pub marker_comment: String,
+    /// Marker length in frames (0 = point marker) for the marker editor.
+    pub marker_duration_frames: u32,
+    /// Marker colour for the marker editor.
+    pub marker_color: filmcraft_project::Label,
     /// Transition length applied by Dissolve/Crossfade and edited by Update Transition.
     pub transition_frames: u32,
     /// Where the transition sits relative to the cut (center by default).
@@ -167,6 +171,8 @@ impl App {
             effect_search: String::new(),
             marker_name: String::new(),
             marker_comment: String::new(),
+            marker_duration_frames: 0,
+            marker_color: filmcraft_project::Label::Green,
             transition_frames: 12,
             transition_align: filmcraft_project::TransitionAlign::CenterAtCut,
             project_w: 250.0,

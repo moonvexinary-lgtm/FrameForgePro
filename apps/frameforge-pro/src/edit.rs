@@ -110,17 +110,21 @@ pub(crate) fn clear_marker(app: &mut App) {
     }
 }
 
-/// Rename the sequence marker at the playhead and set its comment through a
-/// custom, undoable project edit. The engine has no marker-edit command, so the
-/// shell edits the sequence's marker list by id (the identity ripples keep);
-/// the name and comment come from the header's marker fields.
-pub(crate) fn rename_marker_at_playhead(app: &mut App) {
+/// Update the sequence marker at the playhead (name, comment, length and
+/// colour) through a custom, undoable project edit. The engine has no
+/// marker-edit command, so the shell edits the sequence's marker list by id
+/// (the identity ripples keep); all four values come from the header fields.
+pub(crate) fn update_marker_at_playhead(app: &mut App) {
     let name = app.marker_name.trim().to_string();
     if name.is_empty() {
         app.status = "Type a marker name first".to_string();
         return;
     }
     let comment = app.marker_comment.trim().to_string();
+    let frames = app.marker_duration_frames.min(6000);
+    let duration = app.session.sequence_rate().tick_of(frames as i64);
+    let color = app.marker_color;
+    let color_name = color.name();
     let at = app.session.sequence_rate().snap_nearest(app.playhead.max(Tick::ZERO));
     let Some(seq_id) = app.sequence_id() else {
         app.status = "No sequence".to_string();
@@ -133,7 +137,7 @@ pub(crate) fn rename_marker_at_playhead(app: &mut App) {
     };
     let new_name = name.clone();
     let new_comment = comment.clone();
-    let result = app.edit_project("Rename Marker", move |project, _| {
+    let result = app.edit_project("Update Marker", move |project, _| {
         if let Some(item) = project.items.get_mut(&seq_id)
             && let ItemKind::Sequence(seq) = &mut item.kind
         {
@@ -141,6 +145,8 @@ pub(crate) fn rename_marker_at_playhead(app: &mut App) {
             if let Some(m) = q.markers.iter_mut().find(|m| m.id == marker_id) {
                 m.name = new_name;
                 m.comment = new_comment;
+                m.duration = duration;
+                m.color = color;
             }
         }
         Ok(())
@@ -148,7 +154,11 @@ pub(crate) fn rename_marker_at_playhead(app: &mut App) {
     match result {
         Ok(_) => {
             app.playhead = at;
-            app.status = if old_name == name { format!("Marker \"{name}\" updated") } else { format!("Marker renamed to \"{name}\"") };
+            app.status = if old_name == name {
+                format!("Marker \"{name}\" updated ({frames} frames, {color_name})")
+            } else {
+                format!("Marker renamed to \"{name}\" ({frames} frames, {color_name})")
+            };
         }
         Err(e) => app.status = e.to_string(),
     }
@@ -1046,8 +1056,14 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
         ui.add(egui::TextEdit::singleline(&mut app.marker_name).desired_width(100.0).hint_text("marker name"));
         ui.add(egui::TextEdit::singleline(&mut app.marker_comment).desired_width(130.0).hint_text("comment"));
-        if ui.button("Rename Marker").on_hover_text("Rename the marker at the playhead and set its comment").clicked() {
-            rename_marker_at_playhead(app);
+        ui.add(egui::DragValue::new(&mut app.marker_duration_frames).range(0..=6000).suffix(" fr"));
+        egui::ComboBox::from_id_salt("marker-color").selected_text(app.marker_color.name()).show_ui(ui, |ui| {
+            for color in Label::ALL {
+                ui.selectable_value(&mut app.marker_color, color, color.name());
+            }
+        });
+        if ui.button("Update Marker").on_hover_text("Set the name, comment, length and colour of the marker at the playhead").clicked() {
+            update_marker_at_playhead(app);
         }
         if ui
             .add_enabled(app.sequence().is_some_and(|q| !q.markers.is_empty()), egui::Button::new("Markers CSV"))
@@ -2434,7 +2450,7 @@ mod tests {
     }
 
     #[test]
-    fn marker_rename_is_an_undoable_project_edit() {
+    fn marker_fields_update_is_an_undoable_project_edit() {
         let mut s = Session::default();
         s.execute("file.newProject", json!({"name": "MarkerEdit"})).unwrap();
         s.execute("file.newSequence", json!({"name": "S1"})).unwrap();
@@ -2450,12 +2466,16 @@ mod tests {
 
         app.marker_name = "Shot 1".to_string();
         app.marker_comment = "pickup".to_string();
-        super::rename_marker_at_playhead(&mut app);
+        app.marker_duration_frames = 24;
+        app.marker_color = Label::Blue;
+        super::update_marker_at_playhead(&mut app);
         {
             let q = app.session.active_sequence().unwrap();
             let m = q.markers.iter().find(|m| m.id == marker_id).unwrap();
             assert_eq!(m.name, "Shot 1");
             assert_eq!(m.comment, "pickup");
+            assert_eq!(m.duration, app.session.sequence_rate().tick_of(24), "the length is 24 frames");
+            assert_eq!(m.color, Label::Blue);
         }
 
         app.undo();
@@ -2464,12 +2484,14 @@ mod tests {
             let m = q.markers.iter().find(|m| m.id == marker_id).unwrap();
             assert_eq!(m.name, before_name, "undo restores the old name");
             assert_eq!(m.comment, "", "undo restores the old comment");
+            assert_eq!(m.duration, Tick::ZERO, "undo restores a point marker");
+            assert_eq!(m.color, Label::Green, "undo restores the default colour");
         }
 
         // Away from a marker the helper reports why nothing happened.
         app.playhead = Tick(9 * TICKS_PER_SECOND);
         app.marker_name = "Elsewhere".to_string();
-        super::rename_marker_at_playhead(&mut app);
+        super::update_marker_at_playhead(&mut app);
         assert!(app.status.contains("No marker"), "status says why: {}", app.status);
     }
 
