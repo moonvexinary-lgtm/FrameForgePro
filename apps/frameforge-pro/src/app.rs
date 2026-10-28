@@ -504,6 +504,13 @@ impl App {
         self.seq.or_else(|| self.session.project.sequences().next().map(|it| it.id))
     }
 
+    /// The active sequence's project-item name, if any. `Sequence` itself has no
+    /// name: the label lives on the owning `ProjectItem`.
+    pub fn sequence_name(&self) -> Option<&str> {
+        let id = self.sequence_id()?;
+        self.session.project.items.get(&id).map(|it| it.name.as_str())
+    }
+
     /// The active sequence, read-only.
     pub fn sequence(&self) -> Option<&filmcraft_project::Sequence> {
         let id = self.sequence_id()?;

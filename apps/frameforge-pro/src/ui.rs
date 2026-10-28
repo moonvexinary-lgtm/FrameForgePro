@@ -73,7 +73,7 @@ pub fn install(ctx: &egui::Context) {
     visuals.selection.bg_fill = ACCENT_SEL;
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
 
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
     style.visuals = visuals;
     style.spacing.item_spacing = vec2(6.0, 4.0);
     style.spacing.button_padding = vec2(8.0, 3.0);
@@ -87,7 +87,8 @@ pub fn install(ctx: &egui::Context) {
     style.text_styles.insert(TextStyle::Small, FontId::proportional(10.5));
     style.text_styles.insert(TextStyle::Heading, FontId::proportional(16.0));
     style.text_styles.insert(TextStyle::Monospace, FontId::monospace(12.0));
-    ctx.set_style(style);
+    ctx.set_theme(egui::ThemePreference::Dark);
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 /// A panel background plus a child UI clipped to the same rectangle.

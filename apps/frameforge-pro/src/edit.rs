@@ -1184,7 +1184,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     header.add_space(3.0);
     header.horizontal(|ui| {
         ui.label(egui::RichText::new("Timeline").size(11.0).strong().color(ui::TEXT_HI));
-        ui.label(egui::RichText::new(app.sequence().map(|s| s.name.clone()).unwrap_or_else(|| "No sequence".to_string())).size(10.0).color(ui::TEXT_LO));
+        ui.label(egui::RichText::new(app.sequence_name().unwrap_or("No sequence")).size(10.0).color(ui::TEXT_LO));
         if ui.button("Razor").on_hover_text("Add an edit on every track at the playhead (Ctrl+K)").clicked() {
             app.add_edit_all_tracks();
         }
@@ -1846,7 +1846,7 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         );
         return;
     };
-    let seq_name = app.sequence().map(|s| s.name.clone()).unwrap_or_default();
+    let seq_name = app.sequence_name().unwrap_or_default().to_string();
     let rate = app.sequence().map(|s| s.settings.frame_rate).unwrap_or(SEQUENCE_RATE);
     let frame = rate.frame_at(app.playhead);
     let seq_end = app.sequence_end();
@@ -1954,7 +1954,7 @@ fn inspector_controls(app: &mut App, panel: &mut egui::Ui) {
         ui::big_gap(panel);
         ui::section(panel, "SEQUENCE");
         if let Some(seq) = app.sequence() {
-            ui::kv(panel, "Name", seq.name.clone());
+            ui::kv(panel, "Name", app.sequence_name().unwrap_or_default().to_string());
             ui::kv(panel, "Frame rate", format!("{:.3} fps", seq.settings.frame_rate.as_f64()));
             ui::kv(panel, "Resolution", format!("{} x {}", seq.settings.width, seq.settings.height));
             ui::kv(panel, "Markers", seq.markers.len().to_string());
@@ -2077,7 +2077,7 @@ fn inspector_metadata(app: &mut App, panel: &mut egui::Ui) {
     ui::kv(panel, "Dirty", if app.dirty { "Yes" } else { "No" });
     ui::section(panel, "SEQUENCE");
     if let Some(seq) = app.sequence() {
-        ui::kv(panel, "Name", seq.name.clone());
+        ui::kv(panel, "Name", app.sequence_name().unwrap_or_default().to_string());
         ui::kv(panel, "Size", format!("{} x {}", seq.settings.width, seq.settings.height));
         ui::kv(panel, "Rate", format!("{:.3} fps", seq.settings.frame_rate.as_f64()));
         ui::kv(panel, "Video tracks", seq.video_tracks.len().to_string());
