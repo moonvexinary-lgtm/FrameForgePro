@@ -354,8 +354,9 @@ workspace drew none and could not add, clear or navigate them.
   The device is opened on the first real `play`, so app construction (and the app
   tests) never touch WASAPI; this removed an intermittent
   `STATUS_ACCESS_VIOLATION` in the test binary.
-- **Limitations**: no marker rename/comment editor or marker drag on the ruler;
-  marker colours are a fixed UI mapping; no CSV/EDL export wiring yet.
+- **Limitations at T2**: no marker rename/comment editor or marker drag on the ruler;
+  marker colours were display-only. T10/T13 add the name/comment/length/colour editor
+  and T12 adds CSV export; marker drag and CSV/EDL import remain absent.
 
 ## T3 — snapping moves and trims (✔ CI-verified, run 40133164791)
 
@@ -537,29 +538,31 @@ undo step.
   clip is open (use the buttons); Lift/Extract follow the engine's targeting, so
   untargeted tracks are untouched.
 
-## T10 - Marker rename and comment editing (CI-verified, run 40252471033)
+## T10 - Marker rename and comment editing (CI-verified, run 40252471033; extended by T13)
 
-The timeline header's marker row now has **marker name** and **comment** fields
-plus a **Rename Marker** button. The button edits the sequence marker at the
-playhead, so a normal click-to-jump (or `M` to add) selects the work target.
+The timeline header's marker row now has **marker name**, **comment**, **length** and **colour** fields plus an **Update Marker** button (T13 extends the T10 rename editor). The button edits the sequence marker at the playhead, so a normal click-to-jump (or `M` to add) selects the work target.
 
 - **Engine boundary**: the engine has no marker-edit command, so the shell uses
   the existing `Session::edit` custom-edit path (`App::edit_project`) and mutates
   the active sequence's marker list. The edit is a whole-project snapshot, so one
-  **Rename Marker** click is exactly one undo step and redo restores both fields.
-- **Identity**: the helper finds the marker by name-time equality and updates it
+  **Update Marker** click is exactly one undo step and redo restores all fields.
+- **Identity**: the helper finds the marker by its snapped start and updates it
   by `MarkerId`, not by index, so markers keep their identity across ripples and
   marker-list reordering.
 - **Guard rails**: an empty name is refused (the engine's `markers.add` default
   is an empty string, so blanks are real); with no marker at the playhead the
   status bar says so rather than creating one. The helper snaps the playhead to
   the sequence frame grid before matching.
-- **Test**: `marker_rename_is_an_undoable_project_edit` adds a real marker through
-  `markers.add`, renames it through the helper, asserts the name and comment, then
-  undoes and asserts the original empty name/comment with the marker still
-  present; finally it moves the playhead away and asserts the no-marker status.
+- **Test**: the T10 test was extended and renamed in T13 to
+  `marker_fields_update_is_an_undoable_project_edit`; it adds a real marker through
+  `markers.add`, sets name, comment, a 24-frame length and the Blue colour, asserts
+  all four fields, then undoes and asserts the original empty name/comment,
+  zero-length point marker and Green colour with the marker still present; finally
+  it moves the playhead away and asserts the no-marker status.
 - **Limitations**: only the marker at the playhead is editable (no marker-list
-  selection), and colour, duration and CSV/EDL marker export are still absent.
+  selection), marker drag and CSV/EDL import are still absent, and the length
+  field is capped at 6000 frames in the UI.
+
 
 ## T11 - Transition length and alignment (CI-verified, run 40256569182)
 
@@ -612,6 +615,26 @@ a header-only file that looks like a successful export.
   delimiter choice, and only the active sequence's markers; marker drag is still
   absent.
 
+## T13 - Marker length and colour editing (CI-verified, run 40513248065)
+
+The marker row's **length** field is a frame count (0 = a point marker) and its
+**colour** combo exposes the engine's full label set. **Update Marker** writes
+name, comment, length and colour together through the same custom project edit
+as T10; no engine command exists for marker edits.
+
+- **Length**: the UI permits 0-6000 frames; the helper converts frames to exact
+  ticks at the sequence rate with `tick_of`, so the stored duration is the same
+  value the CSV export reports. Zero restores a point marker.
+- **Colour**: the combo is populated from `Label::ALL`, and the helper stores the
+  selected `Label` on the `MarkerId`; undo restores the previous colour.
+- **Status**: the status line reports the new length and colour, and still
+  refuses an empty name or a playhead with no marker.
+- **Test**: `marker_fields_update_is_an_undoable_project_edit` covers all four
+  fields and undo; it is the T10 test extended rather than a second, weaker
+  path.
+- **Limitations**: no marker drag, no CSV/EDL import and no marker-list
+  selection; a marker's start cannot be moved through this editor.
+
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
 The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
@@ -634,8 +657,8 @@ the clip's alpha, without any model, Python or weights.
   half. No new crate dependency: `image` was already a workspace dependency of the app; the bridge now
   uses it too.
 - **Limitations**: mask and frame sizes must match (no proxy stretching; R3 regenerates at the working
-  size); decoded masks are not held in an in-memory LRU; no mask writer, initial-mask UI or XMem
-  inference yet.
+  size); decoded masks are not held in an in-memory LRU; no mask writer, initial-mask UI or in-app
+  XMem inference yet (the external `tools/` probe is not app-wired).
 
 ## R2 — worker transport and frame exporter (✔ CI-verified, run 40059782293)
 
@@ -649,16 +672,50 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 - **`export_frames`**: decodes a range through FilmCraft's codecs, fits the working size without
   upscaling, and writes `frame_<media index>.png` in order for the worker.
 - **`frameforge-pro roto-bench [frames]`**: times this Rust-side decode/scale/PNG path on synthetic
-  Bars & Tone. CI runs it with 4 frames. It says "XMem CPU inference: not measured" because the
-  optional runtime and consented weights are absent; no inference number is invented.
+  Bars & Tone. CI runs it with 4 frames. It says "XMem CPU inference: not measured" because CI has no
+  optional runtime or consented weights; the local `tools/` probe is separate and is not an inference
+  number invented by `roto-bench`.
 - **Tests** (`crates/bridge/tests/r2_roto_worker.rs`, 3): a real PowerShell fake worker completes
   ready → progress → done → cancel → shutdown over pipes; the exporter writes scaled PNGs in media
   order; an empty range is rejected. The fake worker is not XMem and the test says so.
 - **Measured limits**: the client is blocking; a hung worker needs the R3 job runner's timeout/kill
-  policy. `request_shutdown` sends the request and teardown kills the child. No Python, weights, real
-  worker script, job queue, initial-mask UI or UI wiring ships in R2.
+  policy. `request_shutdown` sends the request and teardown kills the child. No Python runtime or
+  weights ship in the app; `tools/` holds the local worker/probe (not part of the Rust build), and
+  initial-mask UI, job queue and UI wiring are still absent.
 - **Size**: artifact `frameforge-pro-windows-dev` is **25,512,804 bytes** ZIP (R1 was 25,418,672;
   M12 25,229,770); no new external crate.
+
+## R3 — real XMem worker probe (local evidence, not CI; 2026-10-27)
+
+`tools/xmem_worker.py` is the protocol-1 adapter over the official MIT XMem
+network/inference core. It imports the model from an external `--xmem-source`
+checkout, verifies the caller's SHA-256 before loading the user-supplied weights,
+propagates forward or backward, writes `frame_<index>.png` masks, reports progress
+and honors a mid-job `cancel`. `tools/xmem_r3_probe.py` builds a moving-rectangle
+clip, drives the worker over pipes and computes IoU.
+
+- **Local run**: PowerShell on this Windows box:
+  `py -3.11 tools/xmem_r3_probe.py --xmem-source C:\Users\augus\Downloads\XMem-official --weights C:\Users\augus\Downloads\XMem.pth`.
+  Runtime: torch 2.14.1+cpu, XMem commit `f3b841d`, weights SHA-256
+  `27776291d2f0639b4e6b372a67651579b51180aa4d8f8f89bbff2dcc09ebf6f9`,
+  AMD Ryzen 5 7530U (the target laptop).
+- **160x96, 12 frames**: forward mean IoU **0.9539** (min 0.9231), backward mean
+  **0.9512** (min 0.8700); wall 10.6 s / 4.8 s including model load, reported
+  inference 5.09 s / 4.06 s.
+- **480x270, 6 frames** (`--width 480 --height 270 --measure-memory`): forward
+  mean IoU **0.9883** (min 0.9796), backward mean **0.9945** (min 0.9912); wall
+  7.3 s / 4.8 s, reported inference 4.31 s / 4.40 s, peak worker RSS **710.2 MB**
+  / **610.7 MB** (the forward peak includes model load; the backward peak is
+  after it).
+- **Cancel**: a 30-frame 480x270 job cancelled after the first progress event
+  emitted `cancelled` 1.05 s later and stopped after 2 written masks.
+- **Not met**: no app/UI wiring or job queue, no timeout/kill policy in
+  `XmemWorker`, no resume/segmented correction runs, no memory ceiling enforcement,
+  no proof that a worker mask reaches preview/export through the R1 cache, and no
+  CI coverage (CI has no torch or weights). This is real inference evidence, not
+  an R3 acceptance pass; R3 and R4 remain open. The tools-only commit `23d03da`
+  ran CI green (run `40517500476`, 54 tests, 25,564,165-byte artifact), confirming
+  the Rust tree was unchanged.
 
 ## Milestones
 
@@ -678,6 +735,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | M12 | export safety and close guard: overwrite confirmation on the exact resolved path, real cancellation through `Progress.cancel` with partial-file cleanup, and a Save/Discard/Cancel guard on the window close request | ✔ (CI-verified, run 40045638522) |
 | R1 | cached roto masks: validated cache key + manifest/PNG reader, alpha in `ComposedSource`, schema 3, preview + H.264 export test and cache-invalidation test | ✔ (CI-verified, run 40056112214) |
 | R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests | ✔ (CI-verified, run 40059782293; XMem CPU benchmark still open) |
+| R3 (partial) | Real XMem protocol worker and local probe: forward/backward IoU, cancel and peak RSS on the target Ryzen 5 7530U | 🟡 Local evidence only; app wiring, resume, timeout policy, memory ceiling and renderer mask equality remain open |
 | T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
 | T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |
 | T3 | snapping: a toolbar Snap toggle on `sequence.snap`; moves snap their start or end, trims snap the edge, to zero / the playhead / every other clip edge within 8 screen pixels; pure-function tests | ✔ (CI-verified, run 40133164791) |
@@ -690,6 +748,7 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
 | T10 | Rename and comment the sequence marker at the playhead through a custom undoable project edit, with name/comment fields in the marker row and an undo test | CI-verified, run 40252471033 |
 | T11 | Chosen transition length (1-600 frames) on Dissolve/Crossfade plus `sequence.setTransition` duration/alignment editing for the transition at the selected clip's In edge, with an apply/update/undo test | CI-verified, run 40256569182 |
 | T12 | Marker CSV export with RFC 4180 quoting, exact ticks, padded start timecode and a byte-for-byte file test | CI-verified, run 40260600879 |
+| T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
 
 ## Dependency policy
 

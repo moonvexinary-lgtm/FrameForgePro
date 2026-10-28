@@ -1,11 +1,13 @@
 # Roto AI — XMem integration plan (mandatory engine)
 
-Status: **R1 and the R2 transport/exporter are implemented and CI-verified; XMem inference itself
-(R3), the Roto AI workspace (R4), and the consent-based pack/weights (R5) are not.** R1 (run
+Status: **R1 and the R2 transport/exporter are implemented and CI-verified; a real XMem protocol
+worker and local R3 probe now run the official model on CPU. XMem is not app-wired, and the Roto AI
+workspace (R4), consent-based pack/weights (R5) and full R3 acceptance are not complete.** R1 (run
 `40056112214`) reads a cached mask and multiplies the clip's alpha on the one preview/export path.
 R2 (run `40059782293`) speaks the JSON-lines worker protocol to a real child process and writes
-worker input PNGs; its fake worker test uses no PyTorch and no weights. The CPU XMem benchmark is
-**not recorded**; `roto-bench` measures only the Rust frame-export path and reports XMem inference as
+worker input PNGs; its fake worker test uses no PyTorch and no weights. The local probe (2026-10-27)
+measured real forward/backward inference, IoU, cancel and peak RSS on the target Ryzen 5 7530U;
+`roto-bench` itself still measures only the Rust frame-export path and reports XMem inference as
 "not measured". Nothing in the UI presents Roto AI as working.
 
 ## Non-negotiables
@@ -155,13 +157,14 @@ frames at 32×18 and checks dimensions, colour and order.
 
 `frameforge-pro roto-bench [frames]` times this Rust-side decode/scale/PNG path on synthetic Bars &
 Tone and CI runs it with 4 frames. It prints "XMem CPU inference: not measured" unconditionally — no
-pack/weight detection or inference call is wired yet — so it never invents an inference number. The
-target-laptop CPU benchmark required by R2 remains open because it needs the optional runtime and
-237.5 MB weights, which are R3/R5 work.
+pack/weight detection or inference call is wired into `roto-bench` — so it never invents an inference
+number. The target-laptop CPU benchmark is now measured **locally** by `tools/xmem_r3_probe.py`
+(2026-10-27; see above), not by `roto-bench` and not in CI; 237.5 MB weights remain user-supplied.
 
 Limitations: the client is blocking (a hung worker needs the R3 job runner's timeout/kill policy);
-`request_shutdown` sends the request and process teardown kills the child; no Python runtime, weights,
-real worker script, initial-mask UI, job queue or UI wiring is shipped.
+`request_shutdown` sends the request and process teardown kills the child; no Python runtime or weights
+ship, and the `tools/` real worker script is not in the optional pack; initial-mask UI, job queue and UI
+wiring are still absent.
 
 ## Packaging
 
@@ -185,27 +188,51 @@ projects keep their mask cache and still render from it.
 4. Long clips: process at a reduced working resolution and cache; preview can show the mask at proxy
    resolution while export regenerates at full resolution (same model, documented difference).
 
-## Staged delivery and acceptance tests
+## Local R3 probe (2026-10-27)
+
+`tools/xmem_worker.py` is our protocol-1 adapter over an external, user-supplied official XMem
+checkout (MIT) and `XMem.pth`; it downloads nothing, verifies the weights SHA-256, runs on CPU and
+writes `frame_<index>.png`. `tools/xmem_r3_probe.py` generates a moving-rectangle clip, drives the
+worker over pipes, computes IoU and optionally samples peak RSS. Neither the checkout nor the
+weights are committed, and CI does not run them (no torch, no weights).
+
+- **Command**: `py -3.11 tools/xmem_r3_probe.py --xmem-source <XMem checkout> --weights <XMem.pth>`.
+- **Environment**: AMD Ryzen 5 7530U (target laptop), Python 3.11, torch 2.14.1+cpu, XMem `f3b841d`,
+  weights 249,026,057 bytes, SHA-256 `27776291d2f0639b4e6b372a67651579b51180aa4d8f8f89bbff2dcc09ebf6f9`.
+- **160x96, 12 frames**: forward mean IoU 0.9539 (min 0.9231); backward mean 0.9512 (min 0.8700).
+- **480x270, 6 frames**: forward mean IoU 0.9883 (min 0.9796), 0.818 fps wall, 710.2 MB peak RSS;
+  backward mean 0.9945 (min 0.9912), 1.252 fps wall, 610.7 MB peak RSS. Wall time includes model
+  load; worker-reported inference time was 4.31 s / 4.40 s. Peak RSS was 710.2 MB forward
+  (including model load) and 610.7 MB backward (after load).
+- **Cancel**: a 30-frame 480x270 job cancelled after the first progress event emitted `cancelled`
+  1.05 s later and stopped after 2 masks.
+- **Still open**: app/UI wiring, a job runner with timeout/kill, resume from corrections, a memory
+  ceiling, and proof that worker masks are the bytes used by preview/export (the R1 seam exists but
+  the app does not spawn the worker). This is **not** an R3 pass.
+
+
 
 | Stage | Deliverable | Acceptance test (must actually run) |
 |---|---|---|
 | **R0** | This plan, licensing record, protocol spec | Reviewed; no UI controls presented as working |
 | **R1** | Mask cache + alpha application in `ComposedSource`, synthetic mask | ✔ Implemented; 5 tests in `r1_roto.rs` (run `40056112214`): known alpha matte changes preview **and** H.264 export pixels; every key input invalidates the cache; a missing in-range mask is an error |
-| **R2** | Worker protocol + frame exporter, CPU benchmark command | 🟡 Protocol round-trip against a real fake child and PNG exporter tested (3 tests, run `40059782293`); `roto-bench` runs in CI. **Not met:** target-laptop CPU XMem benchmark (needs the R3/R5 pack and weights) |
-| **R3** | Real XMem CPU end-to-end on a short synthetic clip | Accuracy on a moving rectangle ≥ agreed IoU; forward and backward propagation; cancel/resume; memory ceiling; final-export mask equality |
+| **R2** | Worker protocol + frame exporter, CPU benchmark command | 🟡 Protocol round-trip against a real fake child and PNG exporter tested (3 tests, run `40059782293`); `roto-bench` runs in CI. **Partially met:** the local probe measured the target-laptop CPU XMem benchmark (480x270, 0.818/1.252 fps wall, 710.2/610.7 MB peak RSS, 2026-10-27); it is not a CI gate and `roto-bench` still reports inference as not measured |
+| **R3** | Real XMem CPU end-to-end on a short synthetic clip | 🟡 Local probe: moving-rectangle IoU forward/backward, cancellation and peak RSS measured with the real model (see above). **Not met:** resume, memory ceiling, final-export mask equality, app integration and a repeatable CI/manual-dispatch job |
 | **R4** | Roto AI workspace (brush, initial mask, propagate, corrections, cache UI) | UI interactions bound to real worker state; no fake values; screenshots recorded |
 | **R5** | Weights consent download + optional pack | Download shows size/source/licence; checksum verified; deletion works; core app still runs without it |
 | **R6** | Occlusion / disappearance / reappearance corpus, drift review, edge refinement | Documented results on the corpus, including failures |
 
-CI policy: protocol/cache/alpha tests run on every push (no PyTorch). The real XMem test is a separate,
-owner-enabled workflow (manual dispatch) because it downloads ~2+ GB of runtime and weights and is slow on
-CPU; its logs are the evidence for R3. It is never simulated in the normal suite.
+CI policy: protocol/cache/alpha tests run on every push (no PyTorch). The real XMem probe is local
+and owner-run because the runtime and 237.5 MB weights are not CI dependencies; its logs are the
+evidence for the partial R3 result. It is never simulated in the normal suite and CI never downloads
+XMem or weights.
 
 ## Not claimed
 
 XMem integration is **not complete** until R3 passes with the real model and R4 is wired. The current
-app has no Roto AI workspace, no Python worker, no inference, no weights and no initial-mask UI; the
-tab is not shown. What exists is the R1 mask seam (cache reader + alpha in `ComposedSource`), the R2
-protocol/exporter and a benchmark command that explicitly refuses to invent an inference number. The
-real CPU measurement waits for R3 because installing the optional runtime and weights is a separate,
-consented step. Any future status in `docs/FEATURE_PARITY.md` will name the run that proved it.
+app has no Roto AI workspace, no initial-mask UI, no app job runner and no UI path that spawns the
+worker; no pack or weights ship. What exists is the R1 mask seam (cache reader + alpha in
+`ComposedSource`), the R2 protocol/exporter, the local `tools/` real-XMem adapter/probe, and a
+benchmark command that explicitly refuses to invent an inference number. The local probe is real
+inference evidence, not an R3 acceptance pass; resume, memory ceiling and renderer mask equality stay
+open. Any future status in `docs/FEATURE_PARITY.md` will name the run that proved it.

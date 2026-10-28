@@ -21,12 +21,15 @@ Premiere Pro-inspired professional workflows.
 > Ripple Delete with linked A/V and marker ripple, T7 adds Roll/Slip/Slide, T8 adds real
 > 12-frame video cross-dissolve and audio crossfade at the selected edit, and T9 adds Program In/Out
 > marks with Lift and Extract; T10 renames and comments the marker at the playhead, T11 chooses the
-> dissolve length and edits transition duration/alignment, and T12 exports markers as CSV. R1 adds a validated cached-mask reader
+> dissolve length and edits transition duration/alignment, T12 exports markers as CSV, and T13 edits
+> marker length and colour. R1 adds a validated cached-mask reader
 > and alpha application in `ComposedSource`, so a synthetic matte changes both preview and
 > H.264 export; R2 adds the JSON-lines worker protocol, a child-process client and the PNG
-> frame exporter (`roto-bench` measures only that Rust path). XMem inference, the Roto AI
-> workspace, the optional Python pack and the consent-based 237.5 MB weights are **not
-> implemented or claimed** — R3–R6 remain:
+> frame exporter (`roto-bench` measures only that Rust path). A real XMem protocol worker and
+> local R3 probe now run the official model on CPU (forward/backward accuracy, cancel and peak
+> memory are measured in `docs/ARCHITECTURE.md`); the app/UI wiring, resume, memory ceiling and
+> renderer mask-equality proof remain open. The optional Python pack and consent-based 237.5 MB
+> weights are **not shipped**; R3–R6 remain:
 > see [docs/ROTO_AI_PLAN.md](docs/ROTO_AI_PLAN.md). Nothing is stubbed or faked; the
 > honest gap list is [docs/FEATURE_PARITY.md](docs/FEATURE_PARITY.md) and the current
 > baseline audit is [docs/BASELINE_AUDIT.md](docs/BASELINE_AUDIT.md).

@@ -1,12 +1,12 @@
 # Baseline audit — FrameForge Pro
 
-Audit date: 2026-10-22 · Updated: 2026-10-25 with R1/R2/T1-T12 evidence · Auditor: coding agent (source inspection + CI evidence, no assumptions)
+Audit date: 2026-10-22 · Updated: 2026-10-27 with R1/R2/T1-T13 and local R3 probe evidence · Auditor: coding agent (source inspection + CI evidence, no assumptions)
 
 ## 1. Exact refs inspected
 
 | Ref | Commit | What it is |
 |---|---|---|
-| `frameforge-rust-rewrite` | `70aa844` | **The maintained implementation.** Rust workspace: FilmCraft editing engine + EffectCraft compositing engine + the egui application shell. R1/R2 add the cached roto mask seam and the XMem worker transport; T1 adds real track visibility/mute/solo/lock headers; T2 adds sequence markers; T3 adds move/trim snapping; T4 adds insert/overwrite at the playhead; T5 adds the Source monitor with source In/Out and marker ripple; T6 adds ripple delete; T7 adds roll/slip/slide; T8 adds real video/audio transitions; T9 adds Program In/Out marks with Lift and Extract; T10 adds marker rename/comment editing; T11 adds transition length and alignment editing; T12 adds marker CSV export. |
+| `frameforge-rust-rewrite` | `23d03da` | **The maintained implementation.** Rust workspace: FilmCraft editing engine + EffectCraft compositing engine + the egui application shell. R1/R2 add the cached roto mask seam and the XMem worker transport; T1 adds real track visibility/mute/solo/lock headers; T2 adds sequence markers; T3 adds move/trim snapping; T4 adds insert/overwrite at the playhead; T5 adds the Source monitor with source In/Out and marker ripple; T6 adds ripple delete; T7 adds roll/slip/slide; T8 adds real video/audio transitions; T9 adds Program In/Out marks with Lift and Extract; T10 adds marker rename/comment editing; T11 adds transition length and alignment editing; T12 adds marker CSV export; T13 adds marker length/colour editing and the real XMem protocol worker/probe lives in `tools/`. |
 | `frameforge-dev` | `2601eb5` | The original C++/Qt/QML application (a Kdenlive fork, GPL-3.0, 2 003 files). It is an **ancestor** of the Rust branch (`git merge-base --is-ancestor` → true), preserved unchanged, and is not built or linked. |
 | `frameforge-cpp-legacy` (tag, documented in README) | `2601eb5` | Recovery point for the Qt application. |
 | Upstream FilmCraft | `6c3948a36c80e4996d924766ba7157eec4fca85e` | Pinned git dependency (`filmcraft-*`). |
@@ -23,10 +23,11 @@ single fast-forward and should be an explicit decision, not a side effect of thi
 - Verified command shapes against FilmCraft's own tests (`effects.apply`, `effects.setParam`,
   `effects.toggleEnabled`, `effects.remove`, `mixer.setStrip`) rather than trusting the shell's call sites.
 - Read the last green CI run's logs (`39729926210`) for measured test and effect-sweep numbers.
-  R1, R2 and T1-T12 were verified by their own green runs (`40056112214`, `40059782293`, `40063686209`,
+  R1, R2 and T1-T13 were verified by their own green runs (`40056112214`, `40059782293`, `40063686209`,
   `40128137965`, `40133164791`, `40138769007`, `40156687200`, `40163011141`, `40236814552`,
-  `40252471033`, `40256569182`, `40260600879`); the R2 and T1–T12 runs also execute `roto-bench 4` in
-  the binary self-test step.
+  `40252471033`, `40256569182`, `40260600879`, `40513248065`); the R2 and T1–T13 runs also execute `roto-bench 4` in
+  the binary self-test step. The `tools/` XMem worker/probe are local-only evidence: CI has no
+  torch runtime and no weights.
 - **No local Cargo build was run** (storage policy). CI is the compiler. Disk free at audit time: **53.6 GB**.
 
 ## 3. Workspace inventory
@@ -49,9 +50,9 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 | Real effects on timeline media | `ComposedSource` runs EffectCraft's registry through the renderer; M2 test proves keyframed Gaussian blur (monotonic softening, direction-independent, identity at 0). |
 | Save / reopen fidelity | `.ffproj` schema 3, atomic save with round-trip validation; M2 test renders byte-identical frames after reopen; schema-2 projects load with no roto reference. |
 | Cached roto alpha in preview and export | R1 (`40056112214`): `MaskCache` + `ComposedSource` multiply straight alpha on the one render path; a synthetic matte changes preview **and** decoded H.264 pixels; every cache-key input invalidates the address. |
-| XMem worker transport and frame exporter | R2 (`40059782293`): protocol-1 JSON lines over a real child process (fake worker), typed events, 1 MiB line cap, stderr tail, `export_frames` PNGs verified for count/size/order; `roto-bench` runs in CI. **No XMem inference or weights.** |
+| XMem worker transport and frame exporter | R2 (`40059782293`): protocol-1 JSON lines over a real child process (fake worker), typed events, 1 MiB line cap, stderr tail, `export_frames` PNGs verified for count/size/order; `roto-bench` runs in CI. `tools/xmem_worker.py` + `tools/xmem_r3_probe.py` run the real model locally (2026-10-27; no weights committed, not app-wired). |
 | Timeline track state | T1 (`40063686209`): header buttons call real `timeline.setTrack` keys for video visibility (`enabled`), audio mute (`muted`), solo and lock; the edit test asserts sequence state and undo. UI click-through and render-difference tests are still open. |
-| Sequence markers | T2: markers are drawn on the ruler and click-to-jump; Add/Clear run the real undoable `markers.add` / `markers.clearCurrent`; Prev/Next navigate. The edit test asserts placement, navigation, clear and undo. T5 adds optional ripple on source insert. T10 adds name/comment fields and a Rename Marker button that edits the marker at the playhead through a custom undoable project edit (by `MarkerId`), with an undo test. T12 adds **Markers CSV**: RFC 4180-quoted name/comment, exact start/duration ticks, a padded start timecode and the colour label; the test checks the exact bytes and the real file write. No marker drag, colour/duration editing, CSV import or EDL yet. |
+| Sequence markers | T2: markers are drawn on the ruler and click-to-jump; Add/Clear run the real undoable `markers.add` / `markers.clearCurrent`; Prev/Next navigate. The edit test asserts placement, navigation, clear and undo. T5 adds optional ripple on source insert. T10 adds name/comment fields and an Update Marker button that edits the marker at the playhead through a custom undoable project edit (by `MarkerId`), with an undo test. T12 adds **Markers CSV**: RFC 4180-quoted name/comment, exact start/duration ticks, a padded start timecode and the colour label; the test checks the exact bytes and the real file write. T13 adds **length (0-6000 frames)** and **colour** editing to the same Update Marker path, and extends the test to assert all four fields and undo; run `40513248065`. No marker drag, CSV/EDL import or marker-list selection yet. |
 | Source monitor + source In/Out + marker ripple | T5: the Edit monitor area is split Program/Source; the Source panel renders `render_item` previews, has source timecode, transport, seek and In/Out marks (I/O, Shift+I/O, go/clear) stored on the media item so they persist; source Insert/Overwrite place the marked range and a Ripple Markers toggle (default on) moves sequence markers at/after the insert point. Source playback is video-only/silent. |
 | Ripple delete | T6: **Ripple Delete** (button + Shift+Delete) runs `edit.rippleDelete`; linked A/V is removed together, affected and sync-locked tracks close the gap, markers inside the removed span are removed while markers at/after it move, and undo restores clips and markers. The shell refuses the edit when the selected clip's track is locked; a locked linked partner is left to the engine. |
 | Roll / slip / slide | T7: the timeline Trim row and Alt+arrow nudges run distinct engine commands (`timeline.roll`, `timeline.slip`, `timeline.slide`). Roll moves the shared edit point, slip moves only the source range, slide moves the clip between fixed neighbours; tests assert exact 12-frame results and undo. One-frame steps only, no drag. |
@@ -69,7 +70,7 @@ GPL code. The Qt branch (GPL-3.0) is never linked into this binary.
 | Audio mixer | `mixer.setStrip` with `volumeDb`, `pan`, `muted`, `solo` — exact upstream parameter names verified. |
 | Audio playback clock | cpal stream fed by a worker mixing through the engine's mixer, playhead = device frames; honest wall-clock fallback. T2 opens the device lazily on the first play (construction never touches WASAPI), which removed an intermittent test-binary `STATUS_ACCESS_VIOLATION`. |
 | Panic containment | `catch_unwind` around the frame; session survives. |
-| Cloud-only build + downloadable dev build | Run `40260600879`: fmt/clippy/check/test/release green, self-test + `roto-bench 4` green, **54 tests**, 25,562,175-byte artifact. |
+| Cloud-only build + downloadable dev build | Run `40513248065`: fmt/clippy/check/test/release green, self-test + `roto-bench 4` green, **54 tests**, 25,564,166-byte artifact. |
 
 Measured in run `39729926210`'s test log:
 
@@ -78,7 +79,7 @@ Measured in run `39729926210`'s test log:
 - FilmCraft's catalog is asserted at **≥ 60** effect definitions by the same test.
 - The M8 log behind those measurements ran 11 tests; the M12 suite was **28 tests**, R2 took it to
   **36 tests** (run `40059782293`), T1 took it to **37** (run `40063686209`), T2 to **38**
-  (run `40128137965`), T3 to **40** (run `40133164791`), T4 to **41** (run `40138769007`), T5 to **45** (run `40156687200`), T6-T8 to **50** (run `40163011141`), T9 to **51** (run `40236814552`), T10 to **52** (run `40252471033`), T11 to **53** (run `40256569182`) and T12 to **54** (run `40260600879`).
+  (run `40128137965`), T3 to **40** (run `40133164791`), T4 to **41** (run `40138769007`), T5 to **45** (run `40156687200`), T6-T8 to **50** (run `40163011141`), T9 to **51** (run `40236814552`), T10 to **52** (run `40252471033`), T11 to **53** (run `40256569182`), T12 to **54** (run `40260600879`) and T13 stays at **54** because it extends the T10 test (run `40513248065`).
 
 These counts are *registry entries exercised through the bridge*, not a claim that every effect is
 artistically complete or parameter-swept at multiple values. Golden-frame coverage exists for Gaussian blur
@@ -95,14 +96,15 @@ and the comp/text path, not for all 307.
 | Audio | faders, pan, mute, solo | meters, audio-effect inserts UI, automation lanes, per-clip volume |
 | Export | 5 built-in formats, progress, report, overwrite confirmation, cancel (partial file removed) | queue, presets, range selection, progress detail |
 | Project | new/open/save/save-as, atomic write, autosave/recovery, New/Open and window-close guards | recent files |
-| Roto AI | R1 mask-cache reader + alpha in `ComposedSource`; R2 worker protocol, child-process client, frame exporter and `roto-bench` | real XMem inference, Python/CPU runtime pack, consent download/weights, initial-mask and correction UI, workspace, job queue/timeout, in-memory mask LRU |
+| Roto AI | R1 mask-cache reader + alpha in `ComposedSource`; R2 worker protocol, child-process client, frame exporter and `roto-bench`; local `tools/` worker/probe run real XMem CPU (2026-10-27) | app wiring/job runner/timeout, resume, memory ceiling, Python/CPU runtime pack, consent download/weights, initial-mask and correction UI, workspace, in-memory mask LRU |
 | UI | workspaces, resizable gutters, shortcuts (Space, Ctrl+Z/Y, Ctrl+K, Del) | command palette, configurable shortcuts, layout persistence, UI scaling, source monitor, safe areas, accessibility pass |
 
-## 6. Not implemented at all (no code path exists)
+## 6. Not implemented in the app (no app code path exists)
 
-- **Roto AI / XMem inference** — no Roto AI workspace, no Python worker process, no PyTorch, no
-  weights and no model management. The R1 mask cache/alpha seam and R2 protocol/exporter exist, but
-  nothing in the UI presents Roto AI as working. See `docs/ROTO_AI_PLAN.md`.
+- **Roto AI workspace / app-wired XMem** — no Roto AI workspace, no app job runner, no initial-mask
+  UI, no pack/weights and no model management. The R1 mask cache/alpha seam and R2 protocol/exporter
+  exist, and `tools/xmem_worker.py` + `tools/xmem_r3_probe.py` run the real model locally (2026-10-27),
+  but nothing in the UI presents Roto AI as working. See `docs/ROTO_AI_PLAN.md`.
 - Motion/Graphics workspace (titles exist only as comp layers added from the Effects panel).
 - Mask/chroma-key authoring UI, tracking, adjustment clips, nested sequences UI, multicam, captions, OTIO/EDL.
 - GPU preview/effects (the bridge path is CPU), proxies, caches, background rendering.
@@ -133,15 +135,20 @@ audit remains open.
 ## 8. Build, test, CI, sizes
 
 - CI: `windows-2025`, fmt → clippy `-D warnings` → check → test → release → self-test → artifact.
-- Last green code run: **40260600879** (T12); all **54** tests passed and the artifact is
-  `frameforge-pro-windows-dev`, **25,562,175 bytes** ZIP, 7-day retention. The T11 artifact was
-  25,559,238 bytes, T10 25,556,637, T9 25,552,506, T6-T8 25,550,477, T5 25,544,460, T4 25,521,310,
-  T3 25,521,206, T2 25,521,671, T1 25,517,128, R2 25,512,804, R1 25,418,672 and M12 25,229,770; the
-  feature slices added no new external crate (`image` was already a workspace/app dependency; the
-  bridge now uses it too). The last extracted exe was **64,305,152 bytes** (M10/M12 measurement); the
-  T12 ZIP is the same order of size, but the T12 exe was not extracted locally.
+- Last green code run: **40517500476** (`tools/` commit `23d03da`; Rust unchanged): all **54** tests
+  passed and the artifact is `frameforge-pro-windows-dev`, **25,564,165 bytes** ZIP, 7-day retention.
+  The T13 feature run **40513248065** was **25,564,166 bytes**; T12 was 25,562,175 bytes, T11
+  25,559,238, T10 25,556,637, T9 25,552,506, T6-T8 25,550,477, T5 25,544,460,
+  T4 25,521,310, T3 25,521,206, T2 25,521,671, T1 25,517,128, R2 25,512,804, R1 25,418,672 and M12
+  25,229,770; the feature slices added no new external crate (`image` was already a workspace/app
+  dependency; the bridge now uses it too). The last extracted exe was **64,305,152 bytes**
+  (M10/M12 measurement); the T13 ZIP is the same order of size, but the T13 exe was not extracted
+  locally.
 - `frameforge-pro roto-bench 4` runs in the binary self-test; it measures the Rust decode/scale/PNG
-  path only and prints "XMem CPU inference: not measured". No XMem speed figure exists.
+  path only and prints "XMem CPU inference: not measured" because CI has no runtime/weights. The
+  real local probe measured the target Ryzen 5 7530U at 480x270: 0.818 fps forward / 1.252 fps
+  backward wall, 710.2 MB / 610.7 MB peak RSS, mean IoU 0.9883 / 0.9945 (see
+  `docs/ARCHITECTURE.md`). These are local measurements, not CI gates.
 - No installer yet; the tag workflow produces `frameforge-pro-<tag>-windows-x64.zip`.
 - Local storage: no `target/` directory; ~53 GB free on C:.
 
@@ -154,8 +161,9 @@ audit remains open.
 | EffectCraft (pinned) | MIT OR Apache-2.0 | yes, attribution required |
 | egui/eframe, rfd, cpal, image, serde | MIT/Apache/BSD/Zlib family | per-crate notices |
 | Legacy Qt app on `frameforge-dev` | GPL-3.0 | **not** bundled, not linked |
-| XMem (future optional pack) | MIT (code) | weights redistributed only with consent + notice; not bundled by default |
-| XMem weights `v1.0` | release assets, 237.5 MB (`XMem.pth`) | download-on-consent; licence/notice recorded at download |
+| XMem (external checkout used by `tools/xmem_worker.py`) | MIT (code) | **not bundled**; user-supplied path only; notice required if packaged later |
+| XMem weights `v1.0` | release assets, 237.5 MB (`XMem.pth`) | download-on-consent; licence/notice recorded at download; not committed |
+| `tools/xmem_worker.py` / `tools/xmem_r3_probe.py` | MIT OR Apache-2.0 (this project) | our adapter/probe; imports the external XMem checkout at runtime |
 | PowerShell fake worker (`tests/fixtures/fake_xmem_worker.ps1`) | original test code (this project) | test-only, not shipped |
 
 The brief's allowlist (MIT/Apache/BSD/ISC/Zlib/CC0/Unicode/BSL) is satisfied today. FFmpeg does not appear in
@@ -185,13 +193,16 @@ Acceptance criteria:
 
 Deliberately **not** in the M9 slice: effect-edit undo (D4, fixed in M11), track targeting (D7,
 fixed in M10), XMem (needs its own staged plan and a real worker benchmark). They are recorded in
-`docs/FEATURE_PARITY.md` with priorities.
+`docs/FEATURE_PARITY.md` with priorities. R3 remains open: the 2026-10-27 local probe is real
+inference evidence, not app integration or an acceptance pass.
 
 Subsequent sessions completed R1 (mask cache/alpha), R2 (worker transport/exporter), T1 (real track
 visibility/mute/solo/lock headers), T2 (sequence markers on the ruler), T3 (move/trim snapping) and
 T4 (insert/overwrite at the playhead), T5 (Source monitor with source In/Out and marker ripple),
 T6 (ripple delete), T7 (roll/slip/slide), T8 (real video/audio transitions), T9 (Program In/Out
-with Lift/Extract), T10 (marker rename/comment), T11 (transition length/alignment) and T12 (marker CSV
-export). The next highest-impact work is marker drag and colour/duration editing, CSV/EDL import, a
-transition browser, per-format decode tests, and UI automation/screenshots, followed by R3's real XMem
-CPU run once the optional runtime and weights are installed with consent.
+with Lift/Extract), T10 (marker rename/comment), T11 (transition length/alignment), T12 (marker CSV
+export) and T13 (marker length/colour). A real XMem protocol worker and local R3 probe now run the
+official model on the target Ryzen 5 7530U (forward/backward IoU, cancel, peak RSS); this is local
+evidence, not an R3 pass. The next highest-impact work is marker drag, CSV/EDL import, a transition
+browser, per-format decode tests, and UI automation/screenshots, followed by wiring the worker into
+an app job runner with timeout/kill, resume and renderer mask equality.
