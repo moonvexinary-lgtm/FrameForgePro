@@ -16,20 +16,56 @@ use frameforge_bridge::{Composition, FFPROJ_SCHEMA, FrameForgeProject, ProjectSo
 use crate::audio::Player;
 use crate::export::ExportState;
 use crate::history::{CompositionStep, EditHistory, undo_top};
+use crate::ui;
 
-/// The workspaces. Color and Audio are not built yet: they appear in the bar
-/// as clearly-marked planned entries, never as fake panels.
+/// The workspaces, in the order the design's tab strip uses. Editing, Effects,
+/// Color and Audio are the original engine workspaces; Compositing, Text &
+/// Graphics and Masking are first-class screens over the same document.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Workspace {
     Edit,
     Effects,
     Color,
     Audio,
+    Compositing,
+    Text,
+    Masking,
     Export,
 }
 
-pub const TOP_H: f32 = 38.0;
-pub const STATUS_H: f32 = 22.0;
+impl Workspace {
+    pub fn label(self) -> &'static str {
+        match self {
+            Workspace::Edit => "Editing",
+            Workspace::Effects => "Effects",
+            Workspace::Color => "Color",
+            Workspace::Audio => "Audio",
+            Workspace::Compositing => "Compositing",
+            Workspace::Text => "Text & Graphics",
+            Workspace::Masking => "Masking",
+            Workspace::Export => "Export",
+        }
+    }
+}
+
+/// The project browser's tabs. All three are real document views: media from
+/// the editing project, sequence markers, and the combined undo history.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProjectTab {
+    Media,
+    Markers,
+    History,
+}
+
+/// The right-hand inspector's tabs in the editing workspace.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InspectorTab {
+    Controls,
+    Metadata,
+}
+
+pub const TOP_H: f32 = 60.0;
+pub const STATUS_H: f32 = 24.0;
 
 pub const SEQUENCE_RATE: FrameRate = FrameRate::FPS_24;
 pub const SEQUENCE_W: u32 = 1280;
@@ -74,8 +110,6 @@ pub struct App {
     /// bound to the Program monitor's sequence).
     pub source_playing: bool,
     pub source_last: Option<Instant>,
-    /// The Source-monitor panel width (draggable gutter).
-    pub source_w: f32,
     pub seq: Option<ItemId>,
     pub status: String,
     pub export: ExportState,
@@ -96,7 +130,26 @@ pub struct App {
     /// Where the transition sits relative to the cut (center by default).
     pub transition_align: filmcraft_project::TransitionAlign,
     pub project_w: f32,
+    pub inspector_w: f32,
     pub timeline_h: f32,
+    pub project_tab: ProjectTab,
+    pub inspector_tab: InspectorTab,
+    pub media_search: String,
+    /// The graphic clip selected in the Text & Graphics workspace.
+    pub graphics_clip: Option<ClipId>,
+    /// The layer index selected inside that graphic clip.
+    pub graphics_layer: usize,
+    /// The text draft for the Text & Graphics and Compositing workspaces.
+    pub text_draft: String,
+    /// Point size for a new text layer.
+    pub text_size: f32,
+    /// Feather, opacity and inversion for the next mask.
+    pub mask_feather: f32,
+    pub mask_opacity: f32,
+    pub mask_inverted: bool,
+    pub mask_name: String,
+    /// The comp layer selected in the Compositing workspace.
+    pub comp_layer: usize,
     pub player: Player,
     /// The wall-clock position when audio playback fell back.
     pub wall_start: Option<Tick>,
@@ -165,7 +218,6 @@ impl App {
             source_monitor: None,
             source_playing: false,
             source_last: None,
-            source_w: 420.0,
             effects_item: None,
             selected_effect: None,
             effect_search: String::new(),
@@ -175,8 +227,21 @@ impl App {
             marker_color: filmcraft_project::Label::Green,
             transition_frames: 12,
             transition_align: filmcraft_project::TransitionAlign::CenterAtCut,
-            project_w: 250.0,
-            timeline_h: 220.0,
+            project_w: 320.0,
+            inspector_w: 340.0,
+            timeline_h: 250.0,
+            project_tab: ProjectTab::Media,
+            inspector_tab: InspectorTab::Controls,
+            media_search: String::new(),
+            graphics_clip: None,
+            graphics_layer: 0,
+            text_draft: String::new(),
+            text_size: 100.0,
+            mask_feather: 10.0,
+            mask_opacity: 100.0,
+            mask_inverted: false,
+            mask_name: String::new(),
+            comp_layer: 0,
             player: Player::new(),
             wall_start: None,
             timeline_drag: None,
@@ -566,6 +631,27 @@ impl App {
         }
     }
 
+    pub(crate) fn toggle_playback(&mut self) {
+        if self.sequence().is_some() {
+            if self.playing {
+                self.stop_playback();
+            } else {
+                self.playing = true;
+                self.last = None;
+                self.start_playback();
+            }
+        }
+    }
+
+    /// Step the Program playhead by whole sequence frames, clamped to the
+    /// sequence. Used by the monitor transport and the arrow keys.
+    pub(crate) fn step_playhead(&mut self, frames: i64) {
+        let Some(seq) = self.sequence() else { return };
+        let rate = seq.settings.frame_rate;
+        let frame = rate.frame_at(self.playhead).saturating_add(frames).max(0);
+        self.playhead = rate.tick_of(frame).min(self.sequence_end());
+    }
+
     fn start_playback(&mut self) {
         let Some(seq) = self.sequence_id() else { return };
         let Some(sources) = self.built_sources() else {
@@ -825,6 +911,9 @@ impl eframe::App for App {
                 Workspace::Effects => crate::effects::show(self, ui, body),
                 Workspace::Color => crate::color::show(self, ui, body),
                 Workspace::Audio => crate::mixer::show(self, ui, body),
+                Workspace::Compositing => crate::compositing::show(self, ui, body),
+                Workspace::Text => crate::graphics::show(self, ui, body),
+                Workspace::Masking => crate::masking::show(self, ui, body),
                 Workspace::Export => crate::export::show(self, ui, body),
             }
             self.status_bar(ui, status);
@@ -838,90 +927,309 @@ impl eframe::App for App {
 
 impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
-        ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
-        let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        ui.painter().rect_filled(rect, 0.0, ui::BG_APP);
+        let menu_band = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), 30.0));
+        let tab_band = egui::Rect::from_min_max(egui::pos2(rect.min.x, menu_band.max.y), rect.max);
+        ui.painter().rect_filled(menu_band, 0.0, ui::BG_HEADER);
+        ui.painter().rect_filled(tab_band, 0.0, ui::BG_APP);
+        ui.painter().line_segment([menu_band.left_bottom(), menu_band.right_bottom()], egui::Stroke::new(1.0, ui::LINE_DARK));
+        ui.painter().line_segment([tab_band.left_bottom(), tab_band.right_bottom()], egui::Stroke::new(1.0, ui::LINE_DARK));
+
+        let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(menu_band).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.add_space(10.0);
-        bar.label(egui::RichText::new("FrameForge Pro").strong());
-        bar.separator();
+        let (logo, _) = bar.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+        bar.painter().rect_filled(logo, 3.0, ui::ACCENT);
+        bar.painter().text(logo.center(), egui::Align2::CENTER_CENTER, "F", egui::FontId::proportional(12.0), ui::BG_APP);
+        bar.add_space(5.0);
+        bar.label(egui::RichText::new("FrameForge Pro").size(12.0).strong().color(ui::TEXT_HI));
+        bar.add_space(8.0);
 
-        if bar.button("New").clicked() {
-            self.new_project();
-        }
-        if bar.button("Open…").clicked()
-            && let Some(path) = rfd::FileDialog::new().add_filter("FrameForge Pro project", &["ffproj"]).pick_file()
-        {
-            self.open(path);
-        }
-        if bar.button("Save").clicked() {
-            self.save();
-        }
-        if bar.button("Save As…").clicked() {
-            self.save_as();
-        }
+        egui::MenuBar::new().ui(&mut bar, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("New Project").clicked() {
+                    self.new_project();
+                    ui.close();
+                }
+                if ui.button("Open Project...").clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("FrameForge Pro project", &["ffproj"]).pick_file()
+                {
+                    self.open(path);
+                    ui.close();
+                }
+                if ui.button("Save").clicked() {
+                    self.save();
+                    ui.close();
+                }
+                if ui.button("Save As...").clicked() {
+                    self.save_as();
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Export Workspace").clicked() {
+                    self.workspace = Workspace::Export;
+                    ui.close();
+                }
+                if ui.button("Quit").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    ui.close();
+                }
+            });
 
-        bar.separator();
+            ui.menu_button("Edit", |ui| {
+                if ui.add_enabled(self.can_undo(), egui::Button::new("Undo")).clicked() {
+                    self.undo();
+                    ui.close();
+                }
+                if ui.add_enabled(self.can_redo(), egui::Button::new("Redo")).clicked() {
+                    self.redo();
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Add Edit on All Tracks").clicked() {
+                    self.add_edit_all_tracks();
+                    ui.close();
+                }
+                if ui.button("Delete").clicked() {
+                    self.delete_selected_clip();
+                    ui.close();
+                }
+                if ui.button("Ripple Delete").clicked() {
+                    crate::edit::ripple_delete_selected(self);
+                    ui.close();
+                }
+            });
 
-        bar.selectable_value(&mut self.workspace, Workspace::Edit, "Edit");
-        bar.selectable_value(&mut self.workspace, Workspace::Effects, "Effects");
-        bar.selectable_value(&mut self.workspace, Workspace::Color, "Color");
-        bar.selectable_value(&mut self.workspace, Workspace::Audio, "Audio");
-        bar.selectable_value(&mut self.workspace, Workspace::Export, "Export");
+            ui.menu_button("Clip", |ui| {
+                if ui.button("Roll Left").clicked() {
+                    crate::edit::roll_selected(self, -1);
+                    ui.close();
+                }
+                if ui.button("Roll Right").clicked() {
+                    crate::edit::roll_selected(self, 1);
+                    ui.close();
+                }
+                if ui.button("Slip Left").clicked() {
+                    crate::edit::slip_selected(self, -1);
+                    ui.close();
+                }
+                if ui.button("Slip Right").clicked() {
+                    crate::edit::slip_selected(self, 1);
+                    ui.close();
+                }
+                if ui.button("Slide Left").clicked() {
+                    crate::edit::slide_selected(self, -1);
+                    ui.close();
+                }
+                if ui.button("Slide Right").clicked() {
+                    crate::edit::slide_selected(self, 1);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Apply Video Dissolve").clicked() {
+                    crate::edit::apply_dissolve(self, true);
+                    ui.close();
+                }
+                if ui.button("Apply Audio Crossfade").clicked() {
+                    crate::edit::apply_dissolve(self, false);
+                    ui.close();
+                }
+                if ui.button("Update Transition").clicked() {
+                    crate::edit::update_transition(self);
+                    ui.close();
+                }
+            });
 
-        bar.separator();
+            ui.menu_button("Sequence", |ui| {
+                if ui.button("Add Marker").clicked() {
+                    crate::edit::add_marker(self);
+                    ui.close();
+                }
+                if ui.button("Previous Marker").clicked() {
+                    crate::edit::go_marker(self, false);
+                    ui.close();
+                }
+                if ui.button("Next Marker").clicked() {
+                    crate::edit::go_marker(self, true);
+                    ui.close();
+                }
+                if ui.button("Clear Marker").clicked() {
+                    crate::edit::clear_marker(self);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Mark In").clicked() {
+                    crate::edit::program_mark(self, true);
+                    ui.close();
+                }
+                if ui.button("Mark Out").clicked() {
+                    crate::edit::program_mark(self, false);
+                    ui.close();
+                }
+                if ui.button("Clear In/Out").clicked() {
+                    crate::edit::program_clear_in_out(self);
+                    ui.close();
+                }
+                if ui.button("Lift In/Out").clicked() {
+                    crate::edit::lift_in_out(self);
+                    ui.close();
+                }
+                if ui.button("Extract In/Out").clicked() {
+                    crate::edit::extract_in_out(self);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Export Markers as CSV...").clicked() {
+                    crate::edit::export_markers_csv(self);
+                    ui.close();
+                }
+            });
 
-        if bar.add_enabled(self.can_undo(), egui::Button::new("Undo")).clicked() {
-            self.undo();
-        }
-        if bar.add_enabled(self.can_redo(), egui::Button::new("Redo")).clicked() {
-            self.redo();
-        }
+            ui.menu_button("Graphics", |ui| {
+                if ui.button("Text & Graphics Workspace").clicked() {
+                    self.workspace = Workspace::Text;
+                    ui.close();
+                }
+                if ui.button("New Text Layer").clicked() {
+                    self.workspace = Workspace::Text;
+                    self.status = "Use New Text in the Text & Graphics workspace".to_string();
+                    ui.close();
+                }
+                if ui.button("Masking Workspace").clicked() {
+                    self.workspace = Workspace::Masking;
+                    ui.close();
+                }
+                if ui.button("Compositing Workspace").clicked() {
+                    self.workspace = Workspace::Compositing;
+                    ui.close();
+                }
+            });
 
-        bar.separator();
+            ui.menu_button("View", |ui| {
+                for workspace in [
+                    Workspace::Edit,
+                    Workspace::Effects,
+                    Workspace::Color,
+                    Workspace::Audio,
+                    Workspace::Compositing,
+                    Workspace::Text,
+                    Workspace::Masking,
+                    Workspace::Export,
+                ] {
+                    if ui.selectable_label(self.workspace == workspace, workspace.label()).clicked() {
+                        self.workspace = workspace;
+                        ui.close();
+                    }
+                }
+            });
 
-        if bar.button(if self.playing { "Pause" } else { "Play" }).clicked() && self.sequence().is_some() {
-            if self.playing {
-                self.stop_playback();
-            } else {
-                self.playing = true;
-                self.last = None;
-                self.start_playback();
+            ui.menu_button("Help", |ui| {
+                if ui.button("About FrameForge Pro").clicked() {
+                    self.status = "FrameForge Pro - FilmCraft editing + EffectCraft compositing".to_string();
+                    ui.close();
+                }
+                if ui.button("Roto AI Status").clicked() {
+                    self.workspace = Workspace::Masking;
+                    ui.close();
+                }
+            });
+        });
+
+        let project_name = self.path.as_ref().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("Untitled.ffproj");
+        bar.painter().text(
+            egui::pos2(menu_band.right() - 10.0, menu_band.center().y),
+            egui::Align2::RIGHT_CENTER,
+            project_name,
+            egui::FontId::proportional(10.0),
+            ui::TEXT_LO,
+        );
+
+        let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(tab_band).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        strip.add_space(8.0);
+        for workspace in [
+            Workspace::Edit,
+            Workspace::Effects,
+            Workspace::Color,
+            Workspace::Audio,
+            Workspace::Compositing,
+            Workspace::Text,
+            Workspace::Masking,
+            Workspace::Export,
+        ] {
+            let selected = self.workspace == workspace;
+            let width = ui::text_width(&strip, workspace.label(), 11.0) + 22.0;
+            let response = strip.add_sized([width, 30.0], egui::Button::new(ui::tab_label(workspace.label(), selected)).frame(false));
+            if response.clicked() {
+                self.workspace = workspace;
+            }
+            if selected {
+                strip.painter().rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(response.rect.left() + 6.0, tab_band.bottom() - 2.0),
+                        egui::vec2((response.rect.width() - 12.0).max(8.0), 2.0),
+                    ),
+                    0.0,
+                    ui::ACCENT,
+                );
             }
         }
-        if bar.button("|<").clicked() {
-            self.playhead = Tick::ZERO;
-        }
-        bar.label(egui::RichText::new(self.timecode()).monospace());
 
-        if let Some(path) = &self.path {
-            bar.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new(path.display().to_string()).weak());
-            });
+        let custom =
+            egui::Rect::from_min_max(egui::pos2(tab_band.right() - 124.0, tab_band.top() + 4.0), egui::pos2(tab_band.right() - 8.0, tab_band.bottom() - 4.0));
+        let mut right = ui.new_child(egui::UiBuilder::new().max_rect(custom).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        if right
+            .add_sized(
+                [custom.width(), custom.height()],
+                egui::Button::new(egui::RichText::new("Custom Text").size(11.0).strong().color(ui::BG_APP)).fill(ui::ACCENT),
+            )
+            .clicked()
+        {
+            self.workspace = Workspace::Text;
         }
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
-        ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+        ui.painter().rect_filled(rect, 0.0, ui::BG_HEADER);
+        ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui::LINE_DARK));
         let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.add_space(8.0);
-        bar.label(format!("{}{}", if self.dirty { "• " } else { "" }, self.session.project.name));
+        let dot = if self.dirty { ui::WARN } else { ui::ACCENT };
+        ui::dot(&mut bar, dot);
+        bar.add_space(3.0);
+        bar.label(egui::RichText::new(&self.status).size(10.0).color(ui::TEXT_MID));
         bar.separator();
-        bar.colored_label(egui::Color32::GRAY, &self.status);
+        bar.label(egui::RichText::new(format!("{}{}", if self.dirty { "* " } else { "" }, self.session.project.name)).size(10.0).color(ui::TEXT_LO));
         if let Some(at) = self.autosaved_at {
             bar.separator();
-            bar.colored_label(egui::Color32::GRAY, format!("Autosaved · {}s ago", at.elapsed().as_secs()));
+            bar.label(egui::RichText::new(format!("Autosaved {}s ago", at.elapsed().as_secs())).size(10.0).color(ui::TEXT_OFF));
         }
+        let (width, height, rate) =
+            self.sequence().map(|s| (s.settings.width, s.settings.height, s.settings.frame_rate.as_f64())).unwrap_or((SEQUENCE_W, SEQUENCE_H, 24.0));
+        bar.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(8.0);
+            ui::badge(ui, "Rec.709", ui::TEXT_LO);
+            ui.add_space(2.0);
+            ui::badge(ui, &format!("{rate:.3} fps"), ui::TEXT_LO);
+            ui.add_space(2.0);
+            ui::badge(ui, &format!("{width} x {height}"), ui::TEXT_LO);
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(self.timecode()).size(10.0).color(ui::ACCENT_HI));
+        });
     }
 }
 
 /// A draggable vertical gutter between two regions.
 pub fn gutter_v(ui: &mut egui::Ui, x: f32, y0: f32, y1: f32, value: &mut f32) {
+    gutter_v_id(ui, "gutter-v", x, y0, y1, value);
+}
+
+/// A draggable vertical gutter with a caller-provided identity, so several
+/// splitters can coexist in one workspace.
+pub fn gutter_v_id(ui: &mut egui::Ui, id: &'static str, x: f32, y0: f32, y1: f32, value: &mut f32) {
     let grab = 6.0;
     let rect = egui::Rect::from_min_max(egui::pos2(x - grab / 2.0, y0), egui::pos2(x + grab / 2.0, y1));
-    let response = ui.interact(rect, egui::Id::new("gutter-v"), egui::Sense::click_and_drag());
+    let response = ui.interact(rect, egui::Id::new(id), egui::Sense::click_and_drag());
     if response.hovered() || response.dragged() {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+        ui.painter().rect_filled(rect, 0.0, ui::ACCENT_DIM);
     }
     if response.dragged()
         && let Some(pos) = response.interact_pointer_pos()
@@ -932,11 +1240,16 @@ pub fn gutter_v(ui: &mut egui::Ui, x: f32, y0: f32, y1: f32, value: &mut f32) {
 
 /// A draggable horizontal gutter between two regions.
 pub fn gutter_h(ui: &mut egui::Ui, y: f32, x0: f32, x1: f32, value: &mut f32) {
+    gutter_h_id(ui, "gutter-h", y, x0, x1, value);
+}
+
+/// A draggable horizontal gutter with a caller-provided identity.
+pub fn gutter_h_id(ui: &mut egui::Ui, id: &'static str, y: f32, x0: f32, x1: f32, value: &mut f32) {
     let grab = 6.0;
     let rect = egui::Rect::from_min_max(egui::pos2(x0, y - grab / 2.0), egui::pos2(x1, y + grab / 2.0));
-    let response = ui.interact(rect, egui::Id::new("gutter-h"), egui::Sense::click_and_drag());
+    let response = ui.interact(rect, egui::Id::new(id), egui::Sense::click_and_drag());
     if response.hovered() || response.dragged() {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+        ui.painter().rect_filled(rect, 0.0, ui::ACCENT_DIM);
     }
     if response.dragged()
         && let Some(pos) = response.interact_pointer_pos()

@@ -10,12 +10,13 @@ use filmcraft_project::{ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef, Pr
 use filmcraft_time::TICKS_PER_SECOND;
 use filmcraft_time::Tick;
 
-use crate::app::{App, Monitor, SEQUENCE_H, SEQUENCE_RATE, SEQUENCE_W, TimelineDrag};
+use crate::app::{App, InspectorTab, Monitor, ProjectTab, SEQUENCE_H, SEQUENCE_RATE, SEQUENCE_W, TimelineDrag, Workspace};
 use crate::pixels;
+use crate::ui;
 
 const ROW_H: f32 = 34.0;
 const RULER_H: f32 = 18.0;
-const TIMELINE_HEADER_H: f32 = 54.0;
+const TIMELINE_HEADER_H: f32 = 50.0;
 const GENERATOR_SECONDS: f64 = 10.0;
 /// The fixed track-header column: target, source-patch, visibility/mute/solo,
 /// lock and the track name. The timeline body (ruler and clips) starts to its
@@ -455,25 +456,34 @@ fn placement_params(media: ItemId, sequence: ItemId, plan: &Placement) -> serde_
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
-    let project_w = app.project_w.clamp(180.0, body.width() - 260.0);
-    let timeline_h = app.timeline_h.clamp(120.0, body.height() - 150.0);
+    // The design's three-column edit desk: a 440 px source/media column, the
+    // flexible program + timeline centre, and a 460 px inspector. The values
+    // stay draggable but are clamped so the centre never disappears.
+    let left_w = app.project_w.clamp(260.0, 440.0);
+    let right_w = app.inspector_w.clamp(260.0, 420.0);
+    let timeline_h = app.timeline_h.clamp(180.0, (body.height() - 260.0).max(180.0));
 
-    let project = egui::Rect::from_min_max(body.min, egui::pos2(body.min.x + project_w, body.max.y));
-    let rest = egui::Rect::from_min_max(egui::pos2(body.min.x + project_w, body.min.y), body.max);
-    let timeline = egui::Rect::from_min_max(egui::pos2(rest.min.x, rest.max.y - timeline_h), rest.max);
-    let monitor = egui::Rect::from_min_max(rest.min, egui::pos2(rest.max.x, timeline.min.y));
+    let left = egui::Rect::from_min_max(body.min, egui::pos2(body.min.x + left_w, body.max.y));
+    let inspector = egui::Rect::from_min_max(egui::pos2(body.max.x - right_w, body.min.y), body.max);
+    let centre = egui::Rect::from_min_max(egui::pos2(left.max.x, body.min.y), egui::pos2(inspector.min.x, body.max.y));
 
-    let source_w = app.source_w.clamp(220.0, (monitor.width() - 220.0).max(220.0));
-    let program = egui::Rect::from_min_max(monitor.min, egui::pos2(monitor.max.x - source_w, monitor.max.y));
-    let source = egui::Rect::from_min_max(egui::pos2(program.max.x, monitor.min.y), monitor.max);
+    let source_h = (left.height() * 0.46).clamp(210.0, 500.0);
+    let source = egui::Rect::from_min_max(left.min, egui::pos2(left.max.x, left.min.y + source_h));
+    let browser = egui::Rect::from_min_max(egui::pos2(left.min.x, source.max.y), left.max);
 
-    project_panel(app, ui, project);
-    crate::app::gutter_v(ui, body.min.x + project_w, body.min.y, body.max.y, &mut app.project_w);
-    monitor_panel(app, ui, program);
-    crate::app::gutter_v(ui, program.max.x, monitor.min.y, monitor.max.y, &mut app.source_w);
+    let program = egui::Rect::from_min_max(centre.min, egui::pos2(centre.max.x, centre.max.y - timeline_h));
+    let timeline = egui::Rect::from_min_max(egui::pos2(centre.min.x, program.max.y), centre.max);
+
     source_monitor_panel(app, ui, source);
-    crate::app::gutter_h(ui, monitor.max.y, rest.min.x, rest.max.x, &mut app.timeline_h);
+    project_panel(app, ui, browser);
+    crate::app::gutter_v_id(ui, "edit-left-gutter", left.max.x, body.min.y, body.max.y, &mut app.project_w);
+
+    monitor_panel(app, ui, program);
+    crate::app::gutter_h_id(ui, "edit-timeline-gutter", program.max.y, centre.min.x, centre.max.x, &mut app.timeline_h);
     timeline_panel(app, ui, timeline);
+
+    crate::app::gutter_v_id(ui, "edit-inspector-gutter", inspector.min.x, body.min.y, body.max.y, &mut app.inspector_w);
+    inspector_panel(app, ui, inspector);
 }
 
 /// Generators the engine has commands for (undoable, with the registry's
@@ -935,68 +945,131 @@ fn remove_media(app: &mut App, media: ItemId) {
     }
 }
 
+fn duration_text(seconds: f64) -> String {
+    let total = seconds.max(0.0).round() as i64;
+    format!("{:02}:{:02}", total / 60, total % 60)
+}
+
 fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
-    ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
+    ui.painter().rect_filled(rect, 0.0, ui::BG_PANEL);
+    ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui::LINE_DARK));
     let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("project"));
-    panel.add_space(8.0);
-    panel.heading("Project");
+    ui::panel_header(&mut panel, &format!("Project: {}", app.session.project.name));
+    let selected_tab = match app.project_tab {
+        ProjectTab::Media => 0,
+        ProjectTab::Markers => 1,
+        ProjectTab::History => 2,
+    };
+    if let Some(index) = ui::tabs(&mut panel, "project-tabs", &["Media Browser", "Markers", "History"], selected_tab) {
+        app.project_tab = match index {
+            1 => ProjectTab::Markers,
+            2 => ProjectTab::History,
+            _ => ProjectTab::Media,
+        };
+    }
+    panel.add_space(4.0);
+    match app.project_tab {
+        ProjectTab::Media => media_browser(app, &mut panel),
+        ProjectTab::Markers => markers_browser(app, &mut panel),
+        ProjectTab::History => history_browser(app, &mut panel),
+    }
+}
+
+fn media_browser(app: &mut App, panel: &mut egui::Ui) {
     panel.horizontal(|ui| {
-        if ui.button("+ Bars & Tone").clicked() {
-            add_generator(app, "file.newBarsAndTone");
-        }
-        if ui.button("+ Color Matte").clicked() {
-            add_generator(app, "file.newColorMatte");
-        }
-    });
-    panel.horizontal(|ui| {
-        if ui.button("+ Tone").clicked() {
-            add_tone(app);
-        }
-        if ui.button("+ File…").clicked()
+        if ui.button("+ Import").on_hover_text("Import a media file").clicked()
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("Media", &["mp4", "mov", "mkv", "webm", "wav", "mp3", "flac", "png", "jpg", "jpeg", "tiff", "bmp", "tga"])
                 .pick_file()
         {
             add_file(app, path);
         }
-    });
-    panel.horizontal(|ui| {
-        if ui.add_enabled(app.bin_selection.is_some(), egui::Button::new("Open Source")).on_hover_text("Open the selected item in the Source monitor").clicked()
+        ui.menu_button("+ New", |ui| {
+            if ui.button("Bars & Tone").clicked() {
+                add_generator(app, "file.newBarsAndTone");
+                ui.close();
+            }
+            if ui.button("Color Matte").clicked() {
+                add_generator(app, "file.newColorMatte");
+                ui.close();
+            }
+            if ui.button("Tone").clicked() {
+                add_tone(app);
+                ui.close();
+            }
+        });
+        if ui.add_enabled(app.bin_selection.is_some(), egui::Button::new("Open Source")).clicked()
             && let Some(id) = app.bin_selection
         {
             open_source(app, id);
-        }
-        if ui.button("Close Source").clicked() {
-            close_source(app);
+            app.status = "Opened in Source monitor".to_string();
         }
     });
-    panel.separator();
+    let width = panel.available_width();
+    panel.add_sized([width, 22.0], egui::TextEdit::singleline(&mut app.media_search).hint_text("Search media..."));
+    panel.add_space(3.0);
 
     let mut ids = Vec::new();
     app.session.project.root.all_items(&mut ids);
-    let mut clicks = Vec::new();
+    let needle = app.media_search.to_lowercase();
+    let mut rows = Vec::new();
+    for id in ids {
+        let Some(item) = app.session.project.items.get(&id) else { continue };
+        let ItemKind::Media(clip) = &item.kind else { continue };
+        if !needle.is_empty() && !item.name.to_lowercase().contains(&needle) {
+            continue;
+        }
+        let video = clip.info.video.is_some();
+        let audio = clip.info.has_audio();
+        let kind = if video {
+            "V"
+        } else if audio {
+            "A"
+        } else {
+            "?"
+        };
+        rows.push((id, item.name.clone(), kind, duration_text(clip.info.duration.seconds()), app.compositions.contains_key(&id), video));
+    }
+    if rows.is_empty() {
+        panel.add_space(8.0);
+        panel.label(ui::hint(if app.media_search.is_empty() {
+            "No media yet. Import a file or create bars, a matte or a tone."
+        } else {
+            "No media matches this search."
+        }));
+    }
     let mut chosen = None;
-    egui::ScrollArea::vertical().show(&mut panel, |ui| {
-        for id in ids {
-            let Some(item) = app.session.project.items.get(&id) else { continue };
-            let ItemKind::Media(clip) = &item.kind else { continue };
-            let name = item.name.clone();
-            let kind = match &clip.media {
-                MediaRef::Generator(_) => "generator",
-                MediaRef::File { .. } => "file",
-            };
-            let has_comp = app.compositions.contains_key(&id);
+    let mut append = None;
+    let mut remove = None;
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(panel, |ui| {
+        for (id, name, kind, duration, has_comp, video) in rows {
             let selected = app.bin_selection == Some(id);
-            let label = format!("{name} [{kind}]{}", if has_comp { " ●" } else { "" });
-            let response = ui.selectable_label(selected, label).on_hover_text(if has_comp {
-                "Has a composition. Click: select for Insert/Overwrite at the playhead. Double-click: append to the timeline. Right-click: remove."
+            let (card, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::click());
+            if ui.rect_contains_pointer(card) {
+                ui.painter().rect_filled(card, 3.0, if selected { ui::ACCENT_SEL } else { ui::BG_HOVER });
             } else {
-                "Click: select for Insert/Overwrite at the playhead. Double-click: append to the timeline. Right-click: remove."
-            });
+                ui::card(ui, card, selected);
+            }
+            if selected {
+                ui::selected_bar(ui.painter(), card);
+            }
+            let icon = egui::Rect::from_min_size(card.min + egui::vec2(8.0, 7.0), egui::vec2(22.0, 22.0));
+            let fill = if video { ui::CLIP_VIDEO } else { ui::CLIP_AUDIO };
+            ui.painter().rect_filled(icon, 2.0, fill);
+            ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, kind, egui::FontId::proportional(10.0), ui::TEXT_HI);
+            let text_at = egui::pos2(icon.right() + 8.0, card.center().y);
+            let clipped =
+                ui.painter_at(egui::Rect::from_min_max(egui::pos2(text_at.x, card.top() + 4.0), egui::pos2(card.right() - 54.0, card.bottom() - 4.0)));
+            clipped.text(text_at, egui::Align2::LEFT_CENTER, &name, egui::FontId::proportional(11.0), if selected { ui::TEXT_HI } else { ui::TEXT_MID });
+            if has_comp {
+                ui.painter().circle_filled(egui::pos2(card.right() - 44.0, card.center().y), 3.0, ui::ACCENT);
+            }
+            ui.painter().text(egui::pos2(card.right() - 8.0, card.center().y), egui::Align2::RIGHT_CENTER, duration, egui::FontId::monospace(9.5), ui::TEXT_LO);
+            let response = response.on_hover_text("Click to select, double-click to append, right-click to remove");
             if response.double_clicked() {
-                clicks.push((id, 0));
+                append = Some(id);
             } else if response.secondary_clicked() {
-                clicks.push((id, 1));
+                remove = Some(id);
             } else if response.clicked() {
                 chosen = Some(id);
             }
@@ -1006,15 +1079,101 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         app.bin_selection = Some(id);
         app.status = "Selected for Insert/Overwrite".to_string();
     }
-    for (id, which) in clicks {
-        if which == 0 {
-            place_media(app, id);
-        } else {
-            remove_media(app, id);
-        }
+    if let Some(id) = append {
+        place_media(app, id);
     }
-    panel.separator();
-    panel.colored_label(egui::Color32::GRAY, "Click a media item: Open Source previews it with In/Out marks; Insert/Overwrite in the timeline header places the whole item; double-click appends (all undoable). Select a clip, then the Effects workspace.");
+    if let Some(id) = remove {
+        remove_media(app, id);
+    }
+    panel.add_space(4.0);
+    panel.label(ui::hint("Double-click appends at the patched tracks. Drag a clip or use Insert/Overwrite for a precise edit."));
+}
+
+fn markers_browser(app: &mut App, panel: &mut egui::Ui) {
+    let markers: Vec<(Tick, String, f64, Label)> =
+        app.sequence().map(|seq| seq.markers.iter().map(|m| (m.start, m.name.clone(), m.duration.seconds(), m.color)).collect()).unwrap_or_default();
+    if markers.is_empty() {
+        panel.add_space(8.0);
+        panel.label(ui::hint("No sequence markers yet. Press M at the playhead or use Add Marker."));
+    }
+    let mut jump = None;
+    egui::ScrollArea::vertical().max_height(220.0).show(panel, |ui| {
+        for (start, name, duration, color) in &markers {
+            let (row, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
+            if response.hovered() {
+                ui.painter().rect_filled(row, 2.0, ui::BG_HOVER);
+            }
+            ui.painter().circle_filled(row.left_center() + egui::vec2(10.0, 0.0), 4.0, marker_color(*color));
+            ui.painter().text(row.left_center() + egui::vec2(22.0, 0.0), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(11.0), ui::TEXT_MID);
+            ui.painter().text(
+                row.right_center() - egui::vec2(8.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                marker_timecode(SEQUENCE_RATE, *start),
+                egui::FontId::monospace(9.5),
+                ui::TEXT_LO,
+            );
+            if response.clicked() {
+                jump = Some(*start);
+            }
+            if *duration > 0.0 {
+                ui.painter().text(
+                    row.right_center() - egui::vec2(58.0, 0.0),
+                    egui::Align2::RIGHT_CENTER,
+                    format!("{duration:.1}s"),
+                    egui::FontId::monospace(9.0),
+                    ui::TEXT_OFF,
+                );
+            }
+        }
+    });
+    if let Some(start) = jump {
+        app.playhead = start;
+        app.status = "Moved to marker".to_string();
+    }
+    ui::spaced_rule(panel);
+    panel.label(egui::RichText::new("Marker at playhead").size(10.5).strong().color(ui::TEXT_LO));
+    panel.add_sized([panel.available_width(), 22.0], egui::TextEdit::singleline(&mut app.marker_name).hint_text("Name"));
+    panel.add_sized([panel.available_width(), 22.0], egui::TextEdit::singleline(&mut app.marker_comment).hint_text("Comment"));
+    panel.horizontal(|ui| {
+        ui.add(egui::DragValue::new(&mut app.marker_duration_frames).range(0..=6000).suffix(" fr"));
+        egui::ComboBox::from_id_salt("marker-color-browser").selected_text(app.marker_color.name()).show_ui(ui, |ui| {
+            for color in Label::ALL {
+                ui.selectable_value(&mut app.marker_color, color, color.name());
+            }
+        });
+    });
+    if ui::full_button(panel, "Update Marker").clicked() {
+        update_marker_at_playhead(app);
+    }
+    if ui::full_button(panel, "Add Marker at Playhead").clicked() {
+        add_marker(app);
+    }
+    if ui::full_button(panel, "Export Markers as CSV...").clicked() {
+        export_markers_csv(app);
+    }
+}
+
+fn history_browser(app: &mut App, panel: &mut egui::Ui) {
+    let undo = app.session.history.undo.len();
+    let redo = app.session.history.redo.len();
+    panel.add_space(6.0);
+    ui::kv(panel, "Undo steps", undo.to_string());
+    ui::kv(panel, "Redo steps", redo.to_string());
+    ui::kv(panel, "Revision", app.revision.to_string());
+    ui::kv(panel, "Document", if app.dirty { "Modified" } else { "Saved" });
+    panel.add_space(6.0);
+    panel.horizontal(|ui| {
+        if ui.add_enabled(app.can_undo(), egui::Button::new("Undo")).clicked() {
+            app.undo();
+        }
+        if ui.add_enabled(app.can_redo(), egui::Button::new("Redo")).clicked() {
+            app.redo();
+        }
+    });
+    panel.add_space(8.0);
+    panel.label(ui::hint("The editing project and its compositing compositions share one chronological undo order."));
+    panel.add_space(4.0);
+    panel.label(egui::RichText::new(&app.status).size(10.5).color(ui::TEXT_LO));
 }
 
 fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -1022,16 +1181,18 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
     let mut header = ui
         .new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), TIMELINE_HEADER_H))).id_salt("timeline-head"));
-    header.add_space(4.0);
+    header.add_space(3.0);
     header.horizontal(|ui| {
-        ui.label("Timeline");
-        ui.separator();
-        if ui.button("Razor (all tracks)").clicked() {
+        ui.label(egui::RichText::new("Timeline").size(11.0).strong().color(ui::TEXT_HI));
+        ui.label(egui::RichText::new(app.sequence().map(|s| s.name.clone()).unwrap_or_else(|| "No sequence".to_string())).size(10.0).color(ui::TEXT_LO));
+        if ui.button("Razor").on_hover_text("Add an edit on every track at the playhead (Ctrl+K)").clicked() {
             app.add_edit_all_tracks();
         }
-        ui.separator();
         let has_bin_item = app.bin_selection.is_some();
-        if ui.add_enabled(has_bin_item, egui::Button::new("Insert")).on_hover_text("Insert the selected bin item at the playhead (ripples existing clips right)").clicked()
+        if ui
+            .add_enabled(has_bin_item, egui::Button::new("Insert"))
+            .on_hover_text("Insert the selected bin item at the playhead (ripples existing clips right)")
+            .clicked()
             && let Some(item) = app.bin_selection
         {
             place_at_playhead(app, item, true);
@@ -1041,143 +1202,156 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         {
             place_at_playhead(app, item, false);
         }
-        ui.separator();
-        if ui.button("Add Marker (M)").on_hover_text("Add a marker at the playhead (undoable)").clicked() {
-            add_marker(app);
-        }
-        if ui.button("Prev Marker").clicked() {
-            go_marker(app, false);
-        }
-        if ui.button("Next Marker").clicked() {
-            go_marker(app, true);
-        }
-        if ui.button("Clear Marker").on_hover_text("Clear the marker at the playhead").clicked() {
-            clear_marker(app);
-        }
-        ui.add(egui::TextEdit::singleline(&mut app.marker_name).desired_width(100.0).hint_text("marker name"));
-        ui.add(egui::TextEdit::singleline(&mut app.marker_comment).desired_width(130.0).hint_text("comment"));
-        ui.add(egui::DragValue::new(&mut app.marker_duration_frames).range(0..=6000).suffix(" fr"));
-        egui::ComboBox::from_id_salt("marker-color").selected_text(app.marker_color.name()).show_ui(ui, |ui| {
-            for color in Label::ALL {
-                ui.selectable_value(&mut app.marker_color, color, color.name());
+
+        ui.menu_button("Markers", |ui| {
+            if ui.button("Add Marker (M)").clicked() {
+                add_marker(app);
+                ui.close();
+            }
+            if ui.button("Previous Marker").clicked() {
+                go_marker(app, false);
+                ui.close();
+            }
+            if ui.button("Next Marker").clicked() {
+                go_marker(app, true);
+                ui.close();
+            }
+            if ui.button("Clear Marker").clicked() {
+                clear_marker(app);
+                ui.close();
+            }
+            ui.separator();
+            ui.add(egui::TextEdit::singleline(&mut app.marker_name).desired_width(140.0).hint_text("Marker name"));
+            ui.add(egui::TextEdit::singleline(&mut app.marker_comment).desired_width(190.0).hint_text("Comment"));
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut app.marker_duration_frames).range(0..=6000).suffix(" fr"));
+                egui::ComboBox::from_id_salt("marker-color").selected_text(app.marker_color.name()).show_ui(ui, |ui| {
+                    for color in Label::ALL {
+                        ui.selectable_value(&mut app.marker_color, color, color.name());
+                    }
+                });
+            });
+            if ui.button("Update Marker").clicked() {
+                update_marker_at_playhead(app);
+                ui.close();
+            }
+            if ui.add_enabled(app.sequence().is_some_and(|q| !q.markers.is_empty()), egui::Button::new("Export Markers as CSV...")).clicked() {
+                export_markers_csv(app);
+                ui.close();
             }
         });
-        if ui.button("Update Marker").on_hover_text("Set the name, comment, length and colour of the marker at the playhead").clicked() {
-            update_marker_at_playhead(app);
-        }
+
+        let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
+        ui.menu_button("In / Out", |ui| {
+            if ui.button("Mark In").clicked() {
+                program_mark(app, true);
+                ui.close();
+            }
+            if ui.button("Mark Out").clicked() {
+                program_mark(app, false);
+                ui.close();
+            }
+            if ui.add_enabled(marked, egui::Button::new("Clear In/Out")).clicked() {
+                program_clear_in_out(app);
+                ui.close();
+            }
+            ui.separator();
+            if ui.add_enabled(marked, egui::Button::new("Lift (;)")).clicked() {
+                lift_in_out(app);
+                ui.close();
+            }
+            if ui.add_enabled(marked, egui::Button::new("Extract (')")).clicked() {
+                extract_in_out(app);
+                ui.close();
+            }
+        });
+
+        let has_clip = app.selection.is_some();
+        let has_pair = roll_pair(app).is_some();
+        ui.menu_button("Trim", |ui| {
+            if ui.add_enabled(has_pair, egui::Button::new("Roll -1")).clicked() {
+                roll_selected(app, -1);
+                ui.close();
+            }
+            if ui.add_enabled(has_pair, egui::Button::new("Roll +1")).clicked() {
+                roll_selected(app, 1);
+                ui.close();
+            }
+            ui.separator();
+            if ui.add_enabled(has_clip, egui::Button::new("Slip -1")).clicked() {
+                slip_selected(app, -1);
+                ui.close();
+            }
+            if ui.add_enabled(has_clip, egui::Button::new("Slip +1")).clicked() {
+                slip_selected(app, 1);
+                ui.close();
+            }
+            if ui.add_enabled(has_clip, egui::Button::new("Slide -1")).clicked() {
+                slide_selected(app, -1);
+                ui.close();
+            }
+            if ui.add_enabled(has_clip, egui::Button::new("Slide +1")).clicked() {
+                slide_selected(app, 1);
+                ui.close();
+            }
+            ui.separator();
+            ui.label("Transition");
+            ui.add(egui::DragValue::new(&mut app.transition_frames).range(1..=600).suffix(" fr"));
+            let align_label = match app.transition_align {
+                filmcraft_project::TransitionAlign::CenterAtCut => "Center",
+                filmcraft_project::TransitionAlign::StartAtCut => "Start",
+                filmcraft_project::TransitionAlign::EndAtCut => "End",
+            };
+            egui::ComboBox::from_id_salt("transition-align").selected_text(align_label).show_ui(ui, |ui| {
+                ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::CenterAtCut, "Center at cut");
+                ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::StartAtCut, "Start at cut");
+                ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::EndAtCut, "End at cut");
+            });
+            if ui.add_enabled(has_clip, egui::Button::new("Apply Video Dissolve")).clicked() {
+                apply_dissolve(app, true);
+                ui.close();
+            }
+            if ui.add_enabled(has_clip, egui::Button::new("Apply Audio Crossfade")).clicked() {
+                apply_dissolve(app, false);
+                ui.close();
+            }
+            if ui.add_enabled(has_clip, egui::Button::new("Update Transition")).clicked() {
+                update_transition(app);
+                ui.close();
+            }
+        });
+
         if ui
-            .add_enabled(app.sequence().is_some_and(|q| !q.markers.is_empty()), egui::Button::new("Markers CSV"))
-            .on_hover_text("Export the sequence markers as CSV")
+            .add_enabled(app.selection.is_some(), egui::Button::new("Ripple Delete"))
+            .on_hover_text("Remove the selected clip and close the gap (Shift+Delete)")
             .clicked()
         {
-            export_markers_csv(app);
-        }
-        ui.separator();
-        let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
-        if ui.button("Mark In").on_hover_text("Set the sequence In point at the playhead (I when no source clip is open)").clicked() {
-            program_mark(app, true);
-        }
-        if ui.button("Mark Out").on_hover_text("Set the sequence Out point at the playhead (O when no source clip is open)").clicked() {
-            program_mark(app, false);
-        }
-        if ui.add_enabled(marked, egui::Button::new("Clear I/O")).on_hover_text("Clear the sequence In/Out points").clicked() {
-            program_clear_in_out(app);
-        }
-        if ui.add_enabled(marked, egui::Button::new("Lift (;)")).on_hover_text("Remove the In/Out range and leave a gap (;)").clicked() {
-            lift_in_out(app);
-        }
-        if ui.add_enabled(marked, egui::Button::new("Extract (')")).on_hover_text("Remove the In/Out range and close the gap (')").clicked() {
-            extract_in_out(app);
-        }
-        ui.separator();
-        if ui.add_enabled(app.selection.is_some(), egui::Button::new("Ripple Delete")).on_hover_text("Remove the selected clip and close the gap (Shift+Delete)").clicked() {
             ripple_delete_selected(app);
         }
-        ui.separator();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(egui::Slider::new(&mut app.zoom, 20.0..=400.0).show_value(false));
+            ui.label(egui::RichText::new("Zoom").size(10.0).color(ui::TEXT_LO));
+        });
+    });
+    header.horizontal(|ui| {
         let mut snapping = app.session.state.snapping;
-        if ui.checkbox(&mut snapping, "Snap").on_hover_text("Snap moves and trims to clip edges, the playhead and zero").changed() {
+        if ui.checkbox(&mut snapping, "Snap").changed() {
             match app.session.execute("sequence.snap", serde_json::json!({"on": snapping})) {
                 Ok(_) => app.status = if snapping { "Snapping on".to_string() } else { "Snapping off".to_string() },
                 Err(e) => app.status = e.to_string(),
             }
         }
-        ui.separator();
         let mut ripple = app.session.state.ripple_sequence_markers;
-        if ui.checkbox(&mut ripple, "Ripple Markers").on_hover_text("Insert moves sequence markers at or after the insert point").changed() {
+        if ui.checkbox(&mut ripple, "Ripple Markers").changed() {
             match app.session.execute("markers.rippleSequenceMarkers", serde_json::json!({"on": ripple})) {
                 Ok(_) => app.status = if ripple { "Ripple markers on".to_string() } else { "Ripple markers off".to_string() },
                 Err(e) => app.status = e.to_string(),
             }
         }
         ui.separator();
-        ui.add(egui::Slider::new(&mut app.zoom, 20.0..=400.0).text("px / s"));
-        ui.separator();
-        ui.colored_label(
-            egui::Color32::GRAY,
-            "Track T/S: target/patch · V: visible · M: mute · ◉: solo · L: lock · Click: playhead · Drag clip: move · Drag edge: trim · Del: remove · Ctrl+Z: undo · Ctrl+K: add edit",
+        ui.label(
+            egui::RichText::new("T/S target/patch · V/M/L track states · drag clips to move · drag edges to trim · Ctrl+Z undo").size(9.5).color(ui::TEXT_OFF),
         );
-    });
-    let has_clip = app.selection.is_some();
-    let has_pair = roll_pair(app).is_some();
-    header.horizontal(|ui| {
-        ui.label("Trim");
-        if ui.add_enabled(has_pair, egui::Button::new("Roll -1")).on_hover_text("Roll the selected edit point one frame left (Alt+Ctrl+Left)").clicked() {
-            roll_selected(app, -1);
-        }
-        if ui.add_enabled(has_pair, egui::Button::new("Roll +1")).on_hover_text("Roll the selected edit point one frame right (Alt+Ctrl+Right)").clicked() {
-            roll_selected(app, 1);
-        }
-        ui.separator();
-        if ui.add_enabled(has_clip, egui::Button::new("Slip -1")).on_hover_text("Slip the selected clip one frame back in its source (Alt+Left)").clicked() {
-            slip_selected(app, -1);
-        }
-        if ui.add_enabled(has_clip, egui::Button::new("Slip +1")).on_hover_text("Slip the selected clip one frame forward in its source (Alt+Right)").clicked()
-        {
-            slip_selected(app, 1);
-        }
-        ui.separator();
-        if ui.add_enabled(has_clip, egui::Button::new("Slide -1")).on_hover_text("Slide the selected clip one frame left (Alt+Shift+Left)").clicked() {
-            slide_selected(app, -1);
-        }
-        if ui.add_enabled(has_clip, egui::Button::new("Slide +1")).on_hover_text("Slide the selected clip one frame right (Alt+Shift+Right)").clicked() {
-            slide_selected(app, 1);
-        }
-        ui.separator();
-        ui.label("Transition:");
-        ui.add(egui::DragValue::new(&mut app.transition_frames).range(1..=600).suffix(" fr"));
-        let align_label = match app.transition_align {
-            filmcraft_project::TransitionAlign::CenterAtCut => "Center",
-            filmcraft_project::TransitionAlign::StartAtCut => "Start",
-            filmcraft_project::TransitionAlign::EndAtCut => "End",
-        };
-        egui::ComboBox::from_id_salt("transition-align").selected_text(align_label).show_ui(ui, |ui| {
-            ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::CenterAtCut, "Center at cut");
-            ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::StartAtCut, "Start at cut");
-            ui.selectable_value(&mut app.transition_align, filmcraft_project::TransitionAlign::EndAtCut, "End at cut");
-        });
-        if ui
-            .add_enabled(has_clip, egui::Button::new("Dissolve"))
-            .on_hover_text("Apply a video cross-dissolve of the chosen length at the selected clip's In edge (Ctrl/Cmd+D)")
-            .clicked()
-        {
-            apply_dissolve(app, true);
-        }
-        if ui
-            .add_enabled(has_clip, egui::Button::new("Crossfade"))
-            .on_hover_text("Apply an audio crossfade of the chosen length at the selected edit (Ctrl/Cmd+Shift+D)")
-            .clicked()
-        {
-            apply_dissolve(app, false);
-        }
-        if ui
-            .add_enabled(has_clip, egui::Button::new("Update Transition"))
-            .on_hover_text("Set the transition at the selected clip's In edge to these frames and alignment")
-            .clicked()
-        {
-            update_transition(app);
-        }
-        ui.separator();
-        ui.colored_label(egui::Color32::GRAY, "Alt+Left/Right: slip · Alt+Shift: slide · Alt+Ctrl: roll");
     });
 
     let Some(s) = app.sequence() else {
@@ -1201,22 +1375,13 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let zoom = app.zoom;
     let to_x = |t: Tick| alloc.left() + t.seconds() as f32 * zoom;
 
-    painter.rect_filled(alloc, 0.0, ui.visuals().extreme_bg_color);
+    painter.rect_filled(alloc, 0.0, ui::BG_INSET);
     let seconds = (alloc.width() / app.zoom).ceil() as i64;
     for tick in 0..=seconds {
         let x = alloc.left() + tick as f32 * app.zoom;
-        painter.line_segment(
-            [egui::pos2(x, alloc.top()), egui::pos2(x, alloc.top() + RULER_H)],
-            egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color),
-        );
+        painter.line_segment([egui::pos2(x, alloc.top()), egui::pos2(x, alloc.top() + RULER_H)], egui::Stroke::new(1.0, ui::LINE_DARK));
         if tick % 5 == 0 {
-            painter.text(
-                egui::pos2(x + 3.0, alloc.top() + 2.0),
-                egui::Align2::LEFT_TOP,
-                format!("{tick}s"),
-                egui::FontId::monospace(10.0),
-                ui.visuals().text_color(),
-            );
+            painter.text(egui::pos2(x + 3.0, alloc.top() + 2.0), egui::Align2::LEFT_TOP, format!("{tick}s"), egui::FontId::monospace(10.0), ui::TEXT_LO);
         }
     }
 
@@ -1239,22 +1404,22 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     // Corner above the headers, then one header per track. The target square
     // (T) selects the engine's targeted tracks (navigation/paste, mute/solo);
     // the source square (S) patches where new media lands for that stream.
-    header_painter.rect_filled(egui::Rect::from_min_max(strip.min, egui::pos2(head.right(), strip.top() + RULER_H)), 0.0, ui.visuals().extreme_bg_color);
+    header_painter.rect_filled(egui::Rect::from_min_max(strip.min, egui::pos2(head.right(), strip.top() + RULER_H)), 0.0, ui::BG_INSET);
     header_painter.text(
         egui::pos2(head.left() + 6.0, strip.top() + RULER_H / 2.0),
         egui::Align2::LEFT_CENTER,
         "Tracks",
         egui::FontId::proportional(10.0),
-        ui.visuals().weak_text_color(),
+        ui::TEXT_LO,
     );
     for (row, track) in s.video_tracks.iter().chain(&s.audio_tracks).enumerate() {
         let y = alloc.top() + RULER_H + row as f32 * ROW_H;
         let is_video = row < s.video_tracks.len();
         let row_rect = egui::Rect::from_min_max(egui::pos2(alloc.left(), y), egui::pos2(alloc.right(), y + ROW_H));
-        painter.rect_filled(row_rect, 2.0, ui.visuals().faint_bg_color);
+        painter.rect_filled(row_rect, 0.0, if row % 2 == 0 { ui::BG_PANEL } else { ui::BG_INSET });
         let name = if is_video { format!("V{}", row + 1) } else { format!("A{}", row + 1 - s.video_tracks.len()) };
         let head_rect = egui::Rect::from_min_size(egui::pos2(head.left(), y), egui::vec2(head.width(), ROW_H));
-        header_painter.rect_filled(head_rect, 0.0, ui.visuals().faint_bg_color);
+        header_painter.rect_filled(head_rect, 0.0, ui::BG_HEADER);
         header_painter.line_segment(
             [egui::pos2(head.right(), y), egui::pos2(head.right(), y + ROW_H)],
             egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
@@ -1264,8 +1429,8 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         let button_rect = |x: f32| egui::Rect::from_min_size(egui::pos2(head_rect.left() + x, y + ROW_H / 2.0 - 7.0), egui::vec2(15.0, 15.0));
         let target_rect = button_rect(6.0);
         let patch_rect = button_rect(25.0);
-        let on = ui.visuals().selection.bg_fill;
-        let off = ui.visuals().widgets.inactive.bg_fill;
+        let on = ui::ACCENT_SEL;
+        let off = ui::BG_CONTROL;
         header_painter.rect_filled(target_rect, 2.0, if targeted { on } else { off });
         header_painter.text(target_rect.center(), egui::Align2::CENTER_CENTER, "T", egui::FontId::monospace(9.0), egui::Color32::WHITE);
         header_painter.rect_filled(patch_rect, 2.0, if patched { egui::Color32::from_rgb(176, 112, 36) } else { off });
@@ -1327,27 +1492,22 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             egui::pos2(head_rect.left() + 102.0, y + ROW_H / 2.0),
             egui::Align2::LEFT_CENTER,
             name,
-            egui::FontId::proportional(12.0),
-            ui.visuals().text_color(),
+            egui::FontId::proportional(11.0),
+            ui::TEXT_MID,
         );
         for item in &track.items {
             let clip_rect = egui::Rect::from_min_max(egui::pos2(to_x(item.start), y + 3.0), egui::pos2(to_x(item.start + item.duration), y + ROW_H - 3.0));
             let selected = app.selection == Some(item.id);
-            let fill = if selected {
-                ui.visuals().selection.bg_fill
-            } else if is_video {
-                egui::Color32::from_rgb(70, 105, 145)
-            } else {
-                egui::Color32::from_rgb(88, 120, 88)
-            };
+            let fill = if item.name.to_lowercase().contains("title") { ui::CLIP_TITLE } else { ui::clip_color(is_video, selected) };
             painter.rect_filled(clip_rect, 3.0, fill);
-            painter.rect_stroke(clip_rect, 3.0, egui::Stroke::new(1.0, ui.visuals().widgets.active.bg_stroke.color), egui::StrokeKind::Inside);
-            painter.text(
+            painter.rect_stroke(clip_rect, 3.0, egui::Stroke::new(1.0, if selected { ui::ACCENT_HI } else { ui::LINE_DARK }), egui::StrokeKind::Inside);
+            let label_painter = painter.with_clip_rect(clip_rect.shrink(3.0));
+            label_painter.text(
                 clip_rect.left_top() + egui::vec2(6.0, 4.0),
                 egui::Align2::LEFT_TOP,
                 item.name.clone(),
-                egui::FontId::proportional(11.0),
-                egui::Color32::WHITE,
+                egui::FontId::proportional(10.5),
+                ui::TEXT_HI,
             );
             hit_rects.push((clip_rect, item.id));
         }
@@ -1369,7 +1529,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     }
 
     let px = to_x(app.playhead);
-    painter.line_segment([egui::pos2(px, alloc.top()), egui::pos2(px, alloc.bottom())], egui::Stroke::new(2.0, egui::Color32::LIGHT_RED));
+    painter.line_segment([egui::pos2(px, alloc.top()), egui::pos2(px, alloc.bottom())], egui::Stroke::new(2.0, ui::DANGER));
 
     // Interaction: drag a clip to move it, its edges to trim (engine
     // commands on release — one undo step); click empty space to scrub.
@@ -1437,8 +1597,8 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 }
             }
         };
-        painter.rect_filled(ghost, 3.0, egui::Color32::from_rgba_unmultiplied(120, 170, 230, 90));
-        painter.rect_stroke(ghost, 3.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 170, 230)), egui::StrokeKind::Inside);
+        painter.rect_filled(ghost, 3.0, egui::Color32::from_rgba_unmultiplied(53, 194, 181, 70));
+        painter.rect_stroke(ghost, 3.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
     }
 
     if response.drag_stopped()
@@ -1515,17 +1675,23 @@ fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
 /// The Source monitor: a real `render_item` preview of the open media at the
 /// engine's source playhead, its transport and the source In/Out marks.
 pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
-    ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
-    ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+    ui.painter().rect_filled(rect, 0.0, ui::BG_PANEL);
+    ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui::LINE_DARK));
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("source").layout(egui::Layout::top_down(egui::Align::Min)));
-    area.add_space(4.0);
+    ui::panel_header(&mut area, "Source");
+    area.add_space(3.0);
 
     let Some(view) = source_inspect(app) else {
-        area.horizontal(|ui| {
-            ui.strong("Source");
-            ui.colored_label(egui::Color32::GRAY, "no clip open");
-        });
-        area.label("Click a media item, then Open Source (or the Source panel button).");
+        area.add_space(4.0);
+        let open = ui::empty_state(
+            &mut area,
+            "No source open",
+            "Select a media item in the project browser, then open it here for its own transport and In/Out marks.",
+            "Open Selected",
+        );
+        if open && let Some(selected) = app.bin_selection {
+            open_source(app, selected);
+        }
         return;
     };
     let item = ItemId(view["item"].as_u64().unwrap_or(0));
@@ -1536,21 +1702,10 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
     let mark_in = view["markIn"].as_i64();
     let mark_out = view["markOut"].as_i64();
     let playing = app.source_playing;
-
-    area.horizontal(|ui| {
-        ui.strong("Source");
-        if ui.button("Open Source").on_hover_text("Open the selected bin item here").clicked()
-            && let Some(selected) = app.bin_selection
-        {
-            open_source(app, selected);
-        }
-        if ui.button("Close").clicked() {
-            close_source(app);
-        }
-    });
+    let source_name = app.session.project.items.get(&item).map(|i| i.name.clone()).unwrap_or_else(|| "Source".to_string());
 
     // The picture, through the engine's own Source-monitor renderer.
-    let pic_h = (area.available_rect_before_wrap().height() - 120.0).max(70.0);
+    let pic_h = (area.available_rect_before_wrap().height() - 82.0).max(60.0);
     let (pic_rect, _) = area.allocate_exact_size(egui::vec2(area.available_width(), pic_h), egui::Sense::hover());
     let needs = app.source_monitor.as_ref().is_none_or(|m| m.item != item || m.time != t);
     if needs {
@@ -1585,85 +1740,116 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
     }
 
     area.horizontal(|ui| {
-        if ui.button("|<").on_hover_text("Source start").clicked() {
+        if ui.small_button("|<").on_hover_text("Source start").clicked() {
             source_set_playhead(app, start);
         }
-        if ui.button("<|").on_hover_text("Previous frame").clicked() {
+        if ui.small_button("<|").on_hover_text("Previous frame").clicked() {
             source_step(app, -1);
         }
-        if ui.button(if playing { "Pause" } else { "Play" }).clicked() {
+        if ui.small_button(if playing { "||" } else { ">" }).on_hover_text("Play / pause the source").clicked() {
             source_toggle_play(app);
         }
-        if ui.button("|>").on_hover_text("Next frame").clicked() {
+        if ui.small_button("|>").on_hover_text("Next frame").clicked() {
             source_step(app, 1);
         }
-        if ui.button(">|").on_hover_text("Source end").clicked() {
+        if ui.small_button(">|").on_hover_text("Source end").clicked() {
             source_set_playhead(app, Tick((end.0 - rate.frame_duration().0).max(start.0)));
         }
+        let frames = rate.frame_at(t) - rate.frame_at(start);
+        let total = rate.frame_at(end) - rate.frame_at(start);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(format!("{frames} / {total}  {:.2}s", (t - start).seconds())).size(9.5).monospace().color(ui::TEXT_LO));
+        });
     });
-    let frames = rate.frame_at(t) - rate.frame_at(start);
-    let total = rate.frame_at(end) - rate.frame_at(start);
-    area.label(egui::RichText::new(format!("frame {frames} / {total}  ({:.2}s)", (t - start).seconds())).monospace());
     let mut seek = t.0 as f64;
     if area.add(egui::Slider::new(&mut seek, start.0 as f64..=end.0 as f64).show_value(false)).changed() {
         source_set_playhead(app, Tick(seek.round() as i64));
     }
-
     area.horizontal(|ui| {
-        if ui.button("Mark In (I)").clicked() {
-            source_mark(app, true);
-        }
-        if ui.button("Mark Out (O)").clicked() {
-            source_mark(app, false);
-        }
-        if ui.button("Go In").clicked() {
-            source_goto(app, false);
-        }
-        if ui.button("Go Out").clicked() {
-            source_goto(app, true);
-        }
-    });
-    area.horizontal(|ui| {
-        if ui.button("Clear In").clicked() {
-            source_clear(app, "markers.clearIn");
-        }
-        if ui.button("Clear Out").clicked() {
-            source_clear(app, "markers.clearOut");
-        }
-        if ui.button("Clear Both").clicked() {
-            source_clear(app, "markers.clearInOut");
-        }
-    });
-    if let Some(selected) = source_selected(app) {
-        let text = if mark_in.is_none() && mark_out.is_none() {
-            format!("No In/Out marks - using full source ({:.2}s)", selected.duration.seconds())
-        } else {
-            format!("Selected range {:.2}s", selected.duration.seconds())
-        };
-        area.colored_label(egui::Color32::GRAY, text);
-    }
-    area.horizontal(|ui| {
-        if ui.button("Insert (,)").on_hover_text("Insert the source range at the sequence playhead").clicked() {
+        ui.menu_button("Marks", |ui| {
+            if ui.button("Mark In (I)").clicked() {
+                source_mark(app, true);
+                ui.close();
+            }
+            if ui.button("Mark Out (O)").clicked() {
+                source_mark(app, false);
+                ui.close();
+            }
+            if ui.button("Go In").clicked() {
+                source_goto(app, false);
+                ui.close();
+            }
+            if ui.button("Go Out").clicked() {
+                source_goto(app, true);
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Clear In").clicked() {
+                source_clear(app, "markers.clearIn");
+                ui.close();
+            }
+            if ui.button("Clear Out").clicked() {
+                source_clear(app, "markers.clearOut");
+                ui.close();
+            }
+            if ui.button("Clear Both").clicked() {
+                source_clear(app, "markers.clearInOut");
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Open Selected").clicked()
+                && let Some(selected) = app.bin_selection
+            {
+                open_source(app, selected);
+                ui.close();
+            }
+            if ui.button("Close Source").clicked() {
+                close_source(app);
+                ui.close();
+            }
+        });
+        if ui.small_button("Insert").on_hover_text("Insert the source range at the sequence playhead").clicked() {
             source_edit(app, true);
         }
-        if ui.button("Overwrite (.)").on_hover_text("Overwrite with the source range at the sequence playhead").clicked() {
+        if ui.small_button("Overwrite").on_hover_text("Overwrite with the source range at the sequence playhead").clicked() {
             source_edit(app, false);
         }
+        let range = if mark_in.is_none() && mark_out.is_none() {
+            "full source".to_string()
+        } else {
+            source_selected(app).map(|r| format!("{:.2}s selected", r.duration.seconds())).unwrap_or_else(|| "range".to_string())
+        };
+        ui.label(egui::RichText::new(range).size(9.5).color(ui::TEXT_OFF));
     });
+    if let Some(selected) = source_selected(app) {
+        area.label(egui::RichText::new(format!("{}  -  {}", source_name, duration_text(selected.duration.seconds()))).size(9.5).color(ui::TEXT_LO));
+    }
     if playing {
         ui.ctx().request_repaint();
     }
 }
 
-/// The program monitor — shared by the Edit and Color workspaces.
+/// The program monitor, shared by the Edit, Color and new workspaces. The
+/// picture is the engine's rendered sequence frame; the transport is real.
 pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
+    ui.painter().rect_filled(rect, 0.0, ui::BG_PANEL);
+    ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui::LINE_DARK));
     let Some(seq_id) = app.sequence_id() else {
-        let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor"));
-        area.vertical_centered(|ui| ui.label("No sequence. New project creates one; import media on the left and double-click it to place a clip."));
+        let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor").layout(egui::Layout::top_down(egui::Align::Min)));
+        ui::panel_header(&mut area, "Program");
+        area.add_space(8.0);
+        ui::empty_state(
+            &mut area,
+            "No sequence",
+            "A new project creates a sequence. Import media in the project browser and double-click it to place a clip.",
+            "Back to Editing",
+        );
         return;
     };
+    let seq_name = app.sequence().map(|s| s.name.clone()).unwrap_or_default();
     let rate = app.sequence().map(|s| s.settings.frame_rate).unwrap_or(SEQUENCE_RATE);
     let frame = rate.frame_at(app.playhead);
+    let seq_end = app.sequence_end();
 
     // Render only when the shown frame, the document revision or the sequence
     // changed — through the same compositor export uses.
@@ -1687,24 +1873,227 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
     }
 
-    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor"));
+    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("monitor").layout(egui::Layout::top_down(egui::Align::Min)));
+    ui::panel_header(&mut area, &format!("Program: {seq_name}"));
+    area.add_space(3.0);
+    let pic_h = (area.available_rect_before_wrap().height() - 58.0).max(70.0);
+    let (pic_rect, _) = area.allocate_exact_size(egui::vec2(area.available_width(), pic_h), egui::Sense::hover());
     if let Some(m) = &app.monitor {
-        let avail = area.available_rect_before_wrap();
-        let scale = (avail.width() / m.size.0 as f32).min((avail.height() - 24.0) / m.size.1 as f32);
-        let shown = egui::vec2(m.size.0 as f32 * scale, m.size.1 as f32 * scale);
-        let at = egui::pos2(avail.left() + (avail.width() - shown.x) / 2.0, avail.top() + (avail.height() - shown.y) / 2.0);
-        let dest = egui::Rect::from_min_size(at, shown);
-        ui.painter().image(m.texture.id(), dest, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        ui::image(&area, pic_rect, m.texture.id(), m.size);
+        area.painter().text(
+            pic_rect.left_top() + egui::vec2(8.0, 6.0),
+            egui::Align2::LEFT_TOP,
+            format!("{} x {}", m.size.0, m.size.1),
+            egui::FontId::monospace(9.0),
+            ui::TEXT_LO,
+        );
+    } else {
+        area.painter().rect_filled(pic_rect, 0.0, ui::BG_INSET);
+        area.painter().text(pic_rect.center(), egui::Align2::CENTER_CENTER, "Rendering...", egui::FontId::proportional(11.0), ui::TEXT_LO);
     }
-    area.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        ui.colored_label(egui::Color32::GRAY, if app.wall_start.is_some() && app.playing { "wall clock (no audio device)" } else { "audio clock" });
-        ui.label(format!(
-            "{} × {} · frame {}",
-            app.monitor.as_ref().map(|m| m.size.0).unwrap_or(0),
-            app.monitor.as_ref().map(|m| m.size.1).unwrap_or(0),
-            frame + 1
-        ));
+
+    area.horizontal(|ui| {
+        if ui.small_button("|<").on_hover_text("Go to sequence start").clicked() {
+            app.playhead = Tick::ZERO;
+        }
+        if ui.small_button("<|").on_hover_text("Previous frame").clicked() {
+            app.step_playhead(-1);
+        }
+        if ui.small_button(if app.playing { "||" } else { ">" }).on_hover_text("Play / pause (Space)").clicked() {
+            app.toggle_playback();
+        }
+        if ui.small_button("|>").on_hover_text("Next frame").clicked() {
+            app.step_playhead(1);
+        }
+        if ui.small_button(">|").on_hover_text("Go to sequence end").clicked() {
+            app.playhead = seq_end;
+        }
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(app.timecode()).size(10.0).monospace().color(ui::ACCENT_HI));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(if app.wall_start.is_some() && app.playing { "wall clock" } else { "audio clock" }).size(9.0).color(ui::TEXT_OFF));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(format!("frame {}", frame + 1)).size(9.0).monospace().color(ui::TEXT_LO));
+        });
     });
+    let mut seek = app.playhead.0 as f64;
+    if area.add(egui::Slider::new(&mut seek, 0.0..=seq_end.0.max(1) as f64).show_value(false)).changed() {
+        app.playhead = Tick(seek.round() as i64);
+    }
+}
+
+/// The right-hand inspector: the selected clip's controls and the sequence
+/// metadata. It deliberately calls into the same workspaces rather than
+/// duplicating their edit surfaces.
+fn inspector_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
+    ui.painter().rect_filled(rect, 0.0, ui::BG_PANEL);
+    ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui::LINE_DARK));
+    let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("inspector"));
+    let selected = match app.inspector_tab {
+        InspectorTab::Controls => 0,
+        InspectorTab::Metadata => 1,
+    };
+    if let Some(index) = ui::tabs(&mut panel, "inspector-tabs", &["Effect Controls", "Metadata"], selected) {
+        app.inspector_tab = if index == 0 { InspectorTab::Controls } else { InspectorTab::Metadata };
+    }
+    panel.add_space(6.0);
+    match app.inspector_tab {
+        InspectorTab::Controls => inspector_controls(app, &mut panel),
+        InspectorTab::Metadata => inspector_metadata(app, &mut panel),
+    }
+}
+
+fn inspector_controls(app: &mut App, panel: &mut egui::Ui) {
+    let Some(clip) = app.selection else {
+        panel.add_space(6.0);
+        panel.label(egui::RichText::new("No clip selected").size(13.0).strong().color(ui::TEXT_HI));
+        panel.add_space(3.0);
+        panel.label(ui::hint(
+            "Select a clip on the timeline to see its source, duration, effects and quick links to the grading, text, masking and compositing workspaces.",
+        ));
+        ui::big_gap(panel);
+        ui::section(panel, "SEQUENCE");
+        if let Some(seq) = app.sequence() {
+            ui::kv(panel, "Name", seq.name.clone());
+            ui::kv(panel, "Frame rate", format!("{:.3} fps", seq.settings.frame_rate.as_f64()));
+            ui::kv(panel, "Resolution", format!("{} x {}", seq.settings.width, seq.settings.height));
+            ui::kv(panel, "Markers", seq.markers.len().to_string());
+        }
+        ui::big_gap(panel);
+        ui::section(panel, "PROJECT");
+        let media = app.session.project.items.values().filter(|i| matches!(&i.kind, ItemKind::Media(_))).count();
+        ui::kv(panel, "Media items", media.to_string());
+        ui::kv(panel, "Compositions", app.compositions.len().to_string());
+        return;
+    };
+
+    let info = app.sequence().and_then(|seq| {
+        let (track, item) = seq.find_item(clip)?;
+        let video = seq.video_tracks.iter().any(|t| t.id == track);
+        let effects = item
+            .effects
+            .iter()
+            .map(|e| (e.def().map(|d| d.name.to_string()).unwrap_or_else(|| e.effect.clone()), e.enabled, e.masks.len()))
+            .collect::<Vec<_>>();
+        Some((
+            item.name.clone(),
+            track_name(seq, track, video).unwrap_or_else(|| if video { "Video".to_string() } else { "Audio".to_string() }),
+            item.start,
+            item.duration,
+            item.item,
+            effects,
+        ))
+    });
+    let Some((name, track, start, duration, item, effects)) = info else {
+        panel.label(ui::hint("The selected clip is no longer in the sequence."));
+        return;
+    };
+
+    panel.horizontal(|ui| {
+        let (icon, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+        ui.painter().rect_filled(icon, 3.0, ui::CLIP_VIDEO);
+        ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, "V", egui::FontId::proportional(10.0), ui::TEXT_HI);
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(name).size(13.0).strong().color(ui::TEXT_HI));
+            ui.label(ui::hint(&format!("{track}  -  {}", marker_timecode(SEQUENCE_RATE, start))));
+        });
+    });
+    ui::kv(panel, "Duration", format!("{:.2}s", duration.seconds()));
+    ui::kv(panel, "Source item", item.0.to_string());
+
+    ui::section(panel, "QUICK ACTIONS");
+    panel.horizontal(|ui| {
+        if ui.small_button("Effects").clicked() {
+            app.workspace = Workspace::Effects;
+        }
+        if ui.small_button("Color").clicked() {
+            app.workspace = Workspace::Color;
+        }
+        if ui.small_button("Text").clicked() {
+            app.workspace = Workspace::Text;
+        }
+    });
+    panel.horizontal(|ui| {
+        if ui.small_button("Mask").clicked() {
+            app.workspace = Workspace::Masking;
+        }
+        if ui.small_button("Compositing").clicked() {
+            app.workspace = Workspace::Compositing;
+        }
+    });
+
+    ui::section(panel, "APPLIED EFFECTS");
+    if effects.is_empty() {
+        panel.label(ui::hint("No effects on this clip. The Effects workspace adds them."));
+    } else {
+        for (name, enabled, masks) in &effects {
+            panel.horizontal(|ui| {
+                ui::dot(ui, if *enabled { ui::ACCENT } else { ui::TEXT_OFF });
+                ui.label(egui::RichText::new(name).size(10.5).color(if *enabled { ui::TEXT_MID } else { ui::TEXT_OFF }));
+                if *masks > 0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(format!("{masks} mask")).size(9.0).color(ui::TEXT_LO));
+                    });
+                }
+            });
+        }
+    }
+
+    if let Some(comp) = app.compositions.get(&item) {
+        let layers = comp.comp_layers();
+        if !layers.is_empty() {
+            ui::section(panel, "COMPOSITION LAYERS");
+            for (index, (name, video)) in layers.iter().enumerate() {
+                panel.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("{}.", index + 1)).size(9.5).color(ui::TEXT_OFF));
+                    ui::dot(ui, if *video { ui::CLIP_VIDEO } else { ui::CLIP_TITLE });
+                    ui.label(egui::RichText::new(name).size(10.5).color(ui::TEXT_MID));
+                });
+            }
+        }
+    }
+
+    if let Some(seq) = app.sequence()
+        && !seq.markers.is_empty()
+    {
+        ui::section(panel, "SEQUENCE MARKERS");
+        for marker in seq.markers.iter().take(5) {
+            panel.horizontal(|ui| {
+                ui::dot(ui, marker_color(marker.color));
+                ui.label(egui::RichText::new(if marker.name.is_empty() { "Marker" } else { &marker.name }).size(10.0).color(ui::TEXT_MID));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(marker_timecode(SEQUENCE_RATE, marker.start)).size(9.0).monospace().color(ui::TEXT_LO));
+                });
+            });
+        }
+    }
+}
+
+fn inspector_metadata(app: &mut App, panel: &mut egui::Ui) {
+    ui::section(panel, "DOCUMENT");
+    ui::kv(panel, "Project", app.session.project.name.clone());
+    ui::kv(panel, "Path", app.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Not saved".to_string()));
+    ui::kv(panel, "Schema", frameforge_bridge::FFPROJ_SCHEMA.to_string());
+    ui::kv(panel, "Dirty", if app.dirty { "Yes" } else { "No" });
+    ui::section(panel, "SEQUENCE");
+    if let Some(seq) = app.sequence() {
+        ui::kv(panel, "Name", seq.name.clone());
+        ui::kv(panel, "Size", format!("{} x {}", seq.settings.width, seq.settings.height));
+        ui::kv(panel, "Rate", format!("{:.3} fps", seq.settings.frame_rate.as_f64()));
+        ui::kv(panel, "Video tracks", seq.video_tracks.len().to_string());
+        ui::kv(panel, "Audio tracks", seq.audio_tracks.len().to_string());
+        ui::kv(panel, "Markers", seq.markers.len().to_string());
+    }
+    ui::section(panel, "PLAYHEAD");
+    ui::kv(panel, "Timecode", app.timecode());
+    let rate = app.sequence().map(|s| s.settings.frame_rate).unwrap_or(SEQUENCE_RATE);
+    ui::kv(panel, "Frame", (rate.frame_at(app.playhead) + 1).to_string());
+    ui::kv(panel, "Tick", app.playhead.0.to_string());
+    ui::section(panel, "MEDIA");
+    let media = app.session.project.items.values().filter(|i| matches!(&i.kind, ItemKind::Media(_))).count();
+    ui::kv(panel, "Media items", media.to_string());
+    ui::kv(panel, "Compositions", app.compositions.len().to_string());
+    ui::footer_hint(panel, "Every edit is an engine command with one chronological undo order.");
 }
 
 #[cfg(test)]

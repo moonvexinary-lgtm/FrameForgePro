@@ -15,13 +15,17 @@
 mod app;
 mod audio;
 mod color;
+mod compositing;
 mod edit;
 mod effects;
 mod export;
+mod graphics;
 mod history;
+mod masking;
 mod mixer;
 mod pixels;
 mod roto_bench;
+mod ui;
 
 use std::process::ExitCode;
 
@@ -50,12 +54,19 @@ fn run_gui() -> ExitCode {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("FrameForge Pro")
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([1000.0, 620.0])
+            .with_inner_size([1600.0, 960.0])
+            .with_min_inner_size([1120.0, 680.0])
             .with_icon(app_icon()),
         ..eframe::NativeOptions::default()
     };
-    match eframe::run_native("FrameForge Pro", options, Box::new(|_cc| Ok(Box::new(app::App::new())))) {
+    match eframe::run_native(
+        "FrameForge Pro",
+        options,
+        Box::new(|cc| {
+            ui::install(&cc.egui_ctx);
+            Ok(Box::new(app::App::new()))
+        }),
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("FrameForge Pro could not open a window: {e}");
