@@ -137,7 +137,7 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
         return;
     };
     let Some(def) = instance.def() else {
-        panel.label(crate::ui::hint(format!("Unknown effect {}", instance.effect)));
+        panel.label(crate::ui::hint(&format!("Unknown effect {}", instance.effect)));
         return;
     };
     panel.label(egui::RichText::new(def.name).size(12.0).strong().color(crate::ui::ACCENT_HI));

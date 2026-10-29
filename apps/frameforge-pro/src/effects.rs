@@ -238,7 +238,7 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
     crate::ui::panel_header(&mut panel, "Effects · composition");
     crate::ui::inset(&mut panel);
     let media_name = app.session.project.items.get(&item).map(|it| it.name.clone()).unwrap_or_default();
-    panel.label(crate::ui::hint(format!("Clip: {media_name}")));
+    panel.label(crate::ui::hint(&format!("Clip: {media_name}")));
     crate::ui::section(&mut panel, "EFFECT CHAIN");
 
     // The effect chain.
@@ -381,7 +381,7 @@ fn parameters(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) 
         return;
     };
     let Some(name) = effect_name(&effect_id) else {
-        area.label(crate::ui::hint(format!("Unknown effect {effect_id}")));
+        area.label(crate::ui::hint(&format!("Unknown effect {effect_id}")));
         return;
     };
     area.label(egui::RichText::new(name).size(13.0).strong().color(crate::ui::ACCENT_HI));
