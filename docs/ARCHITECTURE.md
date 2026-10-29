@@ -1,6 +1,6 @@
 # FrameForge Pro — Architecture
 
-Last updated: T12 (2026-10-25) · Branch: `frameforge-rust-rewrite`
+Last updated: U1 (2026-10-28) · Branch: `frameforge-rust-rewrite`
 
 Planning documents from the M9 audit: [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) (measured
 state and defects), [`ARCHITECTURE_DECISION.md`](ARCHITECTURE_DECISION.md) (Rust-first vs
@@ -24,7 +24,7 @@ recoverable on `frameforge-dev` and the `frameforge-cpp-legacy` tag.
 
 | Layer | Responsibility | Status |
 |---|---|---|
-| L6 apps | `frameforge-pro` binary; workspaces: Edit / Effects / Color / Audio / Export | M5–M9: real workspaces, session edits, autosave |
+| L6 apps | `frameforge-pro` binary; workspaces: Edit / Effects / Color / Audio / Compositing / Text & Graphics / Masking / Export | M5–M9: real workspaces, session edits, autosave; U1: themed shell and the new screens |
 | L5 ui-egui | unified shell: workspaces, timeline, monitors, panels (egui — same UI stack as both upstreams) | M5–M8: working; docking/layout persistence still planned |
 | L4 engine | unified session: project, commands, undo; timeline items reference compositions | M6: FilmCraft `Session` is the editing authority; M11: composition edits share its undo order; R2: worker protocol + frame exporter |
 | L3 render/export | FilmCraft track compositor + EffectCraft layer compositor behind adapters; one export pipeline | M2/M4: verified; H.264 is decode-verified; M12: overwrite confirmation + real cancel; R1: cached roto alpha in preview/export |
@@ -635,6 +635,47 @@ as T10; no engine command exists for marker edits.
 - **Limitations**: no marker drag, no CSV/EDL import and no marker-list
   selection; a marker's start cannot be moved through this editor.
 
+## U1 - the TSX workspace port and its new screens (CI-verified, run 40794727835)
+
+The supplied TSX mock-up (one `EditingWorkspace` component; a static visual
+specification with no state and no engine calls) was rebuilt as native egui, not
+embedded as a web view, so every control stays wired to the real engines.
+
+- **Design kit** (`apps/frameforge-pro/src/ui.rs`): the mock-up's palette — accent
+  `#35c2b5`, dim `#1b4a46`, highlight `#62dccf`; backgrounds `#151515`, `#1e1e1e`,
+  `#262626`, `#2e2e2e`, `#181818`; text `#e8e8e8`, `#b3b3b3`, `#7c7c7c`; clip violet
+  `#8b79d1`, audio green `#3f9b62`, title pink `#d36bc8` — plus the compact type
+  scale, 24 px panel headers, tabs, cards, guides, badges and bars. Installed once
+  with egui 0.36's themed style API (`Theme::Dark`).
+- **Shell** (`app.rs`): a 30 px menu band plus a 30 px workspace-tab band, the
+  eight workspaces below, a 24 px status bar, and draggable horizontal/vertical
+  splitters. Layout dimensions come from the TSX: 320 px source column, 340 px
+  inspector, 250 px timeline.
+- **Edit** (`edit.rs`): three columns — source monitor over the media browser
+  (media / markers / history tabs, search and cards); centre program monitor over
+  the timeline (toolbar, ruler, tracks, themed clips); full-height inspector. Both
+  monitors still render through the engines, with real transport and scrubbing.
+- **Text & Graphics** (`graphics.rs`): real `graphics.list/newText/newShape/set/
+  setText/setTextType/selectLayer/bringForward/sendBackward/alignFrame/
+  deleteLayer` calls, layer list, text/shape drafting, position/scale/visibility.
+- **Masking** (`masking.rs`): real `masks.list/add/set/select/remove/track` over an
+  opacity effect, with feather, opacity, inversion, mode and expansion. The tracker
+  button is FilmCraft's engine mask tracker, **not XMem**; the XMem panel states
+  "not wired in this build" rather than pretending.
+- **Compositing** (`compositing.rs`): real `Composition` layer list, toggle,
+  removal and text/solid creation, recorded through `record_comp_change` into the
+  shared undo order. A composition only exists after importing an EffectCraft
+  project, and the empty state says so.
+- **Preserved behaviour**: ripple delete, roll/slip/slide, transitions, markers,
+  Lift/Extract, mixer, effect chains and export still call the same engine commands
+  and keep their tests; the UI queries that must not dirty the document
+  (`graphics.list`, `masks.list`) call the session directly.
+- **Limits**: fixed layout sizes (no docking persistence), screens depend on the
+  selected clip/project, and U1 changes presentation only — no engine behaviour.
+- **CI**: run `40794727835` — fmt, clippy `-D warnings`, check, 54 tests, release
+  build, binary self-test including `roto-bench 4`; artifact
+  `frameforge-pro-windows-dev` is 25,842,805 bytes.
+
 ## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
 The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
@@ -749,6 +790,7 @@ clip, drives the worker over pipes and computes IoU.
 | T11 | Chosen transition length (1-600 frames) on Dissolve/Crossfade plus `sequence.setTransition` duration/alignment editing for the transition at the selected clip's In edge, with an apply/update/undo test | CI-verified, run 40256569182 |
 | T12 | Marker CSV export with RFC 4180 quoting, exact ticks, padded start timecode and a byte-for-byte file test | CI-verified, run 40260600879 |
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
+| U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 
 ## Dependency policy
 

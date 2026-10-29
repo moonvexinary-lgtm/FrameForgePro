@@ -210,6 +210,11 @@ weights are committed, and CI does not run them (no torch, no weights).
   ceiling, and proof that worker masks are the bytes used by preview/export (the R1 seam exists but
   the app does not spawn the worker). This is **not** an R3 pass.
 
+The 2026-10-28 UI milestone (run `40794727835`) added a **Masking** workspace, but it
+drives FilmCraft's own engine mask objects (`masks.*`) and an engine mask tracker; it
+does not start XMem, and its XMem panel says "not wired in this build". R3-R6 status is
+unchanged by the UI work.
+
 
 
 | Stage | Deliverable | Acceptance test (must actually run) |
