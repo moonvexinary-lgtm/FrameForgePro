@@ -206,9 +206,11 @@ weights are committed, and CI does not run them (no torch, no weights).
   (including model load) and 610.7 MB backward (after load).
 - **Cancel**: a 30-frame 480x270 job cancelled after the first progress event emitted `cancelled`
   1.05 s later and stopped after 2 masks.
-- **Still open**: app/UI wiring, a job runner with timeout/kill, resume from corrections, a memory
-  ceiling, and proof that worker masks are the bytes used by preview/export (the R1 seam exists but
-  the app does not spawn the worker). This is **not** an R3 pass.
+- **Still open**: app/UI wiring, a job runner that applies deadlines (the transport gained
+  `recv_timeout` / `handshake_timeout` / `kill` on 2026-10-28, run `40814011414`, so a hung worker is
+  observable and killable; nothing schedules it yet), resume from corrections, a memory ceiling, and
+  proof that worker masks are the bytes used by preview/export (the R1 seam exists but the app does
+  not spawn the worker). This is **not** an R3 pass.
 
 The 2026-10-28 UI milestone (run `40794727835`) added a **Masking** workspace, but it
 drives FilmCraft's own engine mask objects (`masks.*`) and an engine mask tracker; it

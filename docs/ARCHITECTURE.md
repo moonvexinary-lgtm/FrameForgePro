@@ -716,15 +716,21 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
   Bars & Tone. CI runs it with 4 frames. It says "XMem CPU inference: not measured" because CI has no
   optional runtime or consented weights; the local `tools/` probe is separate and is not an inference
   number invented by `roto-bench`.
-- **Tests** (`crates/bridge/tests/r2_roto_worker.rs`, 3): a real PowerShell fake worker completes
-  ready → progress → done → cancel → shutdown over pipes; the exporter writes scaled PNGs in media
-  order; an empty range is rejected. The fake worker is not XMem and the test says so.
-- **Measured limits**: the client is blocking; a hung worker needs the R3 job runner's timeout/kill
-  policy. `request_shutdown` sends the request and teardown kills the child. No Python runtime or
-  weights ship in the app; `tools/` holds the local worker/probe (not part of the Rust build), and
+- **Deadlines and kill** (added 2026-10-28, run `40814011414`): stdout is parsed on a reader thread
+  and delivered over a channel, so `recv_timeout` and `handshake_timeout` return
+  `WorkerError::Timeout` instead of blocking forever, and `kill()` makes the teardown explicit for a
+  job runner (a deadline or ceiling). `Drop` still kills and joins both threads.
+- **Tests** (`crates/bridge/tests/r2_roto_worker.rs`, 5): a real PowerShell fake worker completes
+  ready → progress → done → cancel → shutdown over pipes; a quiet worker yields a `Timeout` inside
+  the deadline; a silent worker times out during the handshake and is killed; the exporter writes
+  scaled PNGs in media order; an empty range is rejected. The fake worker is not XMem and the tests
+  say so.
+- **Measured limits**: the transport has deadlines, but no app job runner yet applies them, and
+  `request_shutdown` still sends a request (teardown kills the child). No Python runtime or weights
+  ship in the app; `tools/` holds the local worker/probe (not part of the Rust build), and
   initial-mask UI, job queue and UI wiring are still absent.
 - **Size**: artifact `frameforge-pro-windows-dev` is **25,512,804 bytes** ZIP (R1 was 25,418,672;
-  M12 25,229,770); no new external crate.
+  M12 25,229,770); the deadline change is 25,842,162 bytes; no new external crate.
 
 ## R3 — real XMem worker probe (local evidence, not CI; 2026-10-27)
 
@@ -750,8 +756,9 @@ clip, drives the worker over pipes and computes IoU.
   after it).
 - **Cancel**: a 30-frame 480x270 job cancelled after the first progress event
   emitted `cancelled` 1.05 s later and stopped after 2 written masks.
-- **Not met**: no app/UI wiring or job queue, no timeout/kill policy in
-  `XmemWorker`, no resume/segmented correction runs, no memory ceiling enforcement,
+- **Not met**: no app/UI wiring or job queue, no app runner that applies the
+  transport's deadlines (the worker itself now has `recv_timeout` / `handshake_timeout`
+  / `kill`, run `40814011414`), no resume/segmented correction runs, no memory ceiling enforcement,
   no proof that a worker mask reaches preview/export through the R1 cache, and no
   CI coverage (CI has no torch or weights). This is real inference evidence, not
   an R3 acceptance pass; R3 and R4 remain open. The tools-only commit `23d03da`
