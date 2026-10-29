@@ -1245,11 +1245,6 @@ pub fn gutter_v_id(ui: &mut egui::Ui, id: &'static str, x: f32, y0: f32, y1: f32
     }
 }
 
-/// A draggable horizontal gutter between two regions.
-pub fn gutter_h(ui: &mut egui::Ui, y: f32, x0: f32, x1: f32, value: &mut f32) {
-    gutter_h_id(ui, "gutter-h", y, x0, x1, value);
-}
-
 /// A draggable horizontal gutter with a caller-provided identity.
 pub fn gutter_h_id(ui: &mut egui::Ui, id: &'static str, y: f32, x0: f32, x1: f32, value: &mut f32) {
     let grab = 6.0;

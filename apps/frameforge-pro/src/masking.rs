@@ -36,7 +36,7 @@ fn first_video_clip(app: &App) -> Option<ClipId> {
 }
 
 fn mask_effect(app: &App, clip: ClipId) -> Option<usize> {
-    let Some(seq) = app.sequence() else { return None };
+    let seq = app.sequence()?;
     let (_, item) = seq.find_item(clip)?;
     item.effects.iter().position(|effect| effect.effect != "motion" && effect.def().is_some_and(|def| def.kind == EffectKind::Video))
 }

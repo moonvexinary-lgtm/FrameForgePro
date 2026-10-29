@@ -180,11 +180,9 @@ fn layer_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: Option<
                 app.status = "Text layer added".to_string();
             }
         }
-        if ui.small_button("+ Solid").clicked() {
-            if mutate(app, item, |comp| comp.comp_add_solid_layer([0.08, 0.08, 0.08])) {
-                app.comp_layer = 0;
-                app.status = "Solid layer added".to_string();
-            }
+        if ui.small_button("+ Solid").clicked() && mutate(app, item, |comp| comp.comp_add_solid_layer([0.08, 0.08, 0.08])) {
+            app.comp_layer = 0;
+            app.status = "Solid layer added".to_string();
         }
     });
 
@@ -201,11 +199,9 @@ fn layer_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: Option<
             if ui.small_button("Hide / Show").clicked() {
                 toggle_layer(app, item, index);
             }
-            if ui.small_button("Remove").clicked() {
-                if mutate(app, item, |comp| comp.comp_remove_layer(index)) {
-                    app.comp_layer = 0;
-                    app.status = "Layer removed".to_string();
-                }
+            if ui.small_button("Remove").clicked() && mutate(app, item, |comp| comp.comp_remove_layer(index)) {
+                app.comp_layer = 0;
+                app.status = "Layer removed".to_string();
             }
         });
     }
