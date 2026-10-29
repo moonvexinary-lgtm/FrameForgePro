@@ -9,11 +9,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use filmcraft_media::Generator;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
-use frameforge_bridge::{ExportedFrames, WORKER_PROTOCOL, WorkerCommand, WorkerDirection, WorkerEvent, XmemWorker, export_frames};
+use frameforge_bridge::{ExportedFrames, WORKER_PROTOCOL, WorkerCommand, WorkerDirection, WorkerError, WorkerEvent, XmemWorker, export_frames};
 
 const R: FrameRate = FrameRate::FPS_24;
 
@@ -72,6 +73,35 @@ fn fake_worker_speaks_the_json_lines_protocol() {
         other => panic!("cancel must be acknowledged, got {other:?}"),
     }
     worker.request_shutdown().expect("send shutdown");
+}
+
+#[test]
+fn a_quiet_worker_reports_a_timeout_instead_of_blocking() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("fake_xmem_worker.ps1");
+    let script_text = script.to_str().expect("fixture path is UTF-8");
+    let mut worker =
+        XmemWorker::spawn(Path::new("powershell"), &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_text]).expect("spawn fake worker");
+    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake within the deadline");
+
+    let started = Instant::now();
+    let error = worker.recv_timeout(Duration::from_millis(250)).expect_err("a quiet worker has no event to give");
+    assert!(matches!(error, WorkerError::Timeout(_)), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(20), "the deadline is honoured");
+    worker.kill().expect("kill the worker");
+}
+
+#[test]
+fn a_silent_worker_times_out_during_the_handshake() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("silent_xmem_worker.ps1");
+    let script_text = script.to_str().expect("fixture path is UTF-8");
+    let mut worker =
+        XmemWorker::spawn(Path::new("powershell"), &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_text]).expect("spawn silent worker");
+
+    let started = Instant::now();
+    let error = worker.handshake_timeout(Duration::from_millis(400)).expect_err("silence is a timeout, not a ready");
+    assert!(matches!(error, WorkerError::Timeout(_)), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(20), "the handshake deadline is honoured");
+    worker.kill().expect("kill the silent worker");
 }
 
 #[test]

@@ -9,8 +9,10 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use filmcraft_media::{FrameRequest, MediaSource};
 use filmcraft_time::{FrameRate, TimeRange};
@@ -86,15 +88,20 @@ pub enum WorkerError {
     Protocol(String),
     #[error("roto worker closed unexpectedly: {0}")]
     Closed(String),
+    #[error("roto worker timed out: {0}")]
+    Timeout(String),
     #[error("roto worker JSON: {0}")]
     Json(#[from] serde_json::Error),
 }
 
-/// A child process speaking the JSON-lines protocol.
+/// A child process speaking the JSON-lines protocol. A reader thread turns
+/// stdout lines into channel events so a caller can apply a deadline instead
+/// of blocking forever on a stuck worker.
 pub struct XmemWorker {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    events: Receiver<Result<WorkerEvent, WorkerError>>,
+    reader_thread: Option<JoinHandle<()>>,
     stderr: Arc<Mutex<String>>,
     stderr_thread: Option<JoinHandle<()>>,
 }
@@ -140,13 +147,29 @@ impl XmemWorker {
             }
         })?;
 
-        Ok(Self { child, stdin, stdout: BufReader::new(stdout), stderr: tail, stderr_thread: Some(stderr_thread) })
+        let (tx, events) = mpsc::channel();
+        let reader_thread = std::thread::Builder::new().name("xmem-worker-stdout".to_string()).spawn(move || read_events(stdout, tx))?;
+
+        Ok(Self { child, stdin, events, reader_thread: Some(reader_thread), stderr: tail, stderr_thread: Some(stderr_thread) })
     }
 
     /// Send `hello`, then require a matching `ready` event.
     pub fn handshake(&mut self) -> Result<WorkerInfo, WorkerError> {
         self.send(&WorkerCommand::Hello { protocol: WORKER_PROTOCOL })?;
-        match self.recv()? {
+        let event = self.recv()?;
+        Self::expect_ready(event)
+    }
+
+    /// A handshake with a deadline, so a missing or hung runtime cannot freeze
+    /// the app. On timeout the caller drops (or kills) the worker.
+    pub fn handshake_timeout(&mut self, timeout: Duration) -> Result<WorkerInfo, WorkerError> {
+        self.send(&WorkerCommand::Hello { protocol: WORKER_PROTOCOL })?;
+        let event = self.recv_timeout(timeout)?;
+        Self::expect_ready(event)
+    }
+
+    fn expect_ready(event: WorkerEvent) -> Result<WorkerInfo, WorkerError> {
+        match event {
             WorkerEvent::Ready { protocol, backend, torch, xmem } => {
                 if protocol != WORKER_PROTOCOL {
                     return Err(WorkerError::Protocol(format!("worker speaks protocol {protocol}, expected {WORKER_PROTOCOL}")));
@@ -169,19 +192,32 @@ impl XmemWorker {
     /// Read one event. A worker that closes the pipe is an error with the
     /// captured stderr tail, never a silent end of job.
     pub fn recv(&mut self) -> Result<WorkerEvent, WorkerError> {
-        let mut line = String::new();
-        let read = (&mut self.stdout).take(MAX_WORKER_LINE as u64).read_line(&mut line).map_err(WorkerError::Io)?;
-        if read == 0 {
-            return Err(WorkerError::Closed(self.stderr_tail()));
+        match self.events.recv() {
+            Ok(Ok(event)) => Ok(event),
+            Ok(Err(WorkerError::Closed(_))) => Err(WorkerError::Closed(self.stderr_tail())),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(WorkerError::Closed(self.stderr_tail())),
         }
-        if read >= MAX_WORKER_LINE && !line.ends_with('\n') {
-            return Err(WorkerError::Protocol(format!("worker line exceeds {MAX_WORKER_LINE} bytes")));
+    }
+
+    /// Read one event, giving up after `timeout`. A quiet worker is a timeout,
+    /// not an error: the caller decides whether to cancel or kill.
+    pub fn recv_timeout(&mut self, timeout: Duration) -> Result<WorkerEvent, WorkerError> {
+        match self.events.recv_timeout(timeout) {
+            Ok(Ok(event)) => Ok(event),
+            Ok(Err(WorkerError::Closed(_))) => Err(WorkerError::Closed(self.stderr_tail())),
+            Ok(Err(error)) => Err(error),
+            Err(RecvTimeoutError::Timeout) => Err(WorkerError::Timeout(format!("no event within {:.1}s", timeout.as_secs_f64()))),
+            Err(RecvTimeoutError::Disconnected) => Err(WorkerError::Closed(self.stderr_tail())),
         }
-        let line = line.trim();
-        if line.is_empty() {
-            return Err(WorkerError::Protocol("worker sent an empty line".to_string()));
-        }
-        serde_json::from_str(line).map_err(|error| WorkerError::Protocol(format!("invalid worker event: {error}: {line}")))
+    }
+
+    /// Terminate the child immediately. `Drop` also kills, but a job runner
+    /// calls this when a deadline or memory ceiling is hit so the failure is
+    /// explicit in its log.
+    pub fn kill(&mut self) -> Result<(), WorkerError> {
+        self.child.kill()?;
+        Ok(())
     }
 
     pub fn request_shutdown(&mut self) -> Result<(), WorkerError> {
@@ -200,8 +236,51 @@ impl Drop for XmemWorker {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(thread) = self.reader_thread.take() {
+            let _ = thread.join();
+        }
         if let Some(thread) = self.stderr_thread.take() {
             let _ = thread.join();
+        }
+    }
+}
+
+/// Parse stdout lines off the blocking pipe so the caller can use a deadline.
+fn read_events(stdout: ChildStdout, tx: mpsc::Sender<Result<WorkerEvent, WorkerError>>) {
+    let mut reader = BufReader::new(stdout);
+    loop {
+        let mut line = String::new();
+        match (&mut reader).take(MAX_WORKER_LINE as u64).read_line(&mut line) {
+            Ok(0) => {
+                let _ = tx.send(Err(WorkerError::Closed("worker stdout closed".to_string())));
+                break;
+            }
+            Ok(read) => {
+                if read >= MAX_WORKER_LINE && !line.ends_with('\n') {
+                    let _ = tx.send(Err(WorkerError::Protocol(format!("worker line exceeds {MAX_WORKER_LINE} bytes"))));
+                    break;
+                }
+                let line = line.trim();
+                if line.is_empty() {
+                    let _ = tx.send(Err(WorkerError::Protocol("worker sent an empty line".to_string())));
+                    break;
+                }
+                match serde_json::from_str(line) {
+                    Ok(event) => {
+                        if tx.send(Ok(event)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Err(WorkerError::Protocol(format!("invalid worker event: {error}: {line}"))));
+                        break;
+                    }
+                }
+            }
+            Err(error) => {
+                let _ = tx.send(Err(WorkerError::Io(error)));
+                break;
+            }
         }
     }
 }
