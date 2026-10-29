@@ -188,11 +188,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     let effective_item = app.selected_clip().map(|(_, item)| item).or(app.effects_item);
     let Some(item) = effective_item else {
         app.history.end_gesture(false);
-        let mut area = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("fx-pick"));
-        area.add_space(12.0);
-        area.heading("Effects");
-        area.label("Select a clip in the Edit timeline, or choose a media item:");
-        area.separator();
+        ui.painter().rect_filled(body, 0.0, crate::ui::BG_APP);
+        let mut area = crate::ui::panel(ui, body, "fx-pick");
+        crate::ui::panel_header(&mut area, "Effects");
+        crate::ui::inset(&mut area);
+        area.label(crate::ui::hint("Select a clip in the Edit timeline, or choose a media item:"));
+        crate::ui::section(&mut area, "MEDIA");
         let mut ids = Vec::new();
         app.session.project.root.all_items(&mut ids);
         egui::ScrollArea::vertical().show(&mut area, |ui| {
@@ -202,7 +203,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
                     continue;
                 }
                 let name = it.name.clone();
-                if ui.button(name).clicked() {
+                if ui.selectable_label(false, name).clicked() {
                     app.effects_item = Some(id);
                 }
             }
@@ -232,14 +233,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
 }
 
 fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) {
-    ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
-    ui.painter().line_segment([rect.right_top(), rect.right_bottom()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
-    let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("fx-list"));
-    panel.add_space(8.0);
-    panel.heading("Composition");
+    let mut panel = crate::ui::panel(ui, rect, "fx-list");
+    panel.painter().line_segment([rect.right_top(), rect.right_bottom()], egui::Stroke::new(1.0, crate::ui::LINE_DARK));
+    crate::ui::panel_header(&mut panel, "Effects · composition");
+    crate::ui::inset(&mut panel);
     let media_name = app.session.project.items.get(&item).map(|it| it.name.clone()).unwrap_or_default();
-    panel.label(format!("Clip: {media_name}"));
-    panel.separator();
+    panel.label(crate::ui::hint(format!("Clip: {media_name}")));
+    crate::ui::section(&mut panel, "EFFECT CHAIN");
 
     // The effect chain.
     let count = app.compositions.get(&item).map(|c| c.effects.len()).unwrap_or(0);
@@ -282,8 +282,7 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
         app.status = "Effect removed".to_string();
     }
 
-    panel.separator();
-    panel.label(egui::RichText::new("Add effect").strong());
+    crate::ui::section(&mut panel, "ADD EFFECT");
     panel.add(egui::TextEdit::singleline(&mut app.effect_search).hint_text("Search the effect catalog…"));
     let needle = app.effect_search.to_lowercase();
     egui::ScrollArea::vertical().show(&mut panel, |ui| {
@@ -305,19 +304,17 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
             }
         }
     });
-    panel.separator();
-    panel.colored_label(
-        egui::Color32::GRAY,
+    crate::ui::spaced_rule(&mut panel);
+    panel.label(crate::ui::hint(
         "Parameters apply at once; ◆+ keys the parameter at the playhead (media time) — keys evaluate through the same keyframe system the timeline uses.",
-    );
+    ));
 
     // The compositing comp, if the clip has one: real layer editing —
     // visibility toggles, removal, and new text/solid layers (all through
     // the bridge's Composition methods, which own the EffectCraft project).
     let has_comp = app.compositions.get(&item).map(|c| c.has_comp()).unwrap_or(false);
     if has_comp {
-        panel.separator();
-        panel.label(egui::RichText::new("Compositing comp layers").strong());
+        crate::ui::section(&mut panel, "COMPOSITING COMP LAYERS");
         let layers: Vec<(String, bool)> = app.compositions.get(&item).map(|c| c.comp_layers()).unwrap_or_default();
         let mut toggles: Vec<usize> = Vec::new();
         let mut removes: Vec<usize> = Vec::new();
@@ -366,26 +363,28 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
                 app.status = "Solid layer added".to_string();
             }
         });
-        panel.colored_label(egui::Color32::GRAY, "New layers land on top (index 0). The M4 acceptance test covers this exact render path.");
+        panel.label(crate::ui::hint("New layers land on top (index 0). The M4 acceptance test covers this exact render path."));
     }
 }
 
 fn parameters(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) {
-    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("fx-params"));
-    area.add_space(12.0);
+    let mut area = crate::ui::panel(ui, rect, "fx-params");
+    area.painter().line_segment([rect.left_top(), rect.left_bottom()], egui::Stroke::new(1.0, crate::ui::LINE_DARK));
+    crate::ui::panel_header(&mut area, "Effect Controls");
+    crate::ui::inset(&mut area);
     let Some(effect) = app.selected_effect else {
-        area.label("Select an effect on the left to edit its parameters.");
+        area.label(crate::ui::hint("Select an effect on the left to edit its parameters."));
         return;
     };
     let Some(effect_id) = app.compositions.get(&item).and_then(|c| c.effects.get(effect)).map(|l| l.effect.clone()) else {
-        area.label("The effect is gone");
+        area.label(crate::ui::hint("The effect is gone."));
         return;
     };
     let Some(name) = effect_name(&effect_id) else {
-        area.label(format!("Unknown effect {effect_id}"));
+        area.label(crate::ui::hint(format!("Unknown effect {effect_id}")));
         return;
     };
-    area.heading(name);
+    area.label(egui::RichText::new(name).size(13.0).strong().color(crate::ui::ACCENT_HI));
     // Keyframes live in media time: the playhead's offset into the selected
     // clip (keys follow the clip when it moves — the renderer evaluates in
     // media time, so trims and splits never move keyframes).
@@ -394,10 +393,10 @@ fn parameters(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) 
         .and_then(|(clip, _)| app.sequence().and_then(|s| s.find_item(clip).map(|(_, i)| i.start)))
         .map(|start| (app.playhead - start).max(filmcraft_time::Tick::ZERO))
         .unwrap_or(app.playhead);
-    area.colored_label(egui::Color32::GRAY, format!("Keyframes land at media time {:.2}s (the playhead's offset into the clip)", key_time.seconds()));
+    area.label(crate::ui::hint(&format!("Keyframes land at media time {:.2}s (the playhead's offset into the clip)", key_time.seconds())));
     let Some(params) = effect_params(&effect_id) else { return };
     if params.is_empty() {
-        area.label("This effect has no parameters.");
+        area.label(crate::ui::hint("This effect has no parameters."));
         return;
     }
     egui::ScrollArea::vertical().show(&mut area, |ui| {

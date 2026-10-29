@@ -12,14 +12,17 @@ use crate::edit;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     let Some((clip, _)) = app.selected_clip() else {
-        let mut area = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("color"));
-        area.add_space(16.0);
-        area.heading("Color");
-        area.label("Select a clip in the Edit timeline to grade it.");
-        area.colored_label(
-            egui::Color32::GRAY,
+        ui.painter().rect_filled(body, 0.0, crate::ui::BG_APP);
+        let mut area = crate::ui::panel(ui, body, "color");
+        crate::ui::panel_header(&mut area, "Color");
+        crate::ui::inset(&mut area);
+        area.label(egui::RichText::new("No clip selected").size(14.0).strong().color(crate::ui::TEXT_HI));
+        area.add_space(4.0);
+        area.label(crate::ui::hint("Select a clip in the Edit timeline to grade it."));
+        crate::ui::big_gap(&mut area);
+        area.label(crate::ui::hint(
             "FilmCraft's own video effects (Lumetri Color, ASC CDL, curves…) apply to the clip here; EffectCraft's catalog is in the Effects workspace.",
-        );
+        ));
         return;
     };
 
@@ -34,13 +37,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
 }
 
 fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcraft_project::ClipId) {
-    ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
-    ui.painter().line_segment([rect.left_top(), rect.left_bottom()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
-    let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("color-stack"));
-    panel.add_space(10.0);
-    panel.heading("Color · effect stack");
-    panel.colored_label(egui::Color32::GRAY, "The editing engine's video effects on this clip — every change is an undoable engine command.");
-    panel.separator();
+    let mut panel = crate::ui::panel(ui, rect, "color-stack");
+    panel.painter().line_segment([rect.left_top(), rect.left_bottom()], egui::Stroke::new(1.0, crate::ui::LINE_DARK));
+    crate::ui::panel_header(&mut panel, "Color · effect stack");
+    crate::ui::inset(&mut panel);
+    panel.label(crate::ui::hint("The editing engine's video effects on this clip — every change is an undoable engine command."));
+    crate::ui::section(&mut panel, "EFFECTS");
 
     // Read the clip's effect stack (read-only pass), then apply mutations.
     let stack: Vec<(usize, String, bool)> = app
@@ -59,6 +61,9 @@ fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcra
 
     let mut to_toggle = None;
     let mut to_remove = None;
+    if stack.is_empty() {
+        panel.label(crate::ui::hint("No video effects on this clip yet — add one below."));
+    }
     for (index, name, enabled) in &stack {
         let selected = app.color_effect == Some(*index);
         panel.horizontal(|ui| {
@@ -91,8 +96,7 @@ fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcra
     }
 
     // Add effect: the engine's video-effect catalog.
-    panel.separator();
-    panel.label(egui::RichText::new("Add effect").strong());
+    crate::ui::section(&mut panel, "ADD EFFECT");
     {
         let mut pick = String::new();
         egui::ComboBox::from_id_salt("color-add").selected_text("Color Correction").show_ui(&mut panel, |ui| {
@@ -116,26 +120,27 @@ fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcra
         }
     }
 
-    panel.separator();
+    crate::ui::spaced_rule(&mut panel);
+    crate::ui::section(&mut panel, "PARAMETERS");
     parameters(app, &mut panel, clip);
 }
 
 /// The selected effect's parameter rows, written through `effects.setParam`.
 fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::ClipId) {
     let Some(effect_index) = app.color_effect else {
-        panel.colored_label(egui::Color32::GRAY, "Select an effect above to edit its parameters.");
+        panel.label(crate::ui::hint("Select an effect above to edit its parameters."));
         return;
     };
     // Read-only pass: the def's parameter list and the instance's values.
     let Some(instance) = app.sequence().and_then(|s| s.find_item(clip).map(|(_, i)| i.effects.get(effect_index).cloned())).flatten() else {
-        panel.label("The effect is gone.");
+        panel.label(crate::ui::hint("The effect is gone."));
         return;
     };
     let Some(def) = instance.def() else {
-        panel.label(format!("Unknown effect {}", instance.effect));
+        panel.label(crate::ui::hint(format!("Unknown effect {}", instance.effect)));
         return;
     };
-    panel.label(egui::RichText::new(def.name).strong());
+    panel.label(egui::RichText::new(def.name).size(12.0).strong().color(crate::ui::ACCENT_HI));
 
     let mut writes: Vec<(String, serde_json::Value)> = Vec::new();
     egui::ScrollArea::vertical().show(panel, |ui| {

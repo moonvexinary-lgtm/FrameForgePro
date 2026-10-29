@@ -80,115 +80,127 @@ fn confirm_overwrite(path: &str) -> bool {
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
-    ui.painter().rect_filled(body, 0.0, ui.visuals().panel_fill);
-    let margin = 40.0;
-    let inner = egui::Rect::from_min_max(body.min + egui::vec2(margin, margin), body.max - egui::vec2(margin, margin));
-    let mut area = ui.new_child(egui::UiBuilder::new().max_rect(inner).id_salt("export"));
-    area.heading("Export");
-    area.separator();
+    ui.painter().rect_filled(body, 0.0, crate::ui::BG_APP);
+    let mut area = crate::ui::panel(ui, body, "export");
+    crate::ui::panel_header(&mut area, "Export");
+    crate::ui::inset(&mut area);
+    crate::ui::title_line(&mut area, "Deliver", "The same CPU reference renderer the program monitor shows", "");
 
-    // Format: only what this build can really encode.
-    let selected_label = FORMATS.get(app.export.format_index).map(|(_, label, _)| *label).unwrap_or("H.264 (MP4)");
-    egui::ComboBox::from_id_salt("format").selected_text(selected_label).show_ui(&mut area, |ui| {
-        for (index, (_, label, _)) in FORMATS.iter().enumerate() {
-            ui.selectable_value(&mut app.export.format_index, index, *label);
-        }
-    });
-    area.label("Formats needing a hardware encoder (H.265, AV1) are not offered until one is registered.");
-
-    area.separator();
+    // Keep the controls in a readable column rather than stretching across a
+    // wide window.
+    let card_w = (body.width() - 48.0).clamp(320.0, 560.0);
     area.horizontal(|ui| {
-        ui.label("Video bitrate");
-        ui.add(egui::DragValue::new(&mut app.export.bitrate_kbps).range(500..=100_000).suffix(" kbps"));
-    });
-    area.checkbox(&mut app.export.include_audio, "Include audio");
+        ui.add_space(((ui.available_width() - card_w) / 2.0).max(0.0));
+        ui.vertical(|ui| {
+            ui.set_width(card_w);
 
-    area.separator();
-    area.horizontal(|ui| {
-        ui.label("Output file");
-        let mut text = app.export.path_text.clone();
-        let response = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 90.0));
-        if response.changed() {
-            app.export.path_text = text;
-        }
-        if ui.button("Browse…").clicked() {
-            let extension = FORMATS.get(app.export.format_index).map(|(_, _, e)| *e).unwrap_or("mp4");
-            if let Some(path) = rfd::FileDialog::new().add_filter("Output", &[extension]).set_file_name(format!("export.{extension}")).save_file() {
-                app.export.path_text = path.display().to_string();
-                app.export.path = Some(path);
-            }
-        }
-    });
-
-    area.separator();
-    let can_export = !app.export.path_text.is_empty() && app.export.running.is_none() && app.sequence_id().is_some();
-    if area.add_enabled(can_export, egui::Button::new("Export")).clicked() {
-        start(app);
-    }
-
-    // Poll the running export (draw first, then take the finished result).
-    let mut finished = None;
-    let mut finished_path = None;
-    let mut cancel_clicked = false;
-    if let Some(running) = &app.export.running {
-        let fraction = running.progress.fraction();
-        let rect = area.available_rect_before_wrap();
-        let bar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction, 14.0));
-        area.painter().rect_filled(bar, 3.0, ui.visuals().selection.bg_fill);
-        area.horizontal(|ui| {
-            ui.label(format!("Rendering… {:.0}%", fraction * 100.0));
-            if running.progress.cancel.load(Ordering::Relaxed) {
-                ui.label("Cancelling…");
-            } else if ui.button("Cancel").clicked() {
-                running.progress.cancel.store(true, Ordering::Relaxed);
-                cancel_clicked = true;
-            }
-        });
-        area.ctx().request_repaint();
-        finished_path = Some(running.path.clone());
-        finished = running.done.lock().unwrap_or_else(|e| e.into_inner()).take();
-    }
-    if cancel_clicked {
-        app.status = "Cancelling export…".to_string();
-    }
-    if let Some(result) = finished {
-        match result {
-            Ok(report) => {
-                app.export.result = Some(report);
-                app.export.error = None;
-                app.status = "Export finished".to_string();
-            }
-            Err(e) if e == CANCELLED_BY_USER => {
-                // FilmCraft writes straight to the target; a cancelled render
-                // leaves a truncated file, so remove it (overwrite was already
-                // confirmed before the render started).
-                if let Some(path) = &finished_path {
-                    let _ = std::fs::remove_file(path);
+            crate::ui::section(ui, "FORMAT");
+            let selected_label = FORMATS.get(app.export.format_index).map(|(_, label, _)| *label).unwrap_or("H.264 (MP4)");
+            egui::ComboBox::from_id_salt("format").selected_text(selected_label).show_ui(ui, |ui| {
+                for (index, (_, label, _)) in FORMATS.iter().enumerate() {
+                    ui.selectable_value(&mut app.export.format_index, index, *label);
                 }
-                app.export.result = None;
-                app.export.error = None;
-                app.status = "Export cancelled; the partial file was removed".to_string();
-            }
-            Err(e) => {
-                app.export.error = Some(e);
-                app.status = "Export failed".to_string();
-            }
-        }
-        app.export.running = None;
-    }
+            });
+            ui.label(crate::ui::hint("Formats needing a hardware encoder (H.265, AV1) are not offered until one is registered."));
 
-    if let Some(result) = &app.export.result {
-        area.separator();
-        area.label(egui::RichText::new("Done").strong());
-        area.label(result);
-    }
-    if let Some(error) = &app.export.error {
-        area.separator();
-        area.colored_label(egui::Color32::LIGHT_RED, error);
-    }
+            crate::ui::section(ui, "VIDEO");
+            ui.horizontal(|ui| {
+                ui.label(crate::ui::meta("Bitrate"));
+                ui.add(egui::DragValue::new(&mut app.export.bitrate_kbps).range(500..=100_000).suffix(" kbps"));
+            });
+            ui.checkbox(&mut app.export.include_audio, "Include audio");
 
-    area.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-        ui.colored_label(egui::Color32::GRAY, "The export runs the same CPU reference renderer the program monitor shows — one picture, no surprises.");
+            crate::ui::section(ui, "OUTPUT");
+            ui.horizontal(|ui| {
+                let mut text = app.export.path_text.clone();
+                let response = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 90.0));
+                if response.changed() {
+                    app.export.path_text = text;
+                }
+                if ui.button("Browse…").clicked() {
+                    let extension = FORMATS.get(app.export.format_index).map(|(_, _, e)| *e).unwrap_or("mp4");
+                    if let Some(path) = rfd::FileDialog::new().add_filter("Output", &[extension]).set_file_name(format!("export.{extension}")).save_file() {
+                        app.export.path_text = path.display().to_string();
+                        app.export.path = Some(path);
+                    }
+                }
+            });
+
+            crate::ui::big_gap(ui);
+            let can_export = !app.export.path_text.is_empty() && app.export.running.is_none() && app.sequence_id().is_some();
+            if can_export {
+                if crate::ui::accent_button(ui, "Start Export").clicked() {
+                    start(app);
+                }
+            } else {
+                ui.add_enabled(false, egui::Button::new(egui::RichText::new("Start Export").size(12.0)).min_size(egui::vec2(ui.available_width(), 24.0)));
+            }
+
+            // Poll the running export (draw first, then take the finished result).
+            let mut finished = None;
+            let mut finished_path = None;
+            let mut cancel_clicked = false;
+            if let Some(running) = &app.export.running {
+                crate::ui::section(ui, "RENDER");
+                let fraction = running.progress.fraction();
+                let (track, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
+                ui.painter().rect_filled(track, 2.0, crate::ui::BG_INSET);
+                let filled = egui::Rect::from_min_size(track.min, egui::vec2(track.width() * fraction, track.height()));
+                ui.painter().rect_filled(filled, 2.0, crate::ui::ACCENT);
+                ui.horizontal(|ui| {
+                    ui.label(crate::ui::hint(&format!("Rendering… {:.0}%", fraction * 100.0)));
+                    if running.progress.cancel.load(Ordering::Relaxed) {
+                        ui.label(crate::ui::hint("Cancelling…"));
+                    } else if ui.button("Cancel").clicked() {
+                        running.progress.cancel.store(true, Ordering::Relaxed);
+                        cancel_clicked = true;
+                    }
+                });
+                ui.ctx().request_repaint();
+                finished_path = Some(running.path.clone());
+                finished = running.done.lock().unwrap_or_else(|e| e.into_inner()).take();
+            }
+            if cancel_clicked {
+                app.status = "Cancelling export…".to_string();
+            }
+            if let Some(result) = finished {
+                match result {
+                    Ok(report) => {
+                        app.export.result = Some(report);
+                        app.export.error = None;
+                        app.status = "Export finished".to_string();
+                    }
+                    Err(e) if e == CANCELLED_BY_USER => {
+                        // FilmCraft writes straight to the target; a cancelled render
+                        // leaves a truncated file, so remove it (overwrite was already
+                        // confirmed before the render started).
+                        if let Some(path) = &finished_path {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        app.export.result = None;
+                        app.export.error = None;
+                        app.status = "Export cancelled; the partial file was removed".to_string();
+                    }
+                    Err(e) => {
+                        app.export.error = Some(e);
+                        app.status = "Export failed".to_string();
+                    }
+                }
+                app.export.running = None;
+            }
+
+            if let Some(result) = &app.export.result {
+                crate::ui::spaced_rule(ui);
+                ui.label(egui::RichText::new("Done").size(11.0).strong().color(crate::ui::ACCENT_HI));
+                ui.label(egui::RichText::new(result).size(10.5).color(crate::ui::TEXT_MID));
+            }
+            if let Some(error) = &app.export.error {
+                crate::ui::spaced_rule(ui);
+                ui.label(egui::RichText::new(error).size(10.5).color(crate::ui::DANGER));
+            }
+
+            crate::ui::footer_hint(ui, "The export runs the same CPU reference renderer the program monitor shows — one picture, no surprises.");
+        });
     });
 }
 
