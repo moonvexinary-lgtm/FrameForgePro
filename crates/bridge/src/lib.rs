@@ -33,6 +33,7 @@ pub mod catalog;
 pub mod convert;
 pub mod document;
 pub mod roto;
+pub mod roto_job;
 pub mod roto_worker;
 pub mod source;
 
@@ -45,6 +46,7 @@ pub use effectcraft_project::ParamUi as EffectParamUi;
 pub use convert::param_to_value;
 pub use document::{Composition, EffectLink, FFPROJ_SCHEMA, FrameForgeProject};
 pub use roto::{MaskCache, MaskError, MaskFrame, RotoCacheKey, RotoRef, XMEM_COMMIT, default_cache_root};
+pub use roto_job::{RotoJobError, RotoJobLimits, RotoJobOutcome, RotoJobReport, RotoJobSpec, run_job};
 pub use roto_worker::{
     ExportedFrames, FrameExportError, WORKER_PROTOCOL, WorkerCommand, WorkerDirection, WorkerError, WorkerEvent, WorkerInfo, XmemWorker, export_frames,
 };

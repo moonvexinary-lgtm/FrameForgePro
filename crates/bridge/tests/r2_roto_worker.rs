@@ -9,12 +9,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use filmcraft_media::Generator;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
-use frameforge_bridge::{ExportedFrames, WORKER_PROTOCOL, WorkerCommand, WorkerDirection, WorkerError, WorkerEvent, XmemWorker, export_frames};
+use frameforge_bridge::{
+    ExportedFrames, RotoJobError, RotoJobLimits, RotoJobOutcome, RotoJobSpec, WORKER_PROTOCOL, WorkerCommand, WorkerDirection, WorkerError, WorkerEvent,
+    XmemWorker, export_frames, run_job,
+};
 
 const R: FrameRate = FrameRate::FPS_24;
 
@@ -23,6 +28,27 @@ fn temp_root(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("temporary root");
     root
+}
+
+fn spawn_fixture(name: &str) -> XmemWorker {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join(name);
+    let script_text = script.to_str().expect("fixture path is UTF-8");
+    XmemWorker::spawn(Path::new("powershell"), &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_text]).expect("spawn the fixture worker")
+}
+
+fn spec(first_frame: i64, last_frame: i64) -> RotoJobSpec {
+    RotoJobSpec {
+        frames_dir: "frames".to_string(),
+        first_frame,
+        last_frame,
+        initial_mask: "mask.png".to_string(),
+        output_dir: "masks".to_string(),
+        width: 32,
+        height: 18,
+        model: "XMem.pth".to_string(),
+        model_sha256: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        direction: WorkerDirection::Forward,
+    }
 }
 
 #[test]
@@ -102,6 +128,88 @@ fn a_silent_worker_times_out_during_the_handshake() {
     assert!(matches!(error, WorkerError::Timeout(_)), "{error}");
     assert!(started.elapsed() < Duration::from_secs(20), "the handshake deadline is honoured");
     worker.kill().expect("kill the silent worker");
+}
+
+#[test]
+fn roto_job_drives_a_fake_worker_to_done() {
+    let mut worker = spawn_fixture("fake_xmem_worker.ps1");
+    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake");
+    let cancel = AtomicBool::new(false);
+    let mut seen: Vec<i64> = Vec::new();
+
+    let outcome = run_job(&mut worker, &spec(0, 2), &RotoJobLimits::default(), &cancel, |frame, total, _fps| {
+        assert_eq!(total, 3, "the worker reports the requested total");
+        seen.push(frame);
+    })
+    .expect("the fake worker finishes");
+    match outcome {
+        RotoJobOutcome::Done(report) => {
+            assert_eq!(report.frames, 3);
+            assert_eq!(report.progress_events, 3);
+            assert!(!report.killed, "a clean pass is not a kill");
+        }
+        other => panic!("expected done, got {other:?}"),
+    }
+    assert_eq!(seen, vec![0, 1, 2], "progress arrives in media order");
+}
+
+#[test]
+fn roto_job_refuses_a_bad_request_before_sending_anything() {
+    let mut worker = spawn_fixture("fake_xmem_worker.ps1");
+    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake");
+    let cancel = AtomicBool::new(false);
+
+    let inverted = run_job(&mut worker, &spec(5, 4), &RotoJobLimits::default(), &cancel, |_, _, _| {}).expect_err("an inverted range is not a job");
+    assert!(matches!(inverted, RotoJobError::Refused(_)), "{inverted}");
+
+    let tiny_limit = RotoJobLimits { max_frames: 2, ..RotoJobLimits::default() };
+    let too_many = run_job(&mut worker, &spec(0, 9), &tiny_limit, &cancel, |_, _, _| {}).expect_err("more than two frames is refused");
+    assert!(matches!(too_many, RotoJobError::Refused(_)), "{too_many}");
+
+    let mut bad_hash = spec(0, 1);
+    bad_hash.model_sha256 = "not-a-hash".to_string();
+    let refused = run_job(&mut worker, &bad_hash, &RotoJobLimits::default(), &cancel, |_, _, _| {}).expect_err("a bad model hash is refused");
+    assert!(matches!(refused, RotoJobError::Refused(_)), "{refused}");
+
+    // Nothing was sent, so the same worker still completes a valid job.
+    let outcome = run_job(&mut worker, &spec(0, 1), &RotoJobLimits::default(), &cancel, |_, _, _| {}).expect("the worker was left untouched");
+    assert!(matches!(outcome, RotoJobOutcome::Done(report) if report.frames == 2), "{outcome:?}");
+}
+
+#[test]
+fn roto_job_kills_a_stalled_worker_instead_of_waiting() {
+    let mut worker = spawn_fixture("stalling_xmem_worker.ps1");
+    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake");
+    let cancel = AtomicBool::new(false);
+    let limits = RotoJobLimits { stall: Duration::from_millis(500), overall: Duration::from_secs(30), ..RotoJobLimits::default() };
+
+    let started = Instant::now();
+    let error = run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_, _, _| {}).expect_err("silence after one event is a stall");
+    assert!(matches!(error, RotoJobError::Stalled(_)), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(10), "the stall deadline is honoured");
+}
+
+#[test]
+fn roto_job_cancel_kills_a_worker_that_never_acknowledges() {
+    let mut worker = spawn_fixture("stalling_xmem_worker.ps1");
+    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancel);
+    let setter = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        flag.store(true, Ordering::Relaxed);
+    });
+
+    let limits =
+        RotoJobLimits { stall: Duration::from_secs(30), overall: Duration::from_secs(30), cancel_ack: Duration::from_millis(300), ..RotoJobLimits::default() };
+    let started = Instant::now();
+    let outcome = run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_, _, _| {}).expect("a cancel is an outcome, not an error");
+    let _ = setter.join();
+    match outcome {
+        RotoJobOutcome::Cancelled(report) => assert!(report.killed, "a worker that ignores cancel is killed, and the report says so"),
+        other => panic!("expected a cancel, got {other:?}"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(10), "cancel does not wait for the stall deadline");
 }
 
 #[test]
