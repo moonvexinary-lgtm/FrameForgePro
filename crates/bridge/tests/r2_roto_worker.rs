@@ -173,7 +173,7 @@ fn roto_job_refuses_a_bad_request_before_sending_anything() {
 
     // Nothing was sent, so the same worker still completes a valid job.
     let outcome = run_job(&mut worker, &spec(0, 1), &RotoJobLimits::default(), &cancel, |_, _, _| {}).expect("the worker was left untouched");
-    assert!(matches!(outcome, RotoJobOutcome::Done(report) if report.frames == 2), "{outcome:?}");
+    assert!(matches!(outcome, RotoJobOutcome::Done(ref report) if report.frames == 2), "{outcome:?}");
 }
 
 #[test]
