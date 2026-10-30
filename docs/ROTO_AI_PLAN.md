@@ -8,7 +8,9 @@ R2 (run `40059782293`) speaks the JSON-lines worker protocol to a real child pro
 worker input PNGs; its fake worker test uses no PyTorch and no weights. The local probe (2026-10-27)
 measured real forward/backward inference, IoU, cancel and peak RSS on the target Ryzen 5 7530U;
 `roto-bench` itself still measures only the Rust frame-export path and reports XMem inference as
-"not measured". Nothing in the UI presents Roto AI as working.
+"not measured". The bridge's `run_job` runner (2026-10-30) validates a request, watches for stalls
+and applies cancel/kill deadlines against the worker protocol; nothing in the app calls it yet, and
+nothing in the UI presents Roto AI as working.
 
 ## Non-negotiables
 
@@ -206,11 +208,14 @@ weights are committed, and CI does not run them (no torch, no weights).
   (including model load) and 610.7 MB backward (after load).
 - **Cancel**: a 30-frame 480x270 job cancelled after the first progress event emitted `cancelled`
   1.05 s later and stopped after 2 masks.
-- **Still open**: app/UI wiring, a job runner that applies deadlines (the transport gained
-  `recv_timeout` / `handshake_timeout` / `kill` on 2026-10-28, run `40814011414`, so a hung worker is
-  observable and killable; nothing schedules it yet), resume from corrections, a memory ceiling, and
-  proof that worker masks are the bytes used by preview/export (the R1 seam exists but the app does
-  not spawn the worker). This is **not** an R3 pass.
+- **Runner (2026-10-28 → 30)**: the transport gained `recv_timeout` / `handshake_timeout` / `kill`
+  (run `40814011414`), and `crates/bridge/src/roto_job.rs` now holds `run_job` — request validation
+  before send, a stall watchdog, an overall budget, a 50 ms cancel poll, an event cap and a kill on
+  stall/deadline/unacknowledged cancel — with four runner tests (run `41144133581`).
+- **Still open**: app/UI wiring and a job queue (the runner exists but nothing in the app calls it),
+  a runtime-discovery/consent flow that starts a worker (R5), resume from corrections, a memory
+  ceiling, and proof that worker masks are the bytes used by preview/export (the R1 seam exists but
+  the app does not spawn the worker). This is **not** an R3 pass.
 
 The 2026-10-28 UI milestone (run `40794727835`) added a **Masking** workspace, but it
 drives FilmCraft's own engine mask objects (`masks.*`) and an engine mask tracker; it

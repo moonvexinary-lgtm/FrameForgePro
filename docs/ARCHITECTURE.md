@@ -720,17 +720,30 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
   and delivered over a channel, so `recv_timeout` and `handshake_timeout` return
   `WorkerError::Timeout` instead of blocking forever, and `kill()` makes the teardown explicit for a
   job runner (a deadline or ceiling). `Drop` still kills and joins both threads.
-- **Tests** (`crates/bridge/tests/r2_roto_worker.rs`, 5): a real PowerShell fake worker completes
+- **Job runner** (`crates/bridge/src/roto_job.rs`, added 2026-10-30, run `41144133581`): `run_job`
+  validates a `RotoJobSpec` *before* sending anything (inverted or negative range, more than
+  `max_frames`, zero or >100-megapixel working size, empty paths, empty model name, non-hex or
+  wrong-length model SHA-256), then drives `propagate` under a stall watchdog, an overall budget and
+  a cancel-acknowledgement wait. It polls the cancel flag every 50 ms, rejects a `total` that does not
+  match the request or a progress frame outside the range, caps events at 4 per frame + 64, and kills
+  the worker on a stall, a deadline or an unacknowledged cancel. A cancel that had to kill reports
+  `killed: true`, so a killed job is never presented as a clean pass.
+- **Tests** (`crates/bridge/tests/r2_roto_worker.rs`, 9): a real PowerShell fake worker completes
   ready → progress → done → cancel → shutdown over pipes; a quiet worker yields a `Timeout` inside
-  the deadline; a silent worker times out during the handshake and is killed; the exporter writes
-  scaled PNGs in media order; an empty range is rejected. The fake worker is not XMem and the tests
-  say so.
-- **Measured limits**: the transport has deadlines, but no app job runner yet applies them, and
-  `request_shutdown` still sends a request (teardown kills the child). No Python runtime or weights
-  ship in the app; `tools/` holds the local worker/probe (not part of the Rust build), and
-  initial-mask UI, job queue and UI wiring are still absent.
+  the deadline; a silent worker times out during the handshake and is killed; the job runner drives a
+  fake worker to `Done` with progress in media order; it refuses bad requests without disturbing the
+  worker (a valid job still runs afterwards); a stalling worker is reported as a stall and killed
+  inside the deadline; a worker that ignores `cancel` is killed and reported as `Cancelled { killed:
+  true }`; the exporter writes scaled PNGs in media order; an empty range is rejected. The fake
+  workers are not XMem and the tests say so.
+- **Measured limits**: the runner exists and is tested, but nothing yet starts a worker from the app
+  (no runtime discovery/consent flow, which is R5) and `request_shutdown` still sends a request
+  (teardown kills the child). No Python runtime or weights ship in the app; `tools/` holds the local
+  worker/probe (not part of the Rust build); initial-mask UI, job queue and UI wiring are still
+  absent.
 - **Size**: artifact `frameforge-pro-windows-dev` is **25,512,804 bytes** ZIP (R1 was 25,418,672;
-  M12 25,229,770); the deadline change is 25,842,162 bytes; no new external crate.
+  M12 25,229,770); the deadline change is 25,842,162 bytes and the job runner 25,840,962 bytes; no
+  new external crate.
 
 ## R3 — real XMem worker probe (local evidence, not CI; 2026-10-27)
 
@@ -756,9 +769,10 @@ clip, drives the worker over pipes and computes IoU.
   after it).
 - **Cancel**: a 30-frame 480x270 job cancelled after the first progress event
   emitted `cancelled` 1.05 s later and stopped after 2 written masks.
-- **Not met**: no app/UI wiring or job queue, no app runner that applies the
-  transport's deadlines (the worker itself now has `recv_timeout` / `handshake_timeout`
-  / `kill`, run `40814011414`), no resume/segmented correction runs, no memory ceiling enforcement,
+- **Not met**: no app/UI wiring, no runtime-discovery/consent flow to start a worker, and no job
+  queue (the transport has deadlines and the bridge now has the tested runner — `run_job`, run
+  `41144133581` — but nothing in the app calls it yet); no resume/segmented correction runs, no
+  memory ceiling enforcement,
   no proof that a worker mask reaches preview/export through the R1 cache, and no
   CI coverage (CI has no torch or weights). This is real inference evidence, not
   an R3 acceptance pass; R3 and R4 remain open. The tools-only commit `23d03da`
@@ -782,7 +796,7 @@ clip, drives the worker over pipes and computes IoU.
 | M11 | one chronological undo history: composition snapshots paired with project-neutral engine steps, gesture coalescing, limit-aligned redo, composition rollback on failure, seven history tests plus an App-level Ctrl+Z test | ✔ (CI-verified, run 40037973347) |
 | M12 | export safety and close guard: overwrite confirmation on the exact resolved path, real cancellation through `Progress.cancel` with partial-file cleanup, and a Save/Discard/Cancel guard on the window close request | ✔ (CI-verified, run 40045638522) |
 | R1 | cached roto masks: validated cache key + manifest/PNG reader, alpha in `ComposedSource`, schema 3, preview + H.264 export test and cache-invalidation test | ✔ (CI-verified, run 40056112214) |
-| R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests | ✔ (CI-verified, run 40059782293; XMem CPU benchmark still open) |
+| R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests; event channel with `recv_timeout`/`handshake_timeout`/`kill` and the tested `run_job` deadline/stall/cancel runner | ✔ (CI-verified, run 40059782293; deadlines run 40814011414; job runner run 41144133581; XMem CPU benchmark still open) |
 | R3 (partial) | Real XMem protocol worker and local probe: forward/backward IoU, cancel and peak RSS on the target Ryzen 5 7530U | 🟡 Local evidence only; app wiring, resume, timeout policy, memory ceiling and renderer mask equality remain open |
 | T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
 | T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |
