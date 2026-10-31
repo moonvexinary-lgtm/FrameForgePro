@@ -811,6 +811,39 @@ policy without any new dependency.
   for a shipped build, no memory ceiling, and no evidence yet that the masks a job writes are the
   bytes preview/export read. R5 is therefore **partial**, and nothing in the UI claims otherwise.
 
+## R4 — the in-app Roto AI panel (partial; run 41238338683)
+
+The Masking workspace hosts a real XMem panel (`apps/frameforge-pro/src/roto.rs`); **Help ▸ Roto AI
+Status** already switches there. It is a single-clip, single-pass slice: no brush, no corrections.
+
+- **Configuration**: interpreter, XMem checkout, weights, worker script and the expected SHA-256,
+  each with a browse button; when the interpreter field is empty the panel offers the first result of
+  `python_candidates_from_env` rather than guessing silently.
+- **Consent**: a check box plus an optional note. Nothing is read until it is ticked — *Verify
+  runtime* is `RotoRuntime::resolve`, which shows either `describe()` (commit, weights, consent note)
+  or the exact refusal (missing field, wrong commit, hash mismatch).
+- **The job**: needs a selected clip and an initial-mask PNG. The panel computes the clip's media
+  frame range with `frame_range` (the same arithmetic `export_frames` uses), then on a
+  `frameforge-roto-job` thread it exports the frames, spawns `python -u <script>`, handshakes with a
+  120 s deadline, and drives `run_job` under the default limits, reporting each progress event
+  (frames done, frame number, worker fps). **Cancel** sets the runner's flag; a worker that will not
+  acknowledge is killed, and the panel says so. The result names the frames, seconds and output
+  directory it actually produced.
+- **Cross-check**: after exporting, the thread compares `exported.first_frame/last_frame` with the
+  numbers it asked the worker for and fails the job if they differ, so a numbering drift can never be
+  reported as a pass.
+- **Never hangs**: a thread that stopped without writing a result (a panic) is reported as such, so
+  the panel cannot sit on "running" forever.
+- **Not met**: no brush or in-app initial-mask authoring (the user picks a PNG), no
+  corrections/resume runs, no memory ceiling, and masks are written as `frame_<index>.png` while the
+  R1 manifest writer is still missing — so a run does **not** yet feed the renderer's alpha, and the
+  panel says exactly that. Nothing is downloaded or bundled; an interpreter, a checkout and weights
+  are the user's.
+- **Tests**: the app tests cover the pure parts (request validation naming the missing field, consent
+  refusal/acceptance, frame-range arithmetic); the panel itself is not UI-automated.
+- **CI**: run `41238338683` — fmt, clippy `-D warnings`, check, **75 tests**, release build, binary
+  self-test including `roto-bench 4`; artifact `frameforge-pro-windows-dev` is 25,959,820 bytes.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -829,7 +862,8 @@ policy without any new dependency.
 | M12 | export safety and close guard: overwrite confirmation on the exact resolved path, real cancellation through `Progress.cancel` with partial-file cleanup, and a Save/Discard/Cancel guard on the window close request | ✔ (CI-verified, run 40045638522) |
 | R1 | cached roto masks: validated cache key + manifest/PNG reader, alpha in `ComposedSource`, schema 3, preview + H.264 export test and cache-invalidation test | ✔ (CI-verified, run 40056112214) |
 | R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests; event channel with `recv_timeout`/`handshake_timeout`/`kill` and the tested `run_job` deadline/stall/cancel runner | ✔ (CI-verified, run 40059782293; deadlines run 40814011414; job runner run 41144133581; XMem CPU benchmark still open) |
-| R3 (partial) | Real XMem protocol worker and local probe: forward/backward IoU, cancel and peak RSS on the target Ryzen 5 7530U | 🟡 Local evidence only; app wiring, resume, memory ceiling and renderer mask equality remain open (the bridge's timeout/stall/cancel policy exists: `run_job`) |
+| R3 (partial) | Real XMem protocol worker and local probe: forward/backward IoU, cancel and peak RSS on the target Ryzen 5 7530U | 🟡 Local evidence only; resume, memory ceiling and renderer mask equality remain open (the bridge's deadline/stall/cancel policy is `run_job`, and R4 now drives it from the app) |
+| R4 (partial) | In-app Roto AI panel: runtime fields, consent, verification, and one clip job through `export_frames` → `XmemWorker` → `run_job` with progress, cancel and honest status | 🟡 CI-verified, run 41238338683; no brush/initial-mask authoring, no corrections/resume, no memory ceiling, no cache feeding |
 | R5 (partial) | Consent gate and runtime/weights verification: explicit consent recorded before any read, pinned-commit checkout check without running git, streamed SHA-256 weights check, `python -u` worker command, interpreter candidates | 🟡 Bridge only (CI-verified, run 41161529133); no UI to collect paths/consent, no worker-script packaging, no memory ceiling |
 | T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
 | T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |

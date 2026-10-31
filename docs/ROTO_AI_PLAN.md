@@ -219,16 +219,18 @@ weights are committed, and CI does not run them (no torch, no weights).
   that the weights match the caller's SHA-256. `sha256.rs` is a local FIPS 180-4 implementation with
   published vectors, so no crate and no licence were added. `python_candidates` only looks for files;
   it never runs an interpreter. No UI collects these paths yet.
-- **Still open**: app/UI wiring and a job queue (the runner exists but nothing in the app calls it),
-  a UI for the consent/paths flow (R5's storage and packaging), resume from corrections, a memory
-  ceiling, and proof that worker masks are the bytes used by preview/export (the R1 seam exists but
-  the app does not spawn the worker). This is **not** an R3 pass.
+- **Still open**: a job queue (one job at a time runs today, from the Masking workspace panel), the
+  consent/paths UI storing its choices between sessions (paths are session state), resume from
+  corrections, a memory ceiling, and proof that worker masks are the bytes used by preview/export —
+  the run writes `frame_<index>.png` but the R1 manifest writer does not exist yet, so a job does not
+  reach the renderer's alpha. This is **not** an R3 pass.
 
-The 2026-10-28 UI milestone (run `40794727835`) added a **Masking** workspace, but it
-drives FilmCraft's own engine mask objects (`masks.*`) and an engine mask tracker; it
-does not start XMem, and its XMem panel says "not wired in this build". The bridge's
-runtime/consent verification (run `41161529133`) is likewise not reachable from the UI
-yet, so nothing in the app claims Roto AI works.
+The 2026-10-28 UI milestone (run `40794727835`) added a **Masking** workspace over
+FilmCraft's own engine mask objects (`masks.*`) and its mask tracker. The bridge's
+runtime/consent verification (run `41161529133`) and job runner are now reachable from
+that workspace: the Roto AI panel (run `41238338683`) verifies a user-supplied runtime
+and runs one real propagation job, reporting only what the worker sent. What is still
+missing is listed under R4 above, and the panel states it in place.
 
 
 
@@ -238,7 +240,7 @@ yet, so nothing in the app claims Roto AI works.
 | **R1** | Mask cache + alpha application in `ComposedSource`, synthetic mask | ✔ Implemented; 5 tests in `r1_roto.rs` (run `40056112214`): known alpha matte changes preview **and** H.264 export pixels; every key input invalidates the cache; a missing in-range mask is an error |
 | **R2** | Worker protocol + frame exporter, CPU benchmark command | 🟡 Protocol round-trip against a real fake child and PNG exporter tested (3 tests, run `40059782293`); `roto-bench` runs in CI. **Partially met:** the local probe measured the target-laptop CPU XMem benchmark (480x270, 0.818/1.252 fps wall, 710.2/610.7 MB peak RSS, 2026-10-27); it is not a CI gate and `roto-bench` still reports inference as not measured |
 | **R3** | Real XMem CPU end-to-end on a short synthetic clip | 🟡 Local probe: moving-rectangle IoU forward/backward, cancellation and peak RSS measured with the real model (see above). **Not met:** resume, memory ceiling, final-export mask equality, app integration and a repeatable CI/manual-dispatch job |
-| **R4** | Roto AI workspace (brush, initial mask, propagate, corrections, cache UI) | UI interactions bound to real worker state; no fake values; screenshots recorded |
+| **R4** (partial) | Roto AI workspace (brush, initial mask, propagate, corrections, cache UI) | **Panel part met (run `41238338683`):** the Masking workspace hosts the XMem panel — runtime fields, consent, verification, one clip job through `export_frames` → `XmemWorker` → `run_job`, per-event progress, cancel and an honest report; the app tests cover the pure helpers. **Still open:** brush/in-app initial-mask authoring (the user picks a PNG), corrections/resume, a cache/manifest writer so a run feeds the renderer, no fake values anywhere (nothing is claimed that was not measured), screenshots not recorded |
 | **R5** (partial) | Weights consent download + optional pack | **Bridge part met (run `41161529133`):** `RotoRuntime::resolve` requires recorded consent before any read, verifies the pinned checkout commit without a git process, verifies the weights SHA-256 (local FIPS 180-4 implementation, `sha256.rs`), and `python_candidates` only looks for files. **Still open:** no UI collects the paths or the consent, no pack/packaging of the worker script, no in-app deletion, no download UI (there is deliberately no downloader at all) |
 | **R6** | Occlusion / disappearance / reappearance corpus, drift review, edge refinement | Documented results on the corpus, including failures |
 
