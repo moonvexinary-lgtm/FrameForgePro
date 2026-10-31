@@ -9,8 +9,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use filmcraft_media::Generator;
@@ -18,7 +18,7 @@ use filmcraft_media::generators::GeneratorSource;
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 use frameforge_bridge::{
     ExportedFrames, RotoJobError, RotoJobLimits, RotoJobOutcome, RotoJobSpec, WORKER_PROTOCOL, WorkerCommand, WorkerDirection, WorkerError, WorkerEvent,
-    XmemWorker, export_frames, run_job,
+    WorkerInfo, XmemWorker, export_frames, run_job,
 };
 
 const R: FrameRate = FrameRate::FPS_24;
@@ -30,10 +30,33 @@ fn temp_root(name: &str) -> PathBuf {
     root
 }
 
+/// Handshake budget for the fixtures. A PowerShell start is normally under a
+/// second, but these tests run in parallel on a small CI runner, so the bound
+/// is generous: it only bounds failure, it is not an expected wait.
+const READY_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Serializes fixture starts. Nine parallel PowerShell starts starved each
+/// other on the CI runner (one handshake missed a 20 s deadline), so at most
+/// one interpreter starts at a time; the tests themselves still run in
+/// parallel once their worker is ready.
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
 fn spawn_fixture(name: &str) -> XmemWorker {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join(name);
     let script_text = script.to_str().expect("fixture path is UTF-8");
     XmemWorker::spawn(Path::new("powershell"), &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_text]).expect("spawn the fixture worker")
+}
+
+/// Spawn a fixture and complete its `hello`/`ready` handshake while holding the
+/// spawn lock, so a slow start is never mistaken for a protocol timeout.
+fn spawn_ready(name: &str) -> (XmemWorker, WorkerInfo) {
+    let guard = SPAWN_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut worker = spawn_fixture(name);
+    let info = worker.handshake_timeout(READY_DEADLINE).expect("ready handshake");
+    assert_eq!(info.protocol, WORKER_PROTOCOL, "the fixture speaks this build's protocol");
+    assert!(!info.backend.is_empty(), "a ready worker names its backend");
+    drop(guard);
+    (worker, info)
 }
 
 fn spec(first_frame: i64, last_frame: i64) -> RotoJobSpec {
@@ -53,12 +76,7 @@ fn spec(first_frame: i64, last_frame: i64) -> RotoJobSpec {
 
 #[test]
 fn fake_worker_speaks_the_json_lines_protocol() {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("fake_xmem_worker.ps1");
-    let script_text = script.to_str().expect("fixture path is UTF-8");
-    let mut worker =
-        XmemWorker::spawn(Path::new("powershell"), &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_text]).expect("spawn fake worker");
-
-    let ready = worker.handshake().expect("ready handshake");
+    let (mut worker, ready) = spawn_ready("fake_xmem_worker.ps1");
     assert_eq!(ready.protocol, WORKER_PROTOCOL);
     assert_eq!(ready.backend, "fake-cpu");
 
@@ -103,11 +121,7 @@ fn fake_worker_speaks_the_json_lines_protocol() {
 
 #[test]
 fn a_quiet_worker_reports_a_timeout_instead_of_blocking() {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("fake_xmem_worker.ps1");
-    let script_text = script.to_str().expect("fixture path is UTF-8");
-    let mut worker =
-        XmemWorker::spawn(Path::new("powershell"), &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_text]).expect("spawn fake worker");
-    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake within the deadline");
+    let (mut worker, _) = spawn_ready("fake_xmem_worker.ps1");
 
     let started = Instant::now();
     let error = worker.recv_timeout(Duration::from_millis(250)).expect_err("a quiet worker has no event to give");
@@ -118,13 +132,13 @@ fn a_quiet_worker_reports_a_timeout_instead_of_blocking() {
 
 #[test]
 fn a_silent_worker_times_out_during_the_handshake() {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("silent_xmem_worker.ps1");
-    let script_text = script.to_str().expect("fixture path is UTF-8");
-    let mut worker =
-        XmemWorker::spawn(Path::new("powershell"), &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_text]).expect("spawn silent worker");
-
+    // The silent fixture is spawned under the same lock (its start is the only
+    // costly part); the handshake then waits on the deliberately short deadline.
+    let guard = SPAWN_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut worker = spawn_fixture("silent_xmem_worker.ps1");
     let started = Instant::now();
     let error = worker.handshake_timeout(Duration::from_millis(400)).expect_err("silence is a timeout, not a ready");
+    drop(guard);
     assert!(matches!(error, WorkerError::Timeout(_)), "{error}");
     assert!(started.elapsed() < Duration::from_secs(20), "the handshake deadline is honoured");
     worker.kill().expect("kill the silent worker");
@@ -132,8 +146,7 @@ fn a_silent_worker_times_out_during_the_handshake() {
 
 #[test]
 fn roto_job_drives_a_fake_worker_to_done() {
-    let mut worker = spawn_fixture("fake_xmem_worker.ps1");
-    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake");
+    let (mut worker, _) = spawn_ready("fake_xmem_worker.ps1");
     let cancel = AtomicBool::new(false);
     let mut seen: Vec<i64> = Vec::new();
 
@@ -155,8 +168,7 @@ fn roto_job_drives_a_fake_worker_to_done() {
 
 #[test]
 fn roto_job_refuses_a_bad_request_before_sending_anything() {
-    let mut worker = spawn_fixture("fake_xmem_worker.ps1");
-    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake");
+    let (mut worker, _) = spawn_ready("fake_xmem_worker.ps1");
     let cancel = AtomicBool::new(false);
 
     let inverted = run_job(&mut worker, &spec(5, 4), &RotoJobLimits::default(), &cancel, |_, _, _| {}).expect_err("an inverted range is not a job");
@@ -178,8 +190,7 @@ fn roto_job_refuses_a_bad_request_before_sending_anything() {
 
 #[test]
 fn roto_job_kills_a_stalled_worker_instead_of_waiting() {
-    let mut worker = spawn_fixture("stalling_xmem_worker.ps1");
-    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake");
+    let (mut worker, _) = spawn_ready("stalling_xmem_worker.ps1");
     let cancel = AtomicBool::new(false);
     let limits = RotoJobLimits { stall: Duration::from_millis(500), overall: Duration::from_secs(30), ..RotoJobLimits::default() };
 
@@ -191,8 +202,7 @@ fn roto_job_kills_a_stalled_worker_instead_of_waiting() {
 
 #[test]
 fn roto_job_cancel_kills_a_worker_that_never_acknowledges() {
-    let mut worker = spawn_fixture("stalling_xmem_worker.ps1");
-    worker.handshake_timeout(Duration::from_secs(20)).expect("ready handshake");
+    let (mut worker, _) = spawn_ready("stalling_xmem_worker.ps1");
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&cancel);
     let setter = std::thread::spawn(move || {
