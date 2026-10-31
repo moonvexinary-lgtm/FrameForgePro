@@ -34,7 +34,9 @@ pub mod convert;
 pub mod document;
 pub mod roto;
 pub mod roto_job;
+pub mod roto_runtime;
 pub mod roto_worker;
+pub mod sha256;
 pub mod source;
 
 pub use catalog::{CatalogEntry, CatalogReport, ParamInfo, catalog, catalog_report, effect_name, effect_params, name_collisions};
@@ -47,9 +49,11 @@ pub use convert::param_to_value;
 pub use document::{Composition, EffectLink, FFPROJ_SCHEMA, FrameForgeProject};
 pub use roto::{MaskCache, MaskError, MaskFrame, RotoCacheKey, RotoRef, XMEM_COMMIT, default_cache_root};
 pub use roto_job::{RotoJobError, RotoJobLimits, RotoJobOutcome, RotoJobReport, RotoJobSpec, run_job};
+pub use roto_runtime::{RotoConsent, RotoRuntime, RotoRuntimeError, RotoRuntimeRequest, python_candidates, python_candidates_from_env};
 pub use roto_worker::{
     ExportedFrames, FrameExportError, WORKER_PROTOCOL, WorkerCommand, WorkerDirection, WorkerError, WorkerEvent, WorkerInfo, XmemWorker, export_frames,
 };
+pub use sha256::{Sha256, file_sha256, hex};
 pub use source::{ComposedSource, ProjectSources};
 
 use thiserror::Error;
