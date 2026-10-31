@@ -784,6 +784,33 @@ clip, drives the worker over pipes and computes IoU.
   ran CI green (run `40517500476`, 54 tests, 25,564,165-byte artifact), confirming
   the Rust tree was unchanged.
 
+## R5 — consent gate and runtime/weights verification (partial; bridge, run 41161529133)
+
+R5 says the app must never silently download a runtime or weights. Two bridge modules now hold that
+policy without any new dependency.
+
+- **`crates/bridge/src/roto_runtime.rs`**: `RotoRuntime::resolve` checks, in order, that
+  `RotoConsent::accepted` is true (nothing is read before this — the test passes non-existent paths
+  and still gets `NotConsented`), that the interpreter, worker script and weights exist, that the
+  checkout is at the pinned commit `f3b841d…`, and that the weights SHA-256 equals the caller's
+  expectation. The commit is read **without running git**: loose ref, `packed-refs`, `gitdir:` file
+  and detached HEAD are all handled, and the checkout must contain `model/`. `python_candidates` looks
+  for `FRAMEFORGE_PYTHON` first, then `python.exe`/`py.exe`/`python3.exe` on `PATH` — it looks for
+  files, it never runs an interpreter to ask its version. `RotoRuntime::worker_command` returns
+  `python -u <script>` (unbuffered, so progress arrives during the job) and `describe()` renders a
+  status line naming the commit, the weights and the consent note.
+- **`crates/bridge/src/sha256.rs`**: a self-contained FIPS 180-4 SHA-256 (streaming, 64 KiB file
+  reads) with the published test vectors, so verifying weights added **no crate and no licence**.
+  It is a content check, not authentication, and the module says so.
+- **Tests**: `crates/bridge/tests/r5_runtime.rs` (9) covers a verified resolve and its description,
+  the three ref layouts reading the same commit, consent-before-any-read, a weights hash mismatch
+  (reporting both hashes), a checkout at another commit (both ids), a directory without `model/`,
+  a malformed expected hash, the consent note reaching the status line, and the interpreter candidate
+  order. `sha256.rs` carries three unit tests (four FIPS vectors, split updates, a file digest).
+- **Still open**: no UI to collect the paths or the consent (R4), no packaging of `tools/xmem_worker.py`
+  for a shipped build, no memory ceiling, and no evidence yet that the masks a job writes are the
+  bytes preview/export read. R5 is therefore **partial**, and nothing in the UI claims otherwise.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -802,7 +829,8 @@ clip, drives the worker over pipes and computes IoU.
 | M12 | export safety and close guard: overwrite confirmation on the exact resolved path, real cancellation through `Progress.cancel` with partial-file cleanup, and a Save/Discard/Cancel guard on the window close request | ✔ (CI-verified, run 40045638522) |
 | R1 | cached roto masks: validated cache key + manifest/PNG reader, alpha in `ComposedSource`, schema 3, preview + H.264 export test and cache-invalidation test | ✔ (CI-verified, run 40056112214) |
 | R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests; event channel with `recv_timeout`/`handshake_timeout`/`kill` and the tested `run_job` deadline/stall/cancel runner | ✔ (CI-verified, run 40059782293; deadlines run 40814011414; job runner run 41144133581; XMem CPU benchmark still open) |
-| R3 (partial) | Real XMem protocol worker and local probe: forward/backward IoU, cancel and peak RSS on the target Ryzen 5 7530U | 🟡 Local evidence only; app wiring, resume, timeout policy, memory ceiling and renderer mask equality remain open |
+| R3 (partial) | Real XMem protocol worker and local probe: forward/backward IoU, cancel and peak RSS on the target Ryzen 5 7530U | 🟡 Local evidence only; app wiring, resume, memory ceiling and renderer mask equality remain open (the bridge's timeout/stall/cancel policy exists: `run_job`) |
+| R5 (partial) | Consent gate and runtime/weights verification: explicit consent recorded before any read, pinned-commit checkout check without running git, streamed SHA-256 weights check, `python -u` worker command, interpreter candidates | 🟡 Bridge only (CI-verified, run 41161529133); no UI to collect paths/consent, no worker-script packaging, no memory ceiling |
 | T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
 | T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |
 | T3 | snapping: a toolbar Snap toggle on `sequence.snap`; moves snap their start or end, trims snap the edge, to zero / the playhead / every other clip edge within 8 screen pixels; pure-function tests | ✔ (CI-verified, run 40133164791) |

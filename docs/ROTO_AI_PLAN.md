@@ -212,15 +212,23 @@ weights are committed, and CI does not run them (no torch, no weights).
   (run `40814011414`), and `crates/bridge/src/roto_job.rs` now holds `run_job` — request validation
   before send, a stall watchdog, an overall budget, a 50 ms cancel poll, an event cap and a kill on
   stall/deadline/unacknowledged cancel — with four runner tests (run `41144133581`).
+- **Consent and verification (R5, bridge, run `41161529133`)**: `roto_runtime::RotoRuntime::resolve`
+  refuses to read anything until `RotoConsent::accepted` is true, then checks the interpreter, worker
+  script and weights exist, that the checkout is the pinned commit (read from loose refs,
+  `packed-refs`, a `gitdir:` file or a detached HEAD — no `git` process), that `model/` is present, and
+  that the weights match the caller's SHA-256. `sha256.rs` is a local FIPS 180-4 implementation with
+  published vectors, so no crate and no licence were added. `python_candidates` only looks for files;
+  it never runs an interpreter. No UI collects these paths yet.
 - **Still open**: app/UI wiring and a job queue (the runner exists but nothing in the app calls it),
-  a runtime-discovery/consent flow that starts a worker (R5), resume from corrections, a memory
+  a UI for the consent/paths flow (R5's storage and packaging), resume from corrections, a memory
   ceiling, and proof that worker masks are the bytes used by preview/export (the R1 seam exists but
   the app does not spawn the worker). This is **not** an R3 pass.
 
 The 2026-10-28 UI milestone (run `40794727835`) added a **Masking** workspace, but it
 drives FilmCraft's own engine mask objects (`masks.*`) and an engine mask tracker; it
-does not start XMem, and its XMem panel says "not wired in this build". R3-R6 status is
-unchanged by the UI work.
+does not start XMem, and its XMem panel says "not wired in this build". The bridge's
+runtime/consent verification (run `41161529133`) is likewise not reachable from the UI
+yet, so nothing in the app claims Roto AI works.
 
 
 
@@ -231,7 +239,7 @@ unchanged by the UI work.
 | **R2** | Worker protocol + frame exporter, CPU benchmark command | 🟡 Protocol round-trip against a real fake child and PNG exporter tested (3 tests, run `40059782293`); `roto-bench` runs in CI. **Partially met:** the local probe measured the target-laptop CPU XMem benchmark (480x270, 0.818/1.252 fps wall, 710.2/610.7 MB peak RSS, 2026-10-27); it is not a CI gate and `roto-bench` still reports inference as not measured |
 | **R3** | Real XMem CPU end-to-end on a short synthetic clip | 🟡 Local probe: moving-rectangle IoU forward/backward, cancellation and peak RSS measured with the real model (see above). **Not met:** resume, memory ceiling, final-export mask equality, app integration and a repeatable CI/manual-dispatch job |
 | **R4** | Roto AI workspace (brush, initial mask, propagate, corrections, cache UI) | UI interactions bound to real worker state; no fake values; screenshots recorded |
-| **R5** | Weights consent download + optional pack | Download shows size/source/licence; checksum verified; deletion works; core app still runs without it |
+| **R5** (partial) | Weights consent download + optional pack | **Bridge part met (run `41161529133`):** `RotoRuntime::resolve` requires recorded consent before any read, verifies the pinned checkout commit without a git process, verifies the weights SHA-256 (local FIPS 180-4 implementation, `sha256.rs`), and `python_candidates` only looks for files. **Still open:** no UI collects the paths or the consent, no pack/packaging of the worker script, no in-app deletion, no download UI (there is deliberately no downloader at all) |
 | **R6** | Occlusion / disappearance / reappearance corpus, drift review, edge refinement | Documented results on the corpus, including failures |
 
 CI policy: protocol/cache/alpha tests run on every push (no PyTorch). The real XMem probe is local
