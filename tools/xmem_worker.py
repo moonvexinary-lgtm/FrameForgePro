@@ -47,6 +47,56 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def resident_mb() -> float | None:
+    """This process's resident set in MiB, or None when the platform will not say.
+
+    The editor's memory ceiling is enforced on this number, so it is reported
+    with every progress event. Nothing is guessed: an unsupported platform
+    reports None and the runner then says the ceiling could not be checked.
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(counters)
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            get_current = kernel32.GetCurrentProcess
+            get_current.restype = wintypes.HANDLE
+            psapi = ctypes.WinDLL("psapi", use_last_error=True)
+            ok = psapi.GetProcessMemoryInfo(
+                get_current(),
+                ctypes.byref(counters),
+                ctypes.sizeof(counters),
+            )
+            if ok:
+                return counters.WorkingSetSize / (1024 * 1024)
+            return None
+        status = Path("/proc/self/status")
+        if status.exists():
+            for line in status.read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024  # kB -> MiB
+        return None
+    except Exception:  # the ceiling is best-effort; a probe must never kill a job
+        return None
+
+
 def stdin_available() -> bool:
     """True when at least one byte can be read without blocking."""
     if os.name == "nt":
@@ -272,6 +322,7 @@ def propagate(message: dict, source: str) -> None:
                     "total": total,
                     "elapsed": round(elapsed, 4),
                     "fps": round(written / elapsed, 4) if elapsed > 0 else 0.0,
+                    "rss_mb": resident_mb(),
                 }
             )
 

@@ -54,7 +54,7 @@ impl RotoJobSpec {
 /// The deadlines one job runs under. Defaults are the R3 target-laptop numbers
 /// (a slow CPU forward pass on 480x270 took ~4.4 s of inference) with room to
 /// spare; a caller may tighten them for a smaller clip.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RotoJobLimits {
     /// Longest silence between events before the job is a stall.
     pub stall: Duration,
@@ -64,11 +64,24 @@ pub struct RotoJobLimits {
     pub cancel_ack: Duration,
     /// Largest frame count the runner will ask a worker to propagate.
     pub max_frames: i64,
+    /// The worker's resident-set ceiling in MiB, enforced on what the worker
+    /// reports in its `progress` events. A run that exceeds it is killed. A
+    /// worker that reports nothing cannot be enforced, and the runner says so in
+    /// its refusal rather than pretending the ceiling held.
+    pub memory_ceiling_mb: Option<f64>,
 }
 
 impl Default for RotoJobLimits {
     fn default() -> Self {
-        Self { stall: Duration::from_secs(120), overall: Duration::from_secs(3_600), cancel_ack: Duration::from_secs(5), max_frames: 20_000 }
+        Self {
+            stall: Duration::from_secs(120),
+            overall: Duration::from_secs(3_600),
+            cancel_ack: Duration::from_secs(5),
+            max_frames: 20_000,
+            // The measured target-laptop peak was ~710 MB for a 480x270 pass;
+            // 4 GiB leaves room for a larger working size on a slower machine.
+            memory_ceiling_mb: Some(4_096.0),
+        }
     }
 }
 
@@ -99,6 +112,8 @@ pub enum RotoJobError {
     Stalled(String),
     #[error("roto job exceeded its overall deadline: {0}")]
     Deadline(String),
+    #[error("roto job exceeded its memory ceiling: the worker reported {reported_mb:.0} MB against a {limit_mb:.0} MB ceiling, so it was killed")]
+    MemoryCeiling { limit_mb: f64, reported_mb: f64 },
 }
 
 /// Check the request and the limits before a byte is sent. Every refusal names
@@ -130,19 +145,26 @@ fn validate(spec: &RotoJobSpec, limits: &RotoJobLimits) -> Result<i64, RotoJobEr
     if limits.stall.is_zero() || limits.overall.is_zero() {
         return Err(RotoJobError::Refused("stall and overall deadlines must be greater than zero".to_string()));
     }
+    if let Some(ceiling) = limits.memory_ceiling_mb
+        && (!ceiling.is_finite() || ceiling <= 0.0)
+    {
+        return Err(RotoJobError::Refused(format!("the memory ceiling {ceiling} MB is not a positive size")));
+    }
     Ok(count)
 }
 
-/// Drive one `propagate` pass to completion, a stall, a deadline or a cancel.
+/// Drive one `propagate` pass to completion, a stall, a deadline, a ceiling or a
+/// cancel.
 ///
-/// `on_progress` is called for every `progress` event with `(frame, total, fps)`
-/// exactly as the worker reported them; the runner never invents a rate.
+/// `on_progress` is called for every `progress` event with
+/// `(frame, total, fps, rss_mb)` exactly as the worker reported them; the runner
+/// never invents a rate or a memory figure.
 pub fn run_job(
     worker: &mut XmemWorker,
     spec: &RotoJobSpec,
     limits: &RotoJobLimits,
     cancel: &AtomicBool,
-    mut on_progress: impl FnMut(i64, i64, f64),
+    mut on_progress: impl FnMut(i64, i64, f64, Option<f64>),
 ) -> Result<RotoJobOutcome, RotoJobError> {
     let count = validate(spec, limits)?;
     let start = Instant::now();
@@ -198,7 +220,14 @@ pub fn run_job(
                     return Err(RotoJobError::Worker(WorkerError::Protocol(format!("more than {event_cap} events for {count} frames"))));
                 }
                 match event {
-                    WorkerEvent::Progress { frame, total, fps, .. } => {
+                    WorkerEvent::Progress { frame, total, fps, rss_mb } => {
+                        if let Some(ceiling) = limits.memory_ceiling_mb
+                            && let Some(reported) = rss_mb
+                            && reported > ceiling
+                        {
+                            kill_quietly(worker);
+                            return Err(RotoJobError::MemoryCeiling { limit_mb: ceiling, reported_mb: reported });
+                        }
                         if total != count {
                             kill_quietly(worker);
                             return Err(RotoJobError::Worker(WorkerError::Protocol(format!(
@@ -213,7 +242,7 @@ pub fn run_job(
                             ))));
                         }
                         progress_events += 1;
-                        on_progress(frame, total, fps);
+                        on_progress(frame, total, fps, rss_mb);
                     }
                     WorkerEvent::Done { frames, elapsed } => {
                         return Ok(RotoJobOutcome::Done(RotoJobReport { frames, elapsed, progress_events, killed: false }));

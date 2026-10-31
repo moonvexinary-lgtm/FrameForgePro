@@ -64,10 +64,30 @@ pub enum WorkerCommand {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum WorkerEvent {
-    Ready { protocol: u32, backend: String, torch: String, xmem: String },
-    Progress { frame: i64, total: i64, elapsed: f64, fps: f64 },
-    Done { frames: i64, elapsed: f64 },
-    Error { message: String },
+    Ready {
+        protocol: u32,
+        backend: String,
+        torch: String,
+        xmem: String,
+    },
+    Progress {
+        frame: i64,
+        total: i64,
+        elapsed: f64,
+        fps: f64,
+        /// The worker's resident set after writing this mask, in MiB, when it
+        /// reports one. `tools/xmem_worker.py` does; a worker that stays silent
+        /// simply cannot be ceiling-enforced (the runner says so in its log).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rss_mb: Option<f64>,
+    },
+    Done {
+        frames: i64,
+        elapsed: f64,
+    },
+    Error {
+        message: String,
+    },
     Cancelled,
 }
 

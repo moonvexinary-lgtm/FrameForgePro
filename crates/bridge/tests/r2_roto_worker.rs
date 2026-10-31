@@ -150,7 +150,7 @@ fn roto_job_drives_a_fake_worker_to_done() {
     let cancel = AtomicBool::new(false);
     let mut seen: Vec<i64> = Vec::new();
 
-    let outcome = run_job(&mut worker, &spec(0, 2), &RotoJobLimits::default(), &cancel, |frame, total, _fps| {
+    let outcome = run_job(&mut worker, &spec(0, 2), &RotoJobLimits::default(), &cancel, |frame, total, _fps, _rss| {
         assert_eq!(total, 3, "the worker reports the requested total");
         seen.push(frame);
     })
@@ -171,20 +171,20 @@ fn roto_job_refuses_a_bad_request_before_sending_anything() {
     let (mut worker, _) = spawn_ready("fake_xmem_worker.ps1");
     let cancel = AtomicBool::new(false);
 
-    let inverted = run_job(&mut worker, &spec(5, 4), &RotoJobLimits::default(), &cancel, |_, _, _| {}).expect_err("an inverted range is not a job");
+    let inverted = run_job(&mut worker, &spec(5, 4), &RotoJobLimits::default(), &cancel, |_, _, _, _| {}).expect_err("an inverted range is not a job");
     assert!(matches!(inverted, RotoJobError::Refused(_)), "{inverted}");
 
     let tiny_limit = RotoJobLimits { max_frames: 2, ..RotoJobLimits::default() };
-    let too_many = run_job(&mut worker, &spec(0, 9), &tiny_limit, &cancel, |_, _, _| {}).expect_err("more than two frames is refused");
+    let too_many = run_job(&mut worker, &spec(0, 9), &tiny_limit, &cancel, |_, _, _, _| {}).expect_err("more than two frames is refused");
     assert!(matches!(too_many, RotoJobError::Refused(_)), "{too_many}");
 
     let mut bad_hash = spec(0, 1);
     bad_hash.model_sha256 = "not-a-hash".to_string();
-    let refused = run_job(&mut worker, &bad_hash, &RotoJobLimits::default(), &cancel, |_, _, _| {}).expect_err("a bad model hash is refused");
+    let refused = run_job(&mut worker, &bad_hash, &RotoJobLimits::default(), &cancel, |_, _, _, _| {}).expect_err("a bad model hash is refused");
     assert!(matches!(refused, RotoJobError::Refused(_)), "{refused}");
 
     // Nothing was sent, so the same worker still completes a valid job.
-    let outcome = run_job(&mut worker, &spec(0, 1), &RotoJobLimits::default(), &cancel, |_, _, _| {}).expect("the worker was left untouched");
+    let outcome = run_job(&mut worker, &spec(0, 1), &RotoJobLimits::default(), &cancel, |_, _, _, _| {}).expect("the worker was left untouched");
     assert!(matches!(outcome, RotoJobOutcome::Done(ref report) if report.frames == 2), "{outcome:?}");
 }
 
@@ -195,7 +195,7 @@ fn roto_job_kills_a_stalled_worker_instead_of_waiting() {
     let limits = RotoJobLimits { stall: Duration::from_millis(500), overall: Duration::from_secs(30), ..RotoJobLimits::default() };
 
     let started = Instant::now();
-    let error = run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_, _, _| {}).expect_err("silence after one event is a stall");
+    let error = run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_, _, _, _| {}).expect_err("silence after one event is a stall");
     assert!(matches!(error, RotoJobError::Stalled(_)), "{error}");
     assert!(started.elapsed() < Duration::from_secs(10), "the stall deadline is honoured");
 }
@@ -213,13 +213,53 @@ fn roto_job_cancel_kills_a_worker_that_never_acknowledges() {
     let limits =
         RotoJobLimits { stall: Duration::from_secs(30), overall: Duration::from_secs(30), cancel_ack: Duration::from_millis(300), ..RotoJobLimits::default() };
     let started = Instant::now();
-    let outcome = run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_, _, _| {}).expect("a cancel is an outcome, not an error");
+    let outcome = run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_, _, _, _| {}).expect("a cancel is an outcome, not an error");
     let _ = setter.join();
     match outcome {
         RotoJobOutcome::Cancelled(report) => assert!(report.killed, "a worker that ignores cancel is killed, and the report says so"),
         other => panic!("expected a cancel, got {other:?}"),
     }
     assert!(started.elapsed() < Duration::from_secs(10), "cancel does not wait for the stall deadline");
+}
+
+#[test]
+fn roto_job_kills_a_worker_that_exceeds_the_memory_ceiling() {
+    let (mut worker, _) = spawn_ready("hungry_xmem_worker.ps1");
+    let cancel = AtomicBool::new(false);
+    let limits = RotoJobLimits { memory_ceiling_mb: Some(512.0), ..RotoJobLimits::default() };
+
+    let started = Instant::now();
+    let error = run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_, _, _, _| {}).expect_err("a worker over the ceiling is killed, not believed");
+    match error {
+        RotoJobError::MemoryCeiling { limit_mb, reported_mb } => {
+            assert_eq!(limit_mb, 512.0);
+            assert_eq!(reported_mb, 999_999.0, "the report names what the worker actually claimed");
+        }
+        other => panic!("expected a memory ceiling, got {other}"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(10), "the ceiling is enforced at the first report");
+}
+
+#[test]
+fn the_memory_ceiling_is_optional_and_a_run_without_one_finishes() {
+    let (mut worker, _) = spawn_ready("hungry_xmem_worker.ps1");
+    let cancel = AtomicBool::new(false);
+    let limits = RotoJobLimits { memory_ceiling_mb: None, ..RotoJobLimits::default() };
+
+    let outcome = run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_, _, _, _| {}).expect("no ceiling, no kill");
+    assert!(matches!(outcome, RotoJobOutcome::Done(_)), "the same worker finishes when the user sets no ceiling: {outcome:?}");
+}
+
+#[test]
+fn the_progress_callback_carries_the_workers_own_memory_figure() {
+    let (mut worker, _) = spawn_ready("hungry_xmem_worker.ps1");
+    let cancel = AtomicBool::new(false);
+    let limits = RotoJobLimits { memory_ceiling_mb: None, ..RotoJobLimits::default() };
+    let mut reported: Vec<Option<f64>> = Vec::new();
+
+    run_job(&mut worker, &spec(0, 0), &limits, &cancel, |_frame, _total, _fps, rss_mb| reported.push(rss_mb)).expect("finish");
+
+    assert_eq!(reported, vec![Some(999_999.0)], "the callback never invents a memory figure");
 }
 
 #[test]

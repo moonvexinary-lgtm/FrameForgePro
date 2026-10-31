@@ -70,6 +70,22 @@ pub struct RotoState {
     pub published: Option<Published>,
     /// The media item the last job ran for (the RotoRef's owner).
     pub last_item: Option<ItemId>,
+
+    /// The initial-mask canvas the user paints on: 8-bit coverage at the working
+    /// size, exactly the bytes that become the worker's `frame 0` mask.
+    canvas: Vec<u8>,
+    canvas_w: u32,
+    canvas_h: u32,
+    canvas_dirty: bool,
+    texture: Option<egui::TextureHandle>,
+    /// Brush radius in working-size pixels.
+    pub brush_radius: f32,
+    /// Paint (true) or erase (false).
+    pub brush_add: bool,
+    /// Fill the dragged rectangle instead of painting a stroke.
+    pub brush_rect: bool,
+    rect_start: Option<(f32, f32)>,
+    last_point: Option<(f32, f32)>,
 }
 
 impl Default for RotoState {
@@ -93,6 +109,16 @@ impl Default for RotoState {
             job_error: None,
             published: None,
             last_item: None,
+            canvas: Vec::new(),
+            canvas_w: 0,
+            canvas_h: 0,
+            canvas_dirty: false,
+            texture: None,
+            brush_radius: 18.0,
+            brush_add: true,
+            brush_rect: false,
+            rect_start: None,
+            last_point: None,
         }
     }
 }
@@ -180,6 +206,139 @@ impl RotoState {
         }
         python_candidates_from_env().into_iter().next()
     }
+
+    // ---- the initial-mask canvas -------------------------------------------
+
+    /// Make the canvas match the working size, clearing it when the size changed
+    /// (a mask painted at one size cannot silently be used at another).
+    pub fn ensure_canvas(&mut self, width: u32, height: u32) {
+        if self.canvas_w == width && self.canvas_h == height && self.canvas.len() == (width * height) as usize {
+            return;
+        }
+        self.canvas = vec![0u8; (width * height) as usize];
+        self.canvas_w = width;
+        self.canvas_h = height;
+        self.canvas_dirty = true;
+        self.texture = None;
+        self.rect_start = None;
+        self.last_point = None;
+    }
+
+    pub fn canvas_size(&self) -> (u32, u32) {
+        (self.canvas_w, self.canvas_h)
+    }
+
+    /// The coverage bytes exactly as they will be written to the PNG.
+    pub fn canvas(&self) -> &[u8] {
+        &self.canvas
+    }
+
+    pub fn clear_canvas(&mut self) {
+        self.canvas.fill(0);
+        self.canvas_dirty = true;
+    }
+
+    pub fn invert_canvas(&mut self) {
+        for value in &mut self.canvas {
+            *value = 255 - *value;
+        }
+        self.canvas_dirty = true;
+    }
+
+    /// The share of the canvas the model will be told is foreground.
+    pub fn coverage_percent(&self) -> f32 {
+        if self.canvas.is_empty() {
+            return 0.0;
+        }
+        let covered = self.canvas.iter().filter(|value| **value >= 128).count();
+        covered as f32 * 100.0 / self.canvas.len() as f32
+    }
+
+    /// Stamp one round dab at a canvas coordinate.
+    pub fn stamp(&mut self, x: f32, y: f32) {
+        if self.canvas.is_empty() {
+            return;
+        }
+        let value = if self.brush_add { 255u8 } else { 0u8 };
+        let radius = self.brush_radius.max(1.0);
+        let (w, h) = (self.canvas_w as i64, self.canvas_h as i64);
+        let x0 = ((x - radius).floor() as i64).max(0);
+        let x1 = ((x + radius).ceil() as i64).min(w - 1);
+        let y0 = ((y - radius).floor() as i64).max(0);
+        let y1 = ((y + radius).ceil() as i64).min(h - 1);
+        let radius_sq = radius * radius;
+        for py in y0..=y1 {
+            for px in x0..=x1 {
+                let dx = px as f32 + 0.5 - x;
+                let dy = py as f32 + 0.5 - y;
+                if dx * dx + dy * dy <= radius_sq {
+                    self.canvas[(py * w + px) as usize] = value;
+                }
+            }
+        }
+        self.canvas_dirty = true;
+    }
+
+    /// Continue a stroke: dabs are spaced along the segment so a fast drag does
+    /// not leave gaps.
+    pub fn stroke_to(&mut self, x: f32, y: f32) {
+        let Some((last_x, last_y)) = self.last_point else {
+            self.stamp(x, y);
+            self.last_point = Some((x, y));
+            return;
+        };
+        let distance = ((x - last_x).powi(2) + (y - last_y).powi(2)).sqrt();
+        let step = (self.brush_radius * 0.4).max(1.0);
+        let steps = (distance / step).ceil().max(1.0) as u32;
+        for index in 1..=steps {
+            let t = index as f32 / steps as f32;
+            self.stamp(last_x + (x - last_x) * t, last_y + (y - last_y) * t);
+        }
+        self.last_point = Some((x, y));
+    }
+
+    pub fn end_stroke(&mut self) {
+        self.last_point = None;
+    }
+
+    /// Fill the rectangle between two corners (drag → one committed fill).
+    pub fn fill_rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        if self.canvas.is_empty() {
+            return;
+        }
+        let value = if self.brush_add { 255u8 } else { 0u8 };
+        let (w, h) = (self.canvas_w as i64, self.canvas_h as i64);
+        let left = (x0.min(x1).floor() as i64).max(0) as usize;
+        let right = ((x0.max(x1).ceil() as i64).min(w - 1) as usize).max(left);
+        let top = (y0.min(y1).floor() as i64).max(0) as usize;
+        let bottom = ((y0.max(y1).ceil() as i64).min(h - 1) as usize).max(top);
+        for py in top..=bottom {
+            let start = py * w as usize + left;
+            let end = py * w as usize + right + 1;
+            if let Some(row) = self.canvas.get_mut(start..end) {
+                row.fill(value);
+            }
+        }
+        self.canvas_dirty = true;
+    }
+
+    /// Write the canvas as an 8-bit grayscale PNG — the initial mask the worker
+    /// reads for the run's first frame.
+    pub fn save_canvas(&self, path: &Path) -> Result<(), String> {
+        if self.canvas.is_empty() {
+            return Err("the mask canvas is empty".to_string());
+        }
+        let image = image::GrayImage::from_raw(self.canvas_w, self.canvas_h, self.canvas.clone())
+            .ok_or_else(|| "the mask canvas does not match its size".to_string())?;
+        image.save(path).map_err(|error| format!("{}: {error}", path.display()))
+    }
+
+    /// The canvas as an RGBA texture: the painted area is white, the rest dark,
+    /// so the mask reads against the panel's background.
+    fn canvas_image(&mut self) -> egui::ColorImage {
+        let pixels: Vec<egui::Color32> = self.canvas.iter().map(|value| egui::Color32::from_rgb(*value, *value, *value)).collect();
+        egui::ColorImage::new([self.canvas_w as usize, self.canvas_h as usize], pixels)
+    }
 }
 
 /// The media frame numbers a clip range covers, computed exactly as
@@ -227,6 +386,9 @@ pub fn show(app: &mut App, panel: &mut egui::Ui) {
         None => "Select a video clip on the timeline.".to_string(),
     };
     panel.label(ui::hint(&clip_label));
+    let (work_w, work_h) = (app.roto.width.max(16), app.roto.height.max(16));
+    app.roto.ensure_canvas(work_w, work_h);
+    mask_editor(app, panel);
     path_row(panel, "Initial mask PNG", &mut app.roto.initial_mask, "PNG", false);
     panel.horizontal(|ui| {
         ui.label(ui::meta("Working size"));
@@ -329,6 +491,104 @@ fn consent_fields(app: &mut App, panel: &mut egui::Ui) {
     } else {
         panel.label(ui::hint("Verification reads nothing until this box is ticked."));
     }
+}
+
+/// The initial-mask canvas: paint or erase with a round brush, or drag a
+/// rectangle, then save the result as the PNG the worker starts from.
+fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
+    ui::section(panel, "INITIAL MASK (FRAME 0)");
+    panel.label(ui::hint(
+        "Paint the region the model starts from, then save it. The PNG is written at the working size, which is exactly the resolution the worker is asked for.",
+    ));
+    panel.horizontal(|ui| {
+        ui.selectable_value(&mut app.roto.brush_add, true, "Paint");
+        ui.selectable_value(&mut app.roto.brush_add, false, "Erase");
+        ui.checkbox(&mut app.roto.brush_rect, "Rectangle");
+    });
+    panel.horizontal(|ui| {
+        ui.add(egui::Slider::new(&mut app.roto.brush_radius, 2.0..=120.0).text("px"));
+        if ui.small_button("Clear").clicked() {
+            app.roto.clear_canvas();
+        }
+        if ui.small_button("Invert").clicked() {
+            app.roto.invert_canvas();
+        }
+    });
+
+    let (w, h) = app.roto.canvas_size();
+    if w > 0 && h > 0 {
+        let width = panel.available_width().min(360.0);
+        let height = (width * h as f32 / w as f32).max(60.0);
+        let (rect, response) = panel.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
+
+        if app.roto.canvas_dirty || app.roto.texture.is_none() {
+            let image = app.roto.canvas_image();
+            match &mut app.roto.texture {
+                Some(texture) => texture.set(image, egui::TextureOptions::NEAREST),
+                None => app.roto.texture = Some(panel.ctx().load_texture("roto-mask", image, egui::TextureOptions::NEAREST)),
+            }
+            app.roto.canvas_dirty = false;
+        }
+        if let Some(texture) = &app.roto.texture {
+            panel.painter().rect_filled(rect, 0.0, ui::BG_INSET);
+            panel.painter().image(texture.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            panel.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, ui::LINE_LIGHT), egui::StrokeKind::Inside);
+        }
+
+        // Pointer → canvas coordinates. The canvas is laid out top-left first,
+        // exactly as the PNG is written.
+        let to_canvas = |pos: egui::Pos2| {
+            let x = ((pos.x - rect.min.x) / rect.width() * w as f32).clamp(0.0, w as f32 - 1.0);
+            let y = ((pos.y - rect.min.y) / rect.height() * h as f32).clamp(0.0, h as f32 - 1.0);
+            (x, y)
+        };
+        let pressed = response.interact_pointer_pos().filter(|_| response.clicked() || response.dragged());
+        if let Some(pos) = pressed {
+            let (x, y) = to_canvas(pos);
+            if app.roto.brush_rect {
+                if response.drag_started() || app.roto.rect_start.is_none() {
+                    app.roto.rect_start = Some((x, y));
+                }
+                let start = app.roto.rect_start.unwrap_or((x, y));
+                let preview =
+                    egui::Rect::from_two_pos(egui::pos2(rect.min.x + start.0 / w as f32 * rect.width(), rect.min.y + start.1 / h as f32 * rect.height()), pos);
+                panel.painter().rect_stroke(preview, 0.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
+            } else {
+                app.roto.stroke_to(x, y);
+            }
+        }
+        if response.drag_stopped()
+            && app.roto.brush_rect
+            && let (Some((x0, y0)), Some((x1, y1))) = (app.roto.rect_start.take(), pressed.map(to_canvas))
+        {
+            app.roto.fill_rect(x0, y0, x1, y1);
+        }
+        if response.drag_stopped() {
+            app.roto.end_stroke();
+        }
+        if response.hovered() {
+            panel.output(response.on_hover_text("Drag to paint the initial mask"));
+        }
+    }
+
+    panel.label(ui::hint(&format!("{}x{} · {:.1}% foreground", w, h, app.roto.coverage_percent())));
+    panel.horizontal(|ui| {
+        if ui.small_button("Save as PNG…").clicked() {
+            let suggested = if app.roto.initial_mask.trim().is_empty() { "initial_mask.png".to_string() } else { app.roto.initial_mask.clone() };
+            if let Some(path) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name(suggested).save_file() {
+                match app.roto.save_canvas(&path) {
+                    Ok(()) => {
+                        app.roto.initial_mask = path.display().to_string();
+                        app.status = format!("Initial mask saved to {}", path.display());
+                    }
+                    Err(error) => app.roto.job_error = Some(error),
+                }
+            }
+        }
+        if ui.small_button("Use the PNG below").clicked() {
+            app.status = "The job uses the PNG in the field below".to_string();
+        }
+    });
 }
 
 /// A labelled path field with a browse button. `folder` picks a directory.
@@ -462,9 +722,12 @@ fn execute_job(run: JobRun<'_>, cancel: &AtomicBool, progress: &Arc<Mutex<String
     let info = worker.handshake_timeout(HANDSHAKE).map_err(|error| format!("worker handshake: {error}"))?;
     set_progress(format!("Worker {} ready (protocol {}); propagating…", info.backend, info.protocol));
 
-    let outcome = run_job(&mut worker, spec, limits, cancel, |frame, total, fps| {
+    let outcome = run_job(&mut worker, spec, limits, cancel, |frame, total, fps, rss_mb| {
         let done = (frame - spec.first_frame + 1).max(0);
-        set_progress(format!("Propagating {done}/{total} frames (frame {frame}, {fps:.2} fps)"));
+        match (rss_mb, limits.memory_ceiling_mb) {
+            (Some(rss), Some(ceiling)) => set_progress(format!("Propagating {done}/{total} frames ({fps:.2} fps, RSS {rss:.0} MB of {ceiling:.0} MB)")),
+            _ => set_progress(format!("Propagating {done}/{total} frames (frame {frame}, {fps:.2} fps)")),
+        }
     })
     .map_err(|error| error.to_string())?;
 
@@ -567,6 +830,68 @@ mod tests {
         state.consent = true;
         assert!(state.consent().accepted);
         assert_eq!(state.consent().note, "bought a licence");
+    }
+
+    #[test]
+    fn the_canvas_paints_erases_and_inverts_at_the_working_size() {
+        let mut state = RotoState::default();
+        state.ensure_canvas(16, 16);
+        assert_eq!(state.canvas_size(), (16, 16));
+        assert_eq!(state.coverage_percent(), 0.0);
+
+        state.brush_radius = 3.0;
+        state.stamp(8.0, 8.0);
+        assert_eq!(state.canvas()[(8 * 16 + 8) as usize], 255, "the dab paints the centre");
+        assert_eq!(state.canvas()[0], 0, "the corner stays clear");
+        let painted = state.coverage_percent();
+        assert!(painted > 0.0 && painted < 10.0, "a small dab is a small coverage: {painted}");
+
+        state.invert_canvas();
+        assert_eq!(state.canvas()[(8 * 16 + 8) as usize], 0);
+        assert_eq!(state.canvas()[0], 255);
+
+        state.clear_canvas();
+        assert_eq!(state.coverage_percent(), 0.0);
+    }
+
+    #[test]
+    fn a_rectangle_fill_covers_only_the_dragged_box() {
+        let mut state = RotoState::default();
+        state.ensure_canvas(20, 20);
+        state.fill_rect(4.0, 4.0, 9.0, 9.0);
+        assert_eq!(state.canvas()[(5 * 20 + 5) as usize], 255);
+        assert_eq!(state.canvas()[(5 * 20 + 12) as usize], 0, "outside the box stays clear");
+        assert_eq!(state.canvas()[(12 * 20 + 5) as usize], 0);
+
+        state.brush_add = false;
+        state.fill_rect(4.0, 4.0, 9.0, 9.0);
+        assert_eq!(state.canvas()[(5 * 20 + 5) as usize], 0, "erase fills the same box back to zero");
+    }
+
+    #[test]
+    fn a_saved_canvas_is_exactly_the_workers_frame_zero_mask() {
+        let mut state = RotoState::default();
+        state.ensure_canvas(32, 18);
+        state.brush_radius = 4.0;
+        state.stamp(16.0, 9.0);
+
+        let path = std::env::temp_dir().join(format!("frameforge-mask-{}.png", std::process::id()));
+        state.save_canvas(&path).expect("save the canvas");
+        let restored = image::open(&path).expect("reopen the mask").to_luma8();
+        assert_eq!(restored.dimensions(), (32, 18), "the PNG is exactly the working size");
+        assert_eq!(restored.get_pixel(16, 9).0[0], 255);
+        assert_eq!(restored.get_pixel(0, 0).0[0], 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn resizing_the_working_size_clears_a_stale_canvas() {
+        let mut state = RotoState::default();
+        state.ensure_canvas(8, 8);
+        state.stamp(4.0, 4.0);
+        state.ensure_canvas(16, 16);
+        assert_eq!(state.canvas_size(), (16, 16));
+        assert_eq!(state.coverage_percent(), 0.0, "a mask painted at another size is never reused");
     }
 
     #[test]
