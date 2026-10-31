@@ -252,10 +252,10 @@ pub fn show(app: &mut App, panel: &mut egui::Ui) {
 fn runtime_fields(app: &mut App, panel: &mut egui::Ui) {
     ui::section(panel, "RUNTIME (EXTERNAL)");
     path_row(panel, "Python", &mut app.roto.python, "python.exe", false);
-    if let Some(suggestion) = app.roto.python_suggestion() {
-        if ui::mini_button(panel, "Use the interpreter found on PATH", &suggestion.display().to_string()).clicked() {
-            app.roto.python = suggestion.display().to_string();
-        }
+    if let Some(suggestion) = app.roto.python_suggestion()
+        && ui::mini_button(panel, "Use the interpreter found on PATH", &suggestion.display().to_string()).clicked()
+    {
+        app.roto.python = suggestion.display().to_string();
     }
     path_row(panel, "XMem checkout", &mut app.roto.xmem_source, "folder", true);
     path_row(panel, "Weights", &mut app.roto.weights, "pth", false);
