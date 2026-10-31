@@ -71,7 +71,7 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | Color workspace (FilmCraft stack) | 🟡 | `effects.apply/setParam/toggleEnabled/remove` with upstream tests; panel code-inspected | A FrameForge test driving the same commands |
 | Color scopes / curves / wheels / LUT / before-after | ⬜ | — | Scopes computed from frames; LUT loading with licence records |
 | Compositing comp layers (text/solid add, toggle, remove) | 🟡 | Bridge `Composition` helpers over the project the M4 test renders; helpers themselves are code-inspected | A test of add/toggle/remove and their effect on pixels |
-| Masks / chroma key / matte UI | ⬜ | Engine effects exist in the registry; no mask UI or chroma render test | Mask authoring + alpha preview + render test |
+| Masks / chroma key / matte UI | 🟡 | U1 (run `40794727835`): the Masking workspace authors real engine masks (`masks.add/set/select/remove`) with feather, opacity, inversion, mode and expansion, plus the engine's own mask tracker. No chroma-key UI, no alpha preview and no mask render test yet | Mask authoring + alpha preview + render test |
 | Audio mixer faders / pan / mute / solo | 🟡 | `mixer.setStrip` with parameter names verified against upstream tests; panel code-inspected | A FrameForge test asserting the mixed result |
 | Audio meters / automation / inserts / loudness | ⬜ | — | Peak meters from real audio; automation lanes; effect inserts |
 | Audio effects UI | ⬜ | FilmCraft audio-effect defs exist | Add/param UI with audio render checks |
@@ -88,7 +88,7 @@ on GitHub Actions (`windows-2025`); the measured baseline is `docs/BASELINE_AUDI
 | OTIO / EDL interchange | ⬜ | Licence-safe interchange target |
 | Plugin host (OpenFX) | ⬜ | Evaluate only after the effect architecture is stable |
 | Motion tracking / planar tracking / stabilization | ⬜ | — |
-| **Roto AI (XMem)** | 🟡 | R1 cache + alpha seam and R2 worker protocol/exporter are implemented and CI-verified (runs `40056112214`, `40059782293`); a real XMem protocol worker and local R3 probe now run the official model on CPU (forward/backward IoU, cancel, peak RSS). Real inference, initial-mask UI, corrections and the workspace are **not app-wired**; no pack/weights ship. See `docs/ROTO_AI_PLAN.md` and `docs/ARCHITECTURE.md` | Initial-mask UI, app job runner, resume, memory ceiling, renderer mask equality, signed optional pack |
+| **Roto AI (XMem)** | 🟡 | R1 cache + alpha seam and R2 worker protocol/exporter are CI-verified (runs `40056112214`, `40059782293`); a real XMem protocol worker and local R3 probe run the official model on CPU (forward/backward IoU, cancel, peak RSS) **locally, not in CI**. The bridge now has the consent/verification gate (run `41161529133`) and the `run_job` deadline/stall/cancel runner (run `41144133581`), and the Masking workspace's Roto AI panel drives both for one job (run `41238338683`). Still open: in-app initial-mask authoring, a job queue, resume/corrections, a memory ceiling, and the cache/manifest writer that would put a run in front of the renderer. No pack or weights ship. See `docs/ROTO_AI_PLAN.md` and `docs/ARCHITECTURE.md` | Initial-mask UI, job queue, resume, memory ceiling, renderer mask equality, signed optional pack |
 | AI pack (weights, runtime) | ⬜ | Optional, consent-based download only; no pack or weights are bundled or installed |
 | Project archive / collect media | ⬜ | — |
 | Installer | ⬜ | Tag builds a ZIP; an installer is future work |
