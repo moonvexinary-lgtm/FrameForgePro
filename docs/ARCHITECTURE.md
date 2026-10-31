@@ -774,15 +774,14 @@ clip, drives the worker over pipes and computes IoU.
   after it).
 - **Cancel**: a 30-frame 480x270 job cancelled after the first progress event
   emitted `cancelled` 1.05 s later and stopped after 2 written masks.
-- **Not met**: no app/UI wiring, no runtime-discovery/consent flow to start a worker, and no job
-  queue (the transport has deadlines and the bridge now has the tested runner — `run_job`, run
-  `41144133581` — but nothing in the app calls it yet); no resume/segmented correction runs, no
-  memory ceiling enforcement,
-  no proof that a worker mask reaches preview/export through the R1 cache, and no
-  CI coverage (CI has no torch or weights). This is real inference evidence, not
-  an R3 acceptance pass; R3 and R4 remain open. The tools-only commit `23d03da`
-  ran CI green (run `40517500476`, 54 tests, 25,564,165-byte artifact), confirming
-  the Rust tree was unchanged.
+- **Not met**: no job queue, no resume/segmented correction runs, no memory ceiling enforcement and no
+  proof that a worker mask reaches preview/export through the R1 cache (the R4 panel runs one job on
+  the selected clip, and states that the manifest writer is missing). App wiring and the
+  consent/verification flow now exist: the transport has deadlines, `run_job` (runs `41144133581`) is
+  the policy, and the Roto AI panel drives both (run `41238338683`). There is still no CI coverage of
+  real inference (CI has no torch or weights), so this local evidence is not an R3 acceptance pass;
+  R3 and R4 remain open. The tools-only commit `23d03da` ran CI green (run `40517500476`, 54 tests,
+  25,564,165-byte artifact), confirming the Rust tree was unchanged.
 
 ## R5 — consent gate and runtime/weights verification (partial; bridge, run 41161529133)
 
@@ -807,9 +806,11 @@ policy without any new dependency.
   (reporting both hashes), a checkout at another commit (both ids), a directory without `model/`,
   a malformed expected hash, the consent note reaching the status line, and the interpreter candidate
   order. `sha256.rs` carries three unit tests (four FIPS vectors, split updates, a file digest).
-- **Still open**: no UI to collect the paths or the consent (R4), no packaging of `tools/xmem_worker.py`
-  for a shipped build, no memory ceiling, and no evidence yet that the masks a job writes are the
-  bytes preview/export read. R5 is therefore **partial**, and nothing in the UI claims otherwise.
+- **Still open**: no packaging of `tools/xmem_worker.py` for a shipped build (the panel takes its path),
+  no in-app deletion or reuse of a verified runtime, no saved consent record between sessions, no
+  memory ceiling, and no evidence yet that the masks a job writes are the bytes preview/export read.
+  The paths and the consent are collected by the Roto AI panel (run `41238338683`). R5 is therefore
+  **partial**, and nothing in the UI claims otherwise.
 
 ## R4 — the in-app Roto AI panel (partial; run 41238338683)
 

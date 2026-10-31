@@ -163,10 +163,13 @@ pack/weight detection or inference call is wired into `roto-bench` — so it nev
 number. The target-laptop CPU benchmark is now measured **locally** by `tools/xmem_r3_probe.py`
 (2026-10-27; see above), not by `roto-bench` and not in CI; 237.5 MB weights remain user-supplied.
 
-Limitations: the client is blocking (a hung worker needs the R3 job runner's timeout/kill policy);
-`request_shutdown` sends the request and process teardown kills the child; no Python runtime or weights
-ship, and the `tools/` real worker script is not in the optional pack; initial-mask UI, job queue and UI
-wiring are still absent.
+Limitations: one job runs at a time and only for the selected clip. The client is no longer blocking —
+the transport gained `recv_timeout`/`handshake_timeout`/`kill` and `run_job` applies the deadlines
+(runs `40814011414`, `41144133581`), and the Masking workspace's Roto AI panel drives it (run
+`41238338683`). `request_shutdown` still sends the request and process teardown kills the child; no
+Python runtime or weights ship, and the `tools/` real worker script is not in the optional pack. What
+is still absent: a job queue, in-app initial-mask authoring, and the cache/manifest writer that would
+put a finished run in front of the renderer.
 
 ## Packaging
 
