@@ -228,7 +228,10 @@ impl RotoState {
         (self.canvas_w, self.canvas_h)
     }
 
-    /// The coverage bytes exactly as they will be written to the PNG.
+    /// The coverage bytes exactly as they will be written to the PNG. The panel
+    /// itself reads coverage through `coverage_percent`, so this is for the
+    /// canvas tests, which assert exact pixels.
+    #[cfg(test)]
     pub fn canvas(&self) -> &[u8] {
         &self.canvas
     }
