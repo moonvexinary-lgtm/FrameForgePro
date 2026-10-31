@@ -17,7 +17,7 @@ use filmcraft_media::{FrameRequest, Generator, MediaSource, open_bytes};
 use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project, SequenceSettings, TrackKind};
 use filmcraft_render::{RenderOptions, render_sequence};
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
-use frameforge_bridge::{ComposedSource, Composition, FrameForgeProject, MaskCache, ProjectSources, RotoCacheKey, RotoRef, XMEM_COMMIT};
+use frameforge_bridge::{ComposedSource, Composition, FrameForgeProject, MaskAdoption, MaskCache, ProjectSources, RotoCacheKey, RotoRef, XMEM_COMMIT};
 
 const R: FrameRate = FrameRate::FPS_24;
 const W: u32 = 64;

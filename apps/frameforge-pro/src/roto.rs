@@ -896,8 +896,8 @@ mod tests {
 
     #[test]
     fn the_cache_identity_follows_the_media_not_just_the_item() {
-        use filmcraft_media::Generator;
         use filmcraft_media::generators::GeneratorSource;
+        use filmcraft_media::{Generator, MediaSource};
         use filmcraft_project::{ItemId, MediaClip, MediaRef};
 
         let clip_for = |color: [f32; 4]| {

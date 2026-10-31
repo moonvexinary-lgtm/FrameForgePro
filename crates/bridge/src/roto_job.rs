@@ -220,7 +220,7 @@ pub fn run_job(
                     return Err(RotoJobError::Worker(WorkerError::Protocol(format!("more than {event_cap} events for {count} frames"))));
                 }
                 match event {
-                    WorkerEvent::Progress { frame, total, fps, rss_mb } => {
+                    WorkerEvent::Progress { frame, total, fps, rss_mb, .. } => {
                         if let Some(ceiling) = limits.memory_ceiling_mb
                             && let Some(reported) = rss_mb
                             && reported > ceiling
