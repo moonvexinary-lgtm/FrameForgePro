@@ -204,10 +204,11 @@ pub fn show(app: &mut App, panel: &mut egui::Ui) {
     ui::spaced_rule(panel);
     ui::section(panel, "PROPAGATE THE SELECTED CLIP");
     let clip = app.selected_clip();
-    panel.label(ui::hint(match &clip {
+    let clip_label = match &clip {
         Some((_, item)) => format!("Clip media: {}", app.session.project.items.get(item).map(|it| it.name.clone()).unwrap_or_else(|| "?".to_string())),
         None => "Select a video clip on the timeline.".to_string(),
-    }));
+    };
+    panel.label(ui::hint(&clip_label));
     path_row(panel, "Initial mask PNG", &mut app.roto.initial_mask, "PNG", false);
     panel.horizontal(|ui| {
         ui.label(ui::meta("Working size"));
@@ -356,7 +357,8 @@ fn start_job(app: &mut App) {
     let thread_done = Arc::clone(&done);
     let thread_progress = Arc::clone(&progress);
     let handle = std::thread::Builder::new().name("frameforge-roto-job".to_string()).spawn(move || {
-        let result = execute_job(&doc, item, range, rate, &runtime, &spec, &limits, &thread_cancel, &thread_progress);
+        let run = JobRun { doc: &doc, item, range, rate, runtime: &runtime, spec: &spec, limits: &limits };
+        let result = execute_job(run, &thread_cancel, &thread_progress);
         if let Ok(mut slot) = thread_done.lock() {
             *slot = Some(result);
         }
@@ -370,18 +372,20 @@ fn start_job(app: &mut App) {
     app.status = format!("XMem job started: frames {first}..{last} at {width}x{height}");
 }
 
-/// The worker thread's whole body: export, spawn, handshake, run.
-fn execute_job(
-    doc: &frameforge_bridge::FrameForgeProject,
+/// Everything one job thread needs, so the function below stays readable.
+struct JobRun<'a> {
+    doc: &'a frameforge_bridge::FrameForgeProject,
     item: filmcraft_project::ItemId,
     range: TimeRange,
     rate: FrameRate,
-    runtime: &RotoRuntime,
-    spec: &RotoJobSpec,
-    limits: &RotoJobLimits,
-    cancel: &AtomicBool,
-    progress: &Arc<Mutex<String>>,
-) -> Result<String, String> {
+    runtime: &'a RotoRuntime,
+    spec: &'a RotoJobSpec,
+    limits: &'a RotoJobLimits,
+}
+
+/// The worker thread's whole body: export, spawn, handshake, run.
+fn execute_job(run: JobRun<'_>, cancel: &AtomicBool, progress: &Arc<Mutex<String>>) -> Result<String, String> {
+    let JobRun { doc, item, range, rate, runtime, spec, limits } = run;
     let set_progress = |text: String| {
         if let Ok(mut slot) = progress.lock() {
             *slot = text;
@@ -453,8 +457,7 @@ mod tests {
 
     #[test]
     fn consent_is_refused_until_the_box_is_ticked() {
-        let mut state = RotoState::default();
-        state.consent_note = "bought a licence".to_string();
+        let mut state = RotoState { consent_note: "bought a licence".to_string(), ..RotoState::default() };
         assert!(!state.consent().accepted);
         state.consent = true;
         assert!(state.consent().accepted);
