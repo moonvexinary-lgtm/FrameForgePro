@@ -145,7 +145,7 @@ fn a_checkout_at_another_commit_is_refused_with_both_ids() {
 #[test]
 fn a_directory_without_the_model_folder_is_not_an_xmem_checkout() {
     let root = temp_root("not-checkout");
-    let mut request = request(&root, RefLayout::LooseRef);
+    let request = request(&root, RefLayout::LooseRef);
     std::fs::remove_dir_all(request.xmem_source.join("model")).expect("drop the model directory");
     let error = RotoRuntime::resolve(&request, &RotoConsent::given("test")).expect_err("a random git directory is not XMem");
     assert!(matches!(error, RotoRuntimeError::NotACheckout { .. }), "{error}");
