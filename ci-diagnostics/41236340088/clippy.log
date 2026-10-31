@@ -1,0 +1,519 @@
+    Updating git repository `https://github.com/storytold/effectcraft`
+    Updating git repository `https://github.com/storytold/filmcraft`
+    Updating crates.io index
+    Updating git repository `https://github.com/storytold/craft-libs`
+     Locking 494 packages to highest Rust 1.95 compatible versions
+      Adding cpal v0.16.0 (available: v0.18.2)
+      Adding eframe v0.36.2 (available: v0.37.0)
+      Adding egui v0.36.2 (available: v0.37.0)
+ Downloading crates ...
+  Downloaded symphonia-utils-xiph v0.5.5
+  Downloaded adler2 v2.0.1
+  Downloaded renderdoc-sys v1.1.0
+  Downloaded serde_spanned v1.1.2
+  Downloaded roxmltree v0.21.2
+  Downloaded rustc-hash v1.1.0
+  Downloaded peniko v0.6.1
+  Downloaded polycool v0.4.0
+  Downloaded accesskit_consumer v0.35.0
+  Downloaded pin-project-lite v0.2.17
+  Downloaded pkg-config v0.3.34
+  Downloaded pollster v1.0.1
+  Downloaded cpal v0.16.0
+  Downloaded glifo v0.2.0
+  Downloaded gpu-allocator v0.28.0
+  Downloaded parking_lot_core v0.9.12
+  Downloaded bytemuck v1.25.2
+  Downloaded cfg_aliases v0.2.2
+  Downloaded libm v0.2.16
+  Downloaded scopeguard v1.2.0
+  Downloaded color_quant v1.1.0
+  Downloaded gl_generator v0.14.0
+  Downloaded error-code v3.4.0
+  Downloaded proc-macro2 v1.0.107
+  Downloaded rustc-hash v2.1.3
+  Downloaded wgpu-naga-bridge v30.0.1
+  Downloaded raw-window-handle v0.6.2
+  Downloaded rawpointer v0.2.1
+  Downloaded itoa v1.0.18
+  Downloaded range-alloc v0.1.5
+  Downloaded self_cell v1.3.0
+  Downloaded unicode-ident v1.0.27
+  Downloaded rustversion v1.0.23
+  Downloaded windows-result v0.1.2
+  Downloaded extended v0.1.0
+  Downloaded glutin_wgl_sys v0.6.1
+  Downloaded presser v0.3.1
+  Downloaded quick-error v2.0.1
+  Downloaded cursor-icon v1.2.0
+  Downloaded dasp_sample v0.11.0
+  Downloaded termcolor v1.4.1
+  Downloaded windows-numerics v0.3.1
+  Downloaded bit-vec v0.9.1
+  Downloaded zmij v1.0.23
+  Downloaded equivalent v1.0.3
+  Downloaded cfg-if v1.0.5
+  Downloaded dpi v0.1.2
+  Downloaded windows-targets v0.52.6
+  Downloaded arrayref v0.3.9
+  Downloaded multiversion_no_op v1.0.0
+  Downloaded num-complex v0.4.6
+  Downloaded profiling v1.0.18
+  Downloaded windows-collections v0.3.2
+  Downloaded lazy_static v1.5.1
+  Downloaded nohash-hasher v0.2.0
+  Downloaded clipboard-win v5.4.3
+  Downloaded linebender_resource_handle v0.1.1
+  Downloaded lock_api v0.4.14
+  Downloaded egui-winit v0.36.2
+  Downloaded byteorder-lite v0.1.0
+  Downloaded core_detect v1.0.0
+  Downloaded libloading v0.8.9
+  Downloaded accesskit_winit v0.32.2
+  Downloaded bit-set v0.10.0
+  Downloaded bytemuck_derive v1.12.1
+  Downloaded ecolor v0.36.2
+  Downloaded either v1.19.0
+  Downloaded emath v0.36.2
+  Downloaded fax v0.2.7
+  Downloaded fdeflate v0.3.7
+  Downloaded foldhash v0.2.0
+  Downloaded guillotiere v0.7.0
+  Downloaded num-integer v0.1.47
+  Downloaded quote v1.0.47
+  Downloaded autocfg v1.5.1
+  Downloaded crossbeam-deque v0.8.8
+  Downloaded document-features v0.2.12
+  Downloaded khronos-egl v6.0.0
+  Downloaded zune-core v0.5.3
+  Downloaded ahash v0.8.12
+  Downloaded arboard v3.7.0
+  Downloaded crossbeam-utils v0.8.23
+  Downloaded bitflags v1.3.2
+  Downloaded egui-wgpu v0.36.2
+  Downloaded font-types v0.12.7
+  Downloaded gif v0.14.2
+  Downloaded parking_lot v0.12.5
+  Downloaded arrayvec v0.7.8
+  Downloaded litrs v1.0.1
+  Downloaded ordered-float v5.5.1
+  Downloaded allocator-api2 v0.2.21
+  Downloaded crc32fast v1.5.3
+  Downloaded getrandom v0.3.4
+  Downloaded half v2.7.1
+  Downloaded once_cell v1.21.4
+  Downloaded unicode-linebreak v0.1.5
+  Downloaded accesskit_windows v0.32.1
+  Downloaded bitflags v2.13.2
+  Downloaded log v0.4.35
+  Downloaded miniz_oxide v0.8.9
+  Downloaded miniz_oxide v0.9.1
+  Downloaded num-traits v0.2.19
+  Downloaded zune-jpeg v0.5.15
+  Downloaded ash v0.38.0+1.3.281
+  Downloaded codespan-reporting v0.13.1
+  Downloaded color v0.3.3
+  Downloaded crossbeam-epoch v0.9.21
+  Downloaded flate2 v1.1.10
+  Downloaded image-webp v0.2.4
+  Downloaded png v0.18.1
+  Downloaded euclid v0.22.14
+  Downloaded harfrust v0.12.0
+  Downloaded windows-implement v0.60.2
+  Downloaded eframe v0.36.2
+  Downloaded indexmap v2.14.2
+  Downloaded strict-num v0.1.1
+  Downloaded thiserror v2.0.21
+  Downloaded web-time v1.1.0
+  Downloaded epaint v0.36.2
+  Downloaded smol_str v0.2.2
+  Downloaded symphonia v0.5.5
+  Downloaded symphonia-codec-alac v0.5.5
+  Downloaded symphonia-codec-pcm v0.5.5
+  Downloaded type-map v0.5.1
+  Downloaded version_check v0.9.5
+  Downloaded wgpu-core-deps-windows-linux-android v30.0.1
+  Downloaded winapi-util v0.1.11
+  Downloaded windows-interface v0.59.3
+  Downloaded windows-link v0.2.1
+  Downloaded windows-result v0.4.1
+  Downloaded windows-strings v0.5.1
+  Downloaded hashbrown v0.16.1
+  Downloaded hashbrown v0.17.1
+  Downloaded itertools v0.15.0
+  Downloaded naga-types v30.0.1
+  Downloaded rfd v0.17.2
+  Downloaded glow v0.17.0
+  Downloaded simd-adler32 v0.3.10
+  Downloaded symphonia-codec-vorbis v0.5.5
+  Downloaded symphonia-format-ogg v0.5.5
+  Downloaded symphonia-metadata v0.5.5
+  Downloaded thiserror-impl v2.0.21
+  Downloaded toml_writer v1.1.3+spec-1.1.0
+  Downloaded unicode-general-category v1.1.0
+  Downloaded weezl v0.1.12
+  Downloaded windows-future v0.3.2
+  Downloaded windows-threading v0.2.1
+  Downloaded accesskit v0.24.1
+  Downloaded kurbo v0.13.1
+  Downloaded moxcms v0.8.1
+  Downloaded rayon-core v1.13.0
+  Downloaded serde_core v1.0.229
+  Downloaded serde_derive v1.0.229
+  Downloaded simdutf8 v0.1.5
+  Downloaded static_assertions v1.1.0
+  Downloaded symphonia-bundle-flac v0.5.5
+  Downloaded symphonia-codec-aac v0.5.5
+  Downloaded symphonia-format-riff v0.5.5
+  Downloaded toml_datetime v1.1.2+spec-1.1.0
+  Downloaded windows-core v0.54.0
+  Downloaded fearless_simd v0.4.1
+  Downloaded tiny-skia-path v0.12.0
+  Downloaded windows-core v0.62.2
+  Downloaded lz4_flex v0.11.6
+  Downloaded serde v1.0.229
+  Downloaded smallvec v1.16.4
+  Downloaded spirv v0.4.0+sdk-1.4.341.0
+  Downloaded symphonia-format-isomp4 v0.5.5
+  Downloaded toml_parser v1.1.5+spec-1.1.0
+  Downloaded tracing-attributes v0.1.31
+  Downloaded tracing-core v0.1.36
+  Downloaded winresource v0.1.34
+  Downloaded xml-rs v0.8.29
+  Downloaded ndarray v0.17.2
+  Downloaded symphonia-bundle-mp3 v0.5.5
+  Downloaded toml v1.1.8+spec-1.1.0
+  Downloaded unicode-bidi v0.3.18
+  Downloaded uuid v1.29.0
+  Downloaded image v0.25.10
+  Downloaded matrixmultiply v0.3.11
+  Downloaded symphonia-core v0.5.5
+  Downloaded tiff v0.11.3
+  Downloaded unicode-segmentation v1.13.3
+  Downloaded egui v0.36.2
+  Downloaded memchr v2.8.3
+  Downloaded zerocopy-derive v0.8.63
+  Downloaded rayon v1.12.0
+  Downloaded serde_json v1.0.154
+  Downloaded vello_common v0.1.0
+  Downloaded vello_cpu v0.1.0
+  Downloaded wgpu-types v30.0.1
+  Downloaded winnow v1.0.4
+  Downloaded zlib-rs v0.6.8
+  Downloaded unicode-width v0.2.3
+  Downloaded encoding_rs v0.8.44
+  Downloaded tiny-skia v0.12.0
+  Downloaded wgpu v30.0.1
+  Downloaded skrifa v0.44.0
+  Downloaded syn v2.0.119
+  Downloaded syn v3.0.9
+  Downloaded zerocopy v0.8.63
+  Downloaded linesweeper v0.4.0
+  Downloaded khronos_api v3.1.0
+  Downloaded wgpu-core v30.0.1
+  Downloaded tracing v0.1.44
+  Downloaded libc v0.2.191
+  Downloaded wgpu-hal v30.0.1
+  Downloaded read-fonts v0.41.0
+  Downloaded epaint_default_fonts v0.36.2
+  Downloaded winit v0.30.13
+  Downloaded pxfm v0.1.30
+  Downloaded windows_x86_64_msvc v0.52.6
+  Downloaded naga v30.0.1
+  Downloaded windows-sys v0.61.2
+  Downloaded windows-sys v0.52.0
+  Downloaded windows v0.62.2
+  Downloaded windows v0.54.0
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling thiserror v2.0.21
+   Compiling autocfg v1.5.1
+    Checking cfg-if v1.0.5
+   Compiling libm v0.2.16
+   Compiling num-traits v0.2.19
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+    Checking log v0.4.35
+   Compiling crossbeam-utils v0.8.23
+    Checking either v1.19.0
+    Checking bitflags v2.13.2
+   Compiling crossbeam-epoch v0.9.21
+   Compiling crossbeam-deque v0.8.8
+   Compiling rayon-core v1.13.0
+   Compiling zerocopy v0.8.63
+    Checking simd-adler32 v0.3.10
+    Checking rayon v1.12.0
+    Checking adler2 v2.0.1
+    Checking scopeguard v1.2.0
+   Compiling crc32fast v1.5.3
+    Checking once_cell v1.21.4
+   Compiling serde_derive v1.0.229
+   Compiling bytemuck_derive v1.12.1
+    Checking bytemuck v1.25.2
+   Compiling thiserror-impl v2.0.21
+    Checking miniz_oxide v0.8.9
+   Compiling zerocopy-derive v0.8.63
+    Checking miniz_oxide v0.9.1
+   Compiling zmij v1.0.23
+    Checking flate2 v1.1.10
+    Checking quick-error v2.0.1
+    Checking zune-core v0.5.3
+    Checking weezl v0.1.12
+    Checking memchr v2.8.3
+    Checking windows-link v0.2.1
+   Compiling serde_json v1.0.154
+    Checking zune-jpeg v0.5.15
+    Checking arrayvec v0.7.8
+    Checking smallvec v1.16.4
+    Checking fdeflate v0.3.7
+    Checking color_quant v1.1.0
+    Checking byteorder-lite v0.1.0
+    Checking itoa v1.0.18
+    Checking fax v0.2.7
+    Checking pxfm v0.1.30
+    Checking image-webp v0.2.4
+    Checking png v0.18.1
+    Checking gif v0.14.2
+   Compiling rustversion v1.0.23
+    Checking font-types v0.12.7
+    Checking filmcraft-bitstream v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking bitflags v1.3.2
+    Checking lazy_static v1.5.1
+    Checking read-fonts v0.41.0
+    Checking symphonia-core v0.5.5
+    Checking moxcms v0.8.1
+    Checking filmcraft-time v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-color v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking half v2.7.1
+   Compiling encoding_rs v0.8.44
+    Checking tiff v0.11.3
+    Checking polycool v0.4.0
+    Checking kurbo v0.13.1
+    Checking simdutf8 v0.1.5
+    Checking unicode-segmentation v1.13.3
+    Checking image v0.25.10
+    Checking foldhash v0.2.0
+   Compiling multiversion_no_op v1.0.0
+    Checking core_detect v1.0.0
+   Compiling cfg_aliases v0.2.2
+    Checking filmcraft-frame v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-dng v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-geom v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking effectcraft-geom v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking web-time v1.1.0
+    Checking symphonia-metadata v0.5.5
+    Checking effectcraft-time v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking effectcraft-color v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking equivalent v1.0.3
+    Checking symphonia-utils-xiph v0.5.5
+    Checking skrifa v0.44.0
+    Checking harfrust v0.12.0
+    Checking filmcraft-media v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling matrixmultiply v0.3.11
+    Checking unicode-bidi v0.3.18
+    Checking unicode-linebreak v0.1.5
+    Checking filmcraft-project v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking hashbrown v0.17.1
+    Checking windows-strings v0.5.1
+    Checking windows-result v0.4.1
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling filmcraft-text v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking rawpointer v0.2.1
+    Checking rustc-hash v2.1.3
+    Checking windows-core v0.62.2
+    Checking effectcraft-keyframe v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking roxmltree v0.21.2
+    Checking num-complex v0.4.6
+    Checking num-integer v0.1.47
+    Checking ndarray v0.17.2
+    Checking effectcraft-raster v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking strict-num v0.1.1
+   Compiling windows_x86_64_msvc v0.52.6
+    Checking extended v0.1.0
+    Checking arrayref v0.3.9
+    Checking symphonia-format-riff v0.5.5
+    Checking tiny-skia-path v0.12.0
+    Checking filmcraft-captions v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking symphonia-format-isomp4 v0.5.5
+    Checking symphonia-codec-vorbis v0.5.5
+    Checking symphonia-format-ogg v0.5.5
+    Checking symphonia-bundle-flac v0.5.5
+    Checking symphonia-bundle-mp3 v0.5.5
+    Checking symphonia-codec-pcm v0.5.5
+    Checking symphonia-codec-alac v0.5.5
+    Checking symphonia-codec-aac v0.5.5
+    Checking filmcraft-aac v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-apv v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-isobmff v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-prores v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-dnx v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking windows-threading v0.2.1
+   Compiling khronos_api v3.1.0
+   Compiling parking_lot_core v0.9.12
+    Checking filmcraft-audio-dsp v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking allocator-api2 v0.2.21
+    Checking raw-window-handle v0.6.2
+    Checking filmcraft-mxf v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking hashbrown v0.16.1
+    Checking effectcraft-segment v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking windows-future v0.3.2
+    Checking symphonia v0.5.5
+    Checking tiny-skia v0.12.0
+    Checking filmcraft-render v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking effectcraft-project v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking effectcraft-track v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking windows-collections v0.3.2
+    Checking windows-numerics v0.3.1
+    Checking linesweeper v0.4.0
+    Checking filmcraft-vp9 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-mpa v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-flac v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-av1 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-h264 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-h264enc v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-hevc v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-ac3 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-vp8 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-mpegts v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-mpeg2v v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling version_check v0.9.5
+    Checking filmcraft-opus v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-avi v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking static_assertions v1.1.0
+    Checking filmcraft-matroska v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-ogg v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-export v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking effectcraft-effects v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking effectcraft-path v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking filmcraft-codecs v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking windows v0.62.2
+    Checking windows-targets v0.52.6
+    Checking effectcraft-text v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking indexmap v2.14.2
+    Checking effectcraft-model v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking lock_api v0.4.14
+    Checking rustc-hash v1.1.0
+    Checking lz4_flex v0.11.6
+   Compiling xml-rs v0.8.29
+    Checking naga-types v30.0.1
+    Checking parking_lot v0.12.5
+    Checking frameforge-core v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\core)
+   Compiling gl_generator v0.14.0
+   Compiling naga v30.0.1
+    Checking libloading v0.8.9
+    Checking bit-vec v0.9.1
+   Compiling ash v0.38.0+1.3.281
+    Checking unicode-width v0.2.3
+    Checking profiling v1.0.18
+   Compiling libc v0.2.191
+    Checking codespan-reporting v0.13.1
+    Checking bit-set v0.10.0
+   Compiling glutin_wgl_sys v0.6.1
+    Checking color v0.3.3
+    Checking effectcraft-render v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+    Checking spirv v0.4.0+sdk-1.4.341.0
+    Checking euclid v0.22.14
+   Compiling khronos-egl v6.0.0
+    Checking uuid v1.29.0
+    Checking linebender_resource_handle v0.1.1
+    Checking peniko v0.6.1
+    Checking accesskit v0.24.1
+    Checking frameforge-bridge v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\bridge)
+    Checking guillotiere v0.7.0
+    Checking wgpu-types v30.0.1
+   Compiling ahash v0.8.12
+   Compiling wgpu-hal v30.0.1
+    Checking presser v0.3.1
+   Compiling unicode-general-category v1.1.0
+    Checking fearless_simd v0.4.1
+    Checking wgpu-naga-bridge v30.0.1
+    Checking vello_common v0.1.0
+   Compiling winit v0.30.13
+    Checking emath v0.36.2
+    Checking ordered-float v5.5.1
+    Checking range-alloc v0.1.5
+    Checking glow v0.17.0
+    Checking renderdoc-sys v1.1.0
+    Checking tracing-core v0.1.36
+    Checking pin-project-lite v0.2.17
+    Checking ecolor v0.36.2
+    Checking tracing v0.1.44
+    Checking vello_cpu v0.1.0
+    Checking windows-sys v0.52.0
+   Compiling wgpu-core v30.0.1
+    Checking nohash-hasher v0.2.0
+    Checking dpi v0.1.2
+    Checking cursor-icon v1.2.0
+    Checking self_cell v1.3.0
+   Compiling litrs v1.0.1
+   Compiling winnow v1.0.4
+    Checking smol_str v0.2.2
+    Checking epaint_default_fonts v0.36.2
+   Compiling document-features v0.2.12
+    Checking epaint v0.36.2
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling serde_spanned v1.1.2
+    Checking gpu-allocator v0.28.0
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+    Checking accesskit_consumer v0.35.0
+   Compiling wgpu v30.0.1
+    Checking windows-sys v0.61.2
+    Checking itertools v0.15.0
+    Checking error-code v3.4.0
+    Checking clipboard-win v5.4.3
+    Checking egui v0.36.2
+    Checking accesskit_windows v0.32.1
+   Compiling toml v1.1.8+spec-1.1.0
+    Checking windows-result v0.1.2
+    Checking windows-core v0.54.0
+    Checking wgpu-core-deps-windows-linux-android v30.0.1
+   Compiling winresource v0.1.34
+    Checking accesskit_winit v0.32.2
+    Checking arboard v3.7.0
+    Checking type-map v0.5.1
+    Checking filmcraft-cfb v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling cpal v0.16.0
+   Compiling rfd v0.17.2
+    Checking filmcraft-interchange v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling frameforge-pro v0.1.0 (D:\a\FrameForgePro\FrameForgePro\apps\frameforge-pro)
+    Checking windows v0.54.0
+    Checking egui-winit v0.36.2
+    Checking filmcraft-edit v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-format v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-speech v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-scopes v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking filmcraft-tts v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking craft-docpath v0.1.0 (https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b00)
+    Checking dasp_sample v0.11.0
+    Checking pollster v1.0.1
+    Checking filmcraft-engine v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+    Checking egui-wgpu v0.36.2
+    Checking eframe v0.36.2
+error: this `if` statement can be collapsed
+   --> apps\frameforge-pro\src\roto.rs:255:5
+    |
+255 | /     if let Some(suggestion) = app.roto.python_suggestion() {
+256 | |         if ui::mini_button(panel, "Use the interpreter found on PATH", &suggestion.display().to_string()).clicked() {
+257 | |             app.roto.python = suggestion.display().to_string();
+258 | |         }
+259 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+255 ~     if let Some(suggestion) = app.roto.python_suggestion()
+256 ~         && ui::mini_button(panel, "Use the interpreter found on PATH", &suggestion.display().to_string()).clicked() {
+257 |             app.roto.python = suggestion.display().to_string();
+258 ~         }
+    |
+
+error: could not compile `frameforge-pro` (bin "frameforge-pro") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `frameforge-pro` (bin "frameforge-pro" test) due to 1 previous error

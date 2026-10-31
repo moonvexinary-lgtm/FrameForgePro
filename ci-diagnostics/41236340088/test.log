@@ -1,0 +1,540 @@
+   Compiling unicode-ident v1.0.27
+   Compiling serde_core v1.0.229
+   Compiling cfg-if v1.0.5
+   Compiling libm v0.2.16
+   Compiling proc-macro2 v1.0.107
+   Compiling log v0.4.35
+   Compiling bitflags v2.13.2
+   Compiling quote v1.0.47
+   Compiling either v1.19.0
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling num-traits v0.2.19
+   Compiling crossbeam-utils v0.8.23
+   Compiling simd-adler32 v0.3.10
+   Compiling adler2 v2.0.1
+   Compiling crossbeam-epoch v0.9.21
+   Compiling scopeguard v1.2.0
+   Compiling once_cell v1.21.4
+   Compiling crossbeam-deque v0.8.8
+   Compiling miniz_oxide v0.8.9
+   Compiling rayon-core v1.13.0
+   Compiling serde_derive v1.0.229
+   Compiling bytemuck_derive v1.12.1
+   Compiling thiserror-impl v2.0.21
+   Compiling zerocopy-derive v0.8.63
+   Compiling bytemuck v1.25.2
+   Compiling rayon v1.12.0
+   Compiling thiserror v2.0.21
+   Compiling crc32fast v1.5.3
+   Compiling miniz_oxide v0.9.1
+   Compiling flate2 v1.1.10
+   Compiling serde v1.0.229
+   Compiling zerocopy v0.8.63
+   Compiling quick-error v2.0.1
+   Compiling memchr v2.8.3
+   Compiling arrayvec v0.7.8
+   Compiling smallvec v1.16.4
+   Compiling zune-core v0.5.3
+   Compiling weezl v0.1.12
+   Compiling zune-jpeg v0.5.15
+   Compiling zmij v1.0.23
+   Compiling fdeflate v0.3.7
+   Compiling windows-link v0.2.1
+   Compiling pxfm v0.1.30
+   Compiling byteorder-lite v0.1.0
+   Compiling fax v0.2.7
+   Compiling itoa v1.0.18
+   Compiling color_quant v1.1.0
+   Compiling gif v0.14.2
+   Compiling serde_json v1.0.154
+   Compiling image-webp v0.2.4
+   Compiling half v2.7.1
+   Compiling moxcms v0.8.1
+   Compiling tiff v0.11.3
+   Compiling png v0.18.1
+   Compiling filmcraft-time v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling font-types v0.12.7
+   Compiling lazy_static v1.5.1
+   Compiling bitflags v1.3.2
+   Compiling filmcraft-bitstream v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling symphonia-core v0.5.5
+   Compiling read-fonts v0.41.0
+   Compiling filmcraft-color v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling image v0.25.10
+   Compiling polycool v0.4.0
+   Compiling kurbo v0.13.1
+   Compiling core_detect v1.0.0
+   Compiling simdutf8 v0.1.5
+   Compiling unicode-segmentation v1.13.3
+   Compiling encoding_rs v0.8.44
+   Compiling skrifa v0.44.0
+   Compiling harfrust v0.12.0
+   Compiling filmcraft-frame v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-dng v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling foldhash v0.2.0
+   Compiling symphonia-metadata v0.5.5
+   Compiling filmcraft-media v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling effectcraft-geom v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling filmcraft-geom v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling effectcraft-time v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling web-time v1.1.0
+   Compiling filmcraft-project v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling effectcraft-color v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling symphonia-utils-xiph v0.5.5
+   Compiling equivalent v1.0.3
+   Compiling unicode-bidi v0.3.18
+   Compiling unicode-linebreak v0.1.5
+   Compiling rawpointer v0.2.1
+   Compiling rustc-hash v2.1.3
+   Compiling matrixmultiply v0.3.11
+   Compiling effectcraft-keyframe v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling hashbrown v0.17.1
+   Compiling windows-strings v0.5.1
+   Compiling windows-result v0.4.1
+   Compiling roxmltree v0.21.2
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling num-complex v0.4.6
+   Compiling num-integer v0.1.47
+   Compiling windows-core v0.62.2
+   Compiling ndarray v0.17.2
+   Compiling filmcraft-text v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling effectcraft-raster v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling extended v0.1.0
+   Compiling strict-num v0.1.1
+   Compiling arrayref v0.3.9
+   Compiling symphonia-format-riff v0.5.5
+   Compiling tiny-skia-path v0.12.0
+   Compiling effectcraft-segment v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling filmcraft-captions v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling symphonia-format-ogg v0.5.5
+   Compiling symphonia-codec-vorbis v0.5.5
+   Compiling symphonia-bundle-flac v0.5.5
+   Compiling symphonia-format-isomp4 v0.5.5
+   Compiling symphonia-bundle-mp3 v0.5.5
+   Compiling symphonia-codec-alac v0.5.5
+   Compiling symphonia-codec-pcm v0.5.5
+   Compiling symphonia-codec-aac v0.5.5
+   Compiling filmcraft-apv v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-isobmff v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-aac v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-prores v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-dnx v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-audio-dsp v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-mxf v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling symphonia v0.5.5
+   Compiling effectcraft-track v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling filmcraft-render v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling tiny-skia v0.12.0
+   Compiling effectcraft-project v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling linesweeper v0.4.0
+   Compiling filmcraft-mpa v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-h264 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-h264enc v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-flac v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-vp9 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-hevc v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-av1 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling windows-threading v0.2.1
+   Compiling filmcraft-mpeg2v v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-ac3 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-mpegts v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-vp8 v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-opus v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-matroska v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling allocator-api2 v0.2.21
+   Compiling raw-window-handle v0.6.2
+   Compiling filmcraft-avi v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-ogg v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-codecs v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling hashbrown v0.16.1
+   Compiling windows-future v0.3.2
+   Compiling filmcraft-export v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling effectcraft-effects v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling effectcraft-path v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling windows-collections v0.3.2
+   Compiling windows-numerics v0.3.1
+   Compiling effectcraft-text v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling frameforge-core v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\core)
+   Compiling effectcraft-model v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling static_assertions v1.1.0
+   Compiling lz4_flex v0.11.6
+   Compiling windows v0.62.2
+   Compiling effectcraft-render v0.12.0 (https://github.com/storytold/effectcraft?rev=ef74d82902ba486891b02afa87e42963cc9b84cc#ef74d829)
+   Compiling windows-targets v0.52.6
+   Compiling parking_lot_core v0.9.12
+   Compiling indexmap v2.14.2
+   Compiling lock_api v0.4.14
+   Compiling rustc-hash v1.1.0
+   Compiling naga-types v30.0.1
+   Compiling parking_lot v0.12.5
+   Compiling libloading v0.8.9
+   Compiling bit-vec v0.9.1
+   Compiling unicode-width v0.2.3
+   Compiling profiling v1.0.18
+   Compiling codespan-reporting v0.13.1
+   Compiling bit-set v0.10.0
+   Compiling frameforge-bridge v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\bridge)
+   Compiling color v0.3.3
+   Compiling euclid v0.22.14
+   Compiling spirv v0.4.0+sdk-1.4.341.0
+   Compiling linebender_resource_handle v0.1.1
+   Compiling uuid v1.29.0
+   Compiling peniko v0.6.1
+   Compiling accesskit v0.24.1
+   Compiling naga v30.0.1
+   Compiling guillotiere v0.7.0
+   Compiling ash v0.38.0+1.3.281
+   Compiling libc v0.2.191
+   Compiling wgpu-types v30.0.1
+   Compiling fearless_simd v0.4.1
+   Compiling presser v0.3.1
+   Compiling gpu-allocator v0.28.0
+   Compiling vello_common v0.1.0
+   Compiling wgpu-naga-bridge v30.0.1
+   Compiling khronos-egl v6.0.0
+   Compiling glutin_wgl_sys v0.6.1
+   Compiling emath v0.36.2
+   Compiling ordered-float v5.5.1
+   Compiling renderdoc-sys v1.1.0
+   Compiling tracing-core v0.1.36
+   Compiling pin-project-lite v0.2.17
+   Compiling range-alloc v0.1.5
+   Compiling glow v0.17.0
+   Compiling tracing v0.1.44
+   Compiling ecolor v0.36.2
+   Compiling vello_cpu v0.1.0
+   Compiling ahash v0.8.12
+   Compiling unicode-general-category v1.1.0
+   Compiling wgpu-hal v30.0.1
+   Compiling windows-sys v0.52.0
+   Compiling smol_str v0.2.2
+   Compiling self_cell v1.3.0
+   Compiling nohash-hasher v0.2.0
+   Compiling cursor-icon v1.2.0
+   Compiling epaint_default_fonts v0.36.2
+   Compiling dpi v0.1.2
+   Compiling winit v0.30.13
+   Compiling epaint v0.36.2
+   Compiling wgpu-core-deps-windows-linux-android v30.0.1
+   Compiling accesskit_consumer v0.35.0
+   Compiling windows-sys v0.61.2
+   Compiling itertools v0.15.0
+   Compiling error-code v3.4.0
+   Compiling clipboard-win v5.4.3
+   Compiling accesskit_windows v0.32.1
+   Compiling egui v0.36.2
+   Compiling wgpu-core v30.0.1
+   Compiling windows-result v0.1.2
+   Compiling windows-core v0.54.0
+   Compiling arboard v3.7.0
+   Compiling accesskit_winit v0.32.2
+   Compiling type-map v0.5.1
+   Compiling filmcraft-cfb v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-interchange v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling windows v0.54.0
+   Compiling wgpu v30.0.1
+   Compiling egui-winit v0.36.2
+   Compiling filmcraft-speech v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling egui-wgpu v0.36.2
+   Compiling filmcraft-format v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-edit v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-scopes v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling filmcraft-tts v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling dasp_sample v0.11.0
+   Compiling pollster v1.0.1
+   Compiling craft-docpath v0.1.0 (https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b00)
+   Compiling cpal v0.16.0
+   Compiling eframe v0.36.2
+   Compiling filmcraft-engine v0.9.0 (https://github.com/storytold/filmcraft?rev=6c3948a36c80e4996d924766ba7157eec4fca85e#6c3948a3)
+   Compiling rfd v0.17.2
+   Compiling frameforge-pro v0.1.0 (D:\a\FrameForgePro\FrameForgePro\apps\frameforge-pro)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 53s
+     Running unittests src\lib.rs (target\debug\deps\frameforge_bridge-55837e53708d27d9.exe)
+
+running 3 tests
+test sha256::tests::a_message_split_across_updates_hashes_the_same_as_one_update ... ok
+test sha256::tests::matches_the_fips_180_4_vectors ... ok
+test sha256::tests::a_file_is_hashed_from_disk ... ok
+
+successes:
+
+successes:
+    sha256::tests::a_file_is_hashed_from_disk
+    sha256::tests::a_message_split_across_updates_hashes_the_same_as_one_update
+    sha256::tests::matches_the_fips_180_4_vectors
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\m2_poc.rs (target\debug\deps\m2_poc-a88371463ed5339e.exe)
+
+running 1 test
+test m2_integration_proof ... ok
+
+successes:
+
+successes:
+    m2_integration_proof
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.66s
+
+     Running tests\m3_media_catalog.rs (target\debug\deps\m3_media_catalog-775fec4d31b5a772.exe)
+
+running 2 tests
+test m3_effects_registry_audit ... ok
+test m3_file_media_offline_and_fcproj_import ... ok
+
+successes:
+
+---- m3_effects_registry_audit stdout ----
+catalog sweep: 307 run through the composed-source bridge, 0 reported unsupported, of 307 total
+
+
+successes:
+    m3_effects_registry_audit
+    m3_file_media_offline_and_fcproj_import
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.17s
+
+     Running tests\m4_comp.rs (target\debug\deps\m4_comp-a41c03869a6426d8.exe)
+
+running 6 tests
+test m4_relink_heals_missing_media ... ok
+test m4_import_ecproj_onto_the_timeline ... ok
+test m4_tone_generator_plays ... ok
+test m4_text_minimal_repro ... ok
+test m4_text_visibility_matrix ... ok
+test m4_comp_layers_over_footage_in_the_timeline ... ok
+
+successes:
+
+---- m4_text_minimal_repro stdout ----
+diagnostic text repro: covered 818, size 200x100
+
+---- m4_text_visibility_matrix stdout ----
+diagnostic matrix a: HI 60 static over footage: band 228 px, centroid Some(107.66666666666667)
+diagnostic matrix b: FrameForge 24 static over footage: band 213 px, centroid Some(141.76760563380282)
+diagnostic matrix c: FrameForge 24 keys at y=150 (over the footage's white block): band 0 px, centroid None
+diagnostic matrix d: FrameForge 24 keys at y=150, no footage: band 0 px, centroid None
+diagnostic matrix e: FrameForge 24 keys at y=60 over footage: band 213 px, centroid Some(162.76760563380282)
+diagnostic matrix f: HI 60 keys at y=60 over footage: band 228 px, centroid Some(128.66666666666666)
+
+
+successes:
+    m4_comp_layers_over_footage_in_the_timeline
+    m4_import_ecproj_onto_the_timeline
+    m4_relink_heals_missing_media
+    m4_text_minimal_repro
+    m4_text_visibility_matrix
+    m4_tone_generator_plays
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests\m9_durability.rs (target\debug\deps\m9_durability-b7a4d3a36e38d321.exe)
+
+running 4 tests
+test scalar_writes_preserve_keyframes ... ok
+test newer_schema_is_refused ... ok
+test corrupt_autosave_is_a_clear_error_not_a_crash ... ok
+test autosave_round_trip_newer_than_and_clear ... ok
+
+successes:
+
+successes:
+    autosave_round_trip_newer_than_and_clear
+    corrupt_autosave_is_a_clear_error_not_a_crash
+    newer_schema_is_refused
+    scalar_writes_preserve_keyframes
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s
+
+     Running tests\r1_roto.rs (target\debug\deps\r1_roto-cfd1437010138b52.exe)
+
+running 5 tests
+test cache_key_changes_with_every_invalidation_input ... ok
+test changed_corrections_miss_the_previous_cache ... ok
+test mask_cache_reports_a_missing_frame_inside_coverage ... ok
+test mask_cache_applies_exact_alpha_inside_coverage_and_leaves_other_frames_unmasked ... ok
+test preview_and_export_share_the_cached_matte ... ok
+
+successes:
+
+successes:
+    cache_key_changes_with_every_invalidation_input
+    changed_corrections_miss_the_previous_cache
+    mask_cache_applies_exact_alpha_inside_coverage_and_leaves_other_frames_unmasked
+    mask_cache_reports_a_missing_frame_inside_coverage
+    preview_and_export_share_the_cached_matte
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests\r2_roto_worker.rs (target\debug\deps\r2_roto_worker-8ed61f9a76f538bc.exe)
+
+running 9 tests
+test frame_exporter_rejects_an_empty_range ... ok
+test frame_exporter_writes_scaled_pngs_in_media_order ... ok
+test a_quiet_worker_reports_a_timeout_instead_of_blocking ... ok
+test a_silent_worker_times_out_during_the_handshake ... ok
+test fake_worker_speaks_the_json_lines_protocol ... ok
+test roto_job_drives_a_fake_worker_to_done ... ok
+test roto_job_cancel_kills_a_worker_that_never_acknowledges ... ok
+test roto_job_refuses_a_bad_request_before_sending_anything ... ok
+test roto_job_kills_a_stalled_worker_instead_of_waiting ... ok
+
+successes:
+
+successes:
+    a_quiet_worker_reports_a_timeout_instead_of_blocking
+    a_silent_worker_times_out_during_the_handshake
+    fake_worker_speaks_the_json_lines_protocol
+    frame_exporter_rejects_an_empty_range
+    frame_exporter_writes_scaled_pngs_in_media_order
+    roto_job_cancel_kills_a_worker_that_never_acknowledges
+    roto_job_drives_a_fake_worker_to_done
+    roto_job_kills_a_stalled_worker_instead_of_waiting
+    roto_job_refuses_a_bad_request_before_sending_anything
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.90s
+
+     Running tests\r5_runtime.rs (target\debug\deps\r5_runtime-c3c7ac7a05010b57.exe)
+
+running 9 tests
+test a_consented_verified_runtime_resolves_and_describes_itself ... ok
+test a_checkout_at_another_commit_is_refused_with_both_ids ... ok
+test consent_comes_before_anything_is_read ... ok
+test a_directory_without_the_model_folder_is_not_an_xmem_checkout ... ok
+test a_bad_expected_hash_is_reported_before_the_weights_are_hashed ... ok
+test python_candidates_prefers_the_configured_interpreter_and_never_runs_anything ... ok
+test the_consented_note_reaches_the_status_line ... ok
+test weights_that_are_not_the_promised_bytes_are_refused ... ok
+test heads_that_are_loose_packed_or_detached_all_read_the_same_commit ... ok
+
+successes:
+
+successes:
+    a_bad_expected_hash_is_reported_before_the_weights_are_hashed
+    a_checkout_at_another_commit_is_refused_with_both_ids
+    a_consented_verified_runtime_resolves_and_describes_itself
+    a_directory_without_the_model_folder_is_not_an_xmem_checkout
+    consent_comes_before_anything_is_read
+    heads_that_are_loose_packed_or_detached_all_read_the_same_commit
+    python_candidates_prefers_the_configured_interpreter_and_never_runs_anything
+    the_consented_note_reaches_the_status_line
+    weights_that_are_not_the_promised_bytes_are_refused
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src\lib.rs (target\debug\deps\frameforge_core-b11004756b1bfb8d.exe)
+
+running 2 tests
+test tests::time_bases_are_identical ... ok
+test tests::foundation_holds ... ok
+
+successes:
+
+successes:
+    tests::foundation_holds
+    tests::time_bases_are_identical
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\frameforge_pro-7153994c4c046340.exe)
+
+running 34 tests
+test app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied ... ok
+test app::tests::ctrl_z_after_a_composition_edit_leaves_the_timeline_edit_alone ... ok
+test edit::tests::audio_only_placement_uses_the_audio_destination_and_unpatched_video_is_an_error ... ok
+test edit::tests::audio_crossfade_changes_the_rendered_samples_at_the_cut ... ok
+test edit::tests::insert_and_overwrite_at_the_playhead_use_the_real_engine_insert_flag ... ok
+test edit::tests::marker_csv_export_escapes_text_and_writes_the_file ... ok
+test edit::tests::marker_fields_update_is_an_undoable_project_edit ... ok
+test edit::tests::placement_uses_the_patched_video_and_audio_tracks ... ok
+test edit::tests::marker_helpers_add_clear_and_navigate_through_the_real_engine ... ok
+test edit::tests::ripple_delete_closes_the_gap_across_linked_av_and_markers_and_refuses_locks ... ok
+test edit::tests::roll_moves_only_the_shared_edit_point_and_undoes ... ok
+test edit::tests::snap_tick_uses_the_nearest_target_inside_the_tolerance ... ok
+test edit::tests::snap_targets_include_the_playhead_and_skip_the_dragged_clip ... ok
+test edit::tests::sequence_in_out_marks_lift_leaves_a_gap_and_extract_closes_it_and_undoes ... ok
+test edit::tests::slip_and_slide_keep_the_right_things_fixed ... ok
+test edit::tests::source_insert_places_the_marked_range_and_ripples_markers_with_undo ... ok
+test edit::tests::source_marks_survive_project_save_and_reopen ... ok
+test edit::tests::source_mark_edges_are_normalized_and_one_sided_marks_use_the_source_edges ... ok
+test edit::tests::track_header_visibility_mute_solo_and_lock_are_undoable_set_track_edits ... ok
+test export::tests::a_cancelled_export_is_reported_as_a_cancellation ... ok
+test export::tests::output_path_adds_the_selected_extension_once ... ok
+test edit::tests::transition_duration_and_alignment_are_editable_through_the_engine ... ok
+test history::tests::a_closed_gesture_does_not_swallow_a_later_change ... ok
+test history::tests::a_command_that_does_not_edit_adds_no_step ... ok
+test edit::tests::source_open_previews_real_frames_and_its_marks_stay_off_the_program_playhead ... ok
+test history::tests::a_merged_engine_edit_adds_no_second_step ... ok
+test history::tests::a_new_edit_after_undo_clears_redo ... ok
+test history::tests::effect_undo_does_not_undo_the_previous_timeline_edit ... ok
+test history::tests::history_limit_keeps_composition_steps_aligned ... ok
+test roto::tests::consent_is_refused_until_the_box_is_ticked ... ok
+test roto::tests::a_request_names_the_first_missing_field ... ok
+test roto::tests::frame_range_matches_the_exporter_numbering ... ok
+test history::tests::one_drag_is_one_composition_undo_step ... ok
+test edit::tests::video_cross_dissolve_changes_the_rendered_pixels_at_the_cut ... ok
+
+successes:
+
+successes:
+    app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied
+    app::tests::ctrl_z_after_a_composition_edit_leaves_the_timeline_edit_alone
+    edit::tests::audio_crossfade_changes_the_rendered_samples_at_the_cut
+    edit::tests::audio_only_placement_uses_the_audio_destination_and_unpatched_video_is_an_error
+    edit::tests::insert_and_overwrite_at_the_playhead_use_the_real_engine_insert_flag
+    edit::tests::marker_csv_export_escapes_text_and_writes_the_file
+    edit::tests::marker_fields_update_is_an_undoable_project_edit
+    edit::tests::marker_helpers_add_clear_and_navigate_through_the_real_engine
+    edit::tests::placement_uses_the_patched_video_and_audio_tracks
+    edit::tests::ripple_delete_closes_the_gap_across_linked_av_and_markers_and_refuses_locks
+    edit::tests::roll_moves_only_the_shared_edit_point_and_undoes
+    edit::tests::sequence_in_out_marks_lift_leaves_a_gap_and_extract_closes_it_and_undoes
+    edit::tests::slip_and_slide_keep_the_right_things_fixed
+    edit::tests::snap_targets_include_the_playhead_and_skip_the_dragged_clip
+    edit::tests::snap_tick_uses_the_nearest_target_inside_the_tolerance
+    edit::tests::source_insert_places_the_marked_range_and_ripples_markers_with_undo
+    edit::tests::source_mark_edges_are_normalized_and_one_sided_marks_use_the_source_edges
+    edit::tests::source_marks_survive_project_save_and_reopen
+    edit::tests::source_open_previews_real_frames_and_its_marks_stay_off_the_program_playhead
+    edit::tests::track_header_visibility_mute_solo_and_lock_are_undoable_set_track_edits
+    edit::tests::transition_duration_and_alignment_are_editable_through_the_engine
+    edit::tests::video_cross_dissolve_changes_the_rendered_pixels_at_the_cut
+    export::tests::a_cancelled_export_is_reported_as_a_cancellation
+    export::tests::output_path_adds_the_selected_extension_once
+    history::tests::a_closed_gesture_does_not_swallow_a_later_change
+    history::tests::a_command_that_does_not_edit_adds_no_step
+    history::tests::a_merged_engine_edit_adds_no_second_step
+    history::tests::a_new_edit_after_undo_clears_redo
+    history::tests::effect_undo_does_not_undo_the_previous_timeline_edit
+    history::tests::history_limit_keeps_composition_steps_aligned
+    history::tests::one_drag_is_one_composition_undo_step
+    roto::tests::a_request_names_the_first_missing_field
+    roto::tests::consent_is_refused_until_the_box_is_ticked
+    roto::tests::frame_range_matches_the_exporter_numbering
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+   Doc-tests frameforge_bridge
+
+running 0 tests
+
+successes:
+
+successes:
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests frameforge_core
+
+running 0 tests
+
+successes:
+
+successes:
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
