@@ -13,11 +13,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use filmcraft_project::{ItemId, MediaClip, MediaRef};
 use filmcraft_render::SourceProvider;
 use filmcraft_time::{FrameRate, Tick, TimeRange};
 use frameforge_bridge::{
-    ProjectSources, RotoConsent, RotoJobLimits, RotoJobOutcome, RotoJobSpec, RotoRuntime, RotoRuntimeRequest, XmemWorker, export_frames,
-    python_candidates_from_env, run_job,
+    FrameForgeProject, MaskAdoption, MaskCache, ProjectSources, RotoCacheKey, RotoConsent, RotoJobLimits, RotoJobOutcome, RotoJobSpec, RotoRef, RotoRuntime,
+    RotoRuntimeRequest, XMEM_COMMIT, XmemWorker, default_cache_root, export_frames, python_candidates_from_env, run_job,
 };
 
 use crate::app::App;
@@ -28,10 +29,19 @@ const HANDSHAKE: Duration = Duration::from_secs(120);
 /// A working size the measured target laptop handled (480x270, ~4.4 s/pass).
 const DEFAULT_WORKING: (u32, u32) = (480, 270);
 
+/// What a finished job produced: the report line, and the cache key its masks
+/// were published under (when the run was complete enough to adopt).
+#[derive(Clone, Debug, Default)]
+pub struct Published {
+    pub summary: String,
+    pub cache_key: Option<String>,
+    pub item: Option<ItemId>,
+}
+
 /// A job running on its own thread.
 pub struct RotoJob {
     cancel: Arc<AtomicBool>,
-    done: Arc<Mutex<Option<Result<String, String>>>>,
+    done: Arc<Mutex<Option<Result<Published, String>>>>,
     progress: Arc<Mutex<String>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -56,6 +66,10 @@ pub struct RotoState {
     pub job: Option<RotoJob>,
     pub report: Option<String>,
     pub job_error: Option<String>,
+    /// The last finished job, kept so its matte can be attached to the clip.
+    pub published: Option<Published>,
+    /// The media item the last job ran for (the RotoRef's owner).
+    pub last_item: Option<ItemId>,
 }
 
 impl Default for RotoState {
@@ -77,6 +91,8 @@ impl Default for RotoState {
             job: None,
             report: None,
             job_error: None,
+            published: None,
+            last_item: None,
         }
     }
 }
@@ -140,13 +156,15 @@ impl RotoState {
             let _ = handle.join();
         }
         match result {
-            Ok(report) => {
-                self.report = Some(report);
+            Ok(published) => {
+                self.report = Some(published.summary.clone());
+                self.published = Some(published);
                 self.job_error = None;
             }
             Err(error) => {
                 self.job_error = Some(error);
                 self.report = None;
+                self.published = None;
             }
         }
     }
@@ -243,10 +261,43 @@ pub fn show(app: &mut App, panel: &mut egui::Ui) {
     if let Some(error) = app.roto.job_error.clone() {
         panel.label(egui::RichText::new(error).size(10.5).color(ui::DANGER));
     }
+
+    // The finished run published a cache; attaching it is a document edit, so it
+    // is the user's click (undoable, one step) rather than a background write.
+    let attachable = app.roto.published.as_ref().and_then(|published| {
+        let key = published.cache_key.clone()?;
+        let item = published.item?;
+        Some((key, item))
+    });
+    if let Some((key, item)) = attachable {
+        let already = app.compositions.get(&item).and_then(|comp| comp.roto.as_ref()).is_some_and(|roto| roto.key == key);
+        if already {
+            panel.label(ui::hint("This clip already uses the cached matte from this run."));
+        } else if ui::accent_button(panel, "Use this matte on the clip").clicked() {
+            attach_matte(app, item, &key);
+        }
+    }
+
     ui::footer_hint(
         panel,
-        "Masks are written as frame_<index>.png next to the exported frames. The R1 cache's manifest writer is still missing, so a run does not yet feed the renderer's alpha — the panel says so rather than implying it.",
+        "A complete run is published into the R1 mask cache (manifest last, atomically) and can be attached to the clip above; a short or mis-sized run publishes nothing and says which frame is missing.",
     );
+}
+
+/// Attach a published cache to the clip as an undoable composition edit — the
+/// same seam `RotoRef` uses, so preview and export both read the matte.
+fn attach_matte(app: &mut App, item: ItemId, key: &str) {
+    let before = app.compositions.get(&item).cloned();
+    {
+        let composition = app.compositions.entry(item).or_default();
+        composition.roto = Some(RotoRef::new(key));
+    }
+    let after = app.compositions.get(&item).cloned();
+    // One click is one gesture, exactly as the effects panel brackets a drag.
+    let gesture = app.history.begin_gesture(true);
+    app.record_comp_change(item, before, after, gesture);
+    app.history.end_gesture(false);
+    app.status = format!("Roto matte attached to the clip (cache {key})");
 }
 
 fn runtime_fields(app: &mut App, panel: &mut egui::Ui) {
@@ -350,7 +401,7 @@ fn start_job(app: &mut App) {
     let doc = app.document();
     let limits = RotoJobLimits::default();
     let cancel = Arc::new(AtomicBool::new(false));
-    let done: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
+    let done: Arc<Mutex<Option<Result<Published, String>>>> = Arc::new(Mutex::new(None));
     let progress = Arc::new(Mutex::new(String::new()));
 
     let thread_cancel = Arc::clone(&cancel);
@@ -369,6 +420,7 @@ fn start_job(app: &mut App) {
     };
 
     app.roto.job = Some(RotoJob { cancel, done, progress, handle: Some(handle) });
+    app.roto.last_item = Some(item);
     app.status = format!("XMem job started: frames {first}..{last} at {width}x{height}");
 }
 
@@ -419,16 +471,69 @@ fn execute_job(run: JobRun<'_>, cancel: &AtomicBool, progress: &Arc<Mutex<String
     let _ = worker.request_shutdown();
     match outcome {
         RotoJobOutcome::Done(report) => {
-            Ok(format!("Done: {} frames in {:.1}s ({} progress events) → {}", report.frames, report.elapsed, report.progress_events, spec.output_dir))
+            let summary = format!("Done: {} frames in {:.1}s ({} progress events)", report.frames, report.elapsed, report.progress_events);
+            let count = spec.last_frame.saturating_sub(spec.first_frame).saturating_add(1);
+            let Some(key) = cache_key_for(doc, item, runtime, spec.width, spec.height, rate) else {
+                return Err(format!("{summary}, but the clip's media could not be identified for the cache key"));
+            };
+            set_progress("Publishing the matte into the R1 cache…".to_string());
+            let adoption = MaskAdoption {
+                output_dir: Path::new(&spec.output_dir),
+                first_frame: spec.first_frame,
+                frame_count: count,
+                frame_rate: rate,
+                width: spec.width,
+                height: spec.height,
+            };
+            match MaskCache::adopt(&default_cache_root(), &key, &adoption) {
+                Ok(frames) => Ok(Published {
+                    summary: format!("{summary}; published {frames} masks as cache {}", key.cache_key()),
+                    cache_key: Some(key.cache_key()),
+                    item: Some(item),
+                }),
+                Err(error) => Err(format!("{summary}, but publishing the matte failed: {error}")),
+            }
         }
         RotoJobOutcome::Cancelled(report) => {
             if report.killed {
                 Err(format!("Cancelled: the worker did not acknowledge, so it was killed after {} progress events", report.progress_events))
             } else {
-                Ok(format!("Cancelled by the worker after {} progress events", report.progress_events))
+                Ok(Published {
+                    summary: format!("Cancelled by the worker after {} progress events", report.progress_events),
+                    cache_key: None,
+                    item: Some(item),
+                })
             }
         }
     }
+}
+
+/// The cache key for one job — every input that can change the masks, so a
+/// changed model, size, rate or media addresses a different directory.
+fn cache_key_for(doc: &FrameForgeProject, item: ItemId, runtime: &RotoRuntime, width: u32, height: u32, rate: FrameRate) -> Option<RotoCacheKey> {
+    let (_, clip, _) = doc.project.resolve_media(item)?;
+    Some(RotoCacheKey {
+        source_identity: source_identity(item, clip),
+        model_sha256: runtime.weights_sha256.clone(),
+        width,
+        height,
+        frame_rate: rate,
+        correction_ids: Vec::new(),
+        xmem_commit: XMEM_COMMIT.to_string(),
+    })
+}
+
+/// A stable, content-sensitive identity for the clip's media: a different file
+/// (path, size, fingerprint) or a different generator is a different cache.
+fn source_identity(item: ItemId, clip: &MediaClip) -> String {
+    let media = match &clip.media {
+        MediaRef::File { path } => match &clip.identity {
+            Some(identity) => format!("file:{path}:{:016x}:{}", identity.fingerprint, identity.size),
+            None => format!("file:{path}:size:{}", clip.info.file_size.map_or_else(|| "unknown".to_string(), |size| size.to_string())),
+        },
+        MediaRef::Generator(generator) => format!("generator:{generator:?}"),
+    };
+    format!("item:{}:{media}", item.0)
 }
 
 #[cfg(test)]
@@ -462,6 +567,40 @@ mod tests {
         state.consent = true;
         assert!(state.consent().accepted);
         assert_eq!(state.consent().note, "bought a licence");
+    }
+
+    #[test]
+    fn the_cache_identity_follows_the_media_not_just_the_item() {
+        use filmcraft_media::Generator;
+        use filmcraft_media::generators::GeneratorSource;
+        use filmcraft_project::{ItemId, MediaClip, MediaRef};
+
+        let clip_for = |color: [f32; 4]| {
+            let generator = Generator::ColorMatte { color };
+            let info = GeneratorSource::new(generator.clone(), 64, 36, R, Tick(TICKS_PER_SECOND)).info().clone();
+            MediaClip {
+                media: MediaRef::Generator(generator),
+                info,
+                interpret: Default::default(),
+                mark_in: None,
+                mark_out: None,
+                markers: Vec::new(),
+                offline: false,
+                proxy: None,
+                identity: None,
+            }
+        };
+
+        let red = clip_for([1.0, 0.0, 0.0, 1.0]);
+        let identity = super::source_identity(ItemId(7), &red);
+        assert!(identity.contains("generator"), "{identity}");
+        assert!(identity.starts_with("item:7:"), "the item names the cache owner: {identity}");
+
+        // The same media on another item, and different media on the same item,
+        // must both address a different cache.
+        assert_ne!(identity, super::source_identity(ItemId(8), &red));
+        let green = clip_for([0.0, 1.0, 0.0, 1.0]);
+        assert_ne!(identity, super::source_identity(ItemId(7), &green));
     }
 
     #[test]

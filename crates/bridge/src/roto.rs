@@ -117,6 +117,23 @@ pub enum MaskError {
     },
 }
 
+/// Upper bound on the frames one adoption may publish, so a bad manifest cannot
+/// make the writer loop for hours.
+const MAX_MASK_FRAMES: i64 = 100_000;
+
+/// A worker's output, as the cache should record it. `output_dir` holds
+/// `frame_<index>.png` at the working size — the same names and numbering
+/// [`crate::roto_worker::export_frames`] writes for the worker's *input*.
+#[derive(Clone, Copy, Debug)]
+pub struct MaskAdoption<'a> {
+    pub output_dir: &'a Path,
+    pub first_frame: i64,
+    pub frame_count: i64,
+    pub frame_rate: FrameRate,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// A readable mask cache: a validated manifest and the directory it names.
 #[derive(Debug)]
 pub struct MaskCache {
@@ -172,6 +189,64 @@ impl MaskCache {
         Ok(Self { dir, manifest })
     }
 
+    /// Adopt a worker's masks into `root/<key>/` — the write side of this seam.
+    ///
+    /// Every PNG the manifest will promise is decoded and size-checked **before**
+    /// anything is published, so a half-finished worker run can never be read as
+    /// a cache. The masks are copied first and the manifest is written last, to a
+    /// temporary file that is renamed into place, so [`MaskCache::open`] sees
+    /// either no manifest ([`MaskError::Missing`]) or a complete, consistent one.
+    /// Returns the number of frames published.
+    ///
+    /// The token `key` is the same [`RotoCacheKey`] a [`RotoRef`] stores, so
+    /// changing any input (source, model hash, size, rate, corrections, commit)
+    /// addresses a different directory and stale alpha can never be served.
+    pub fn adopt(root: &Path, key: &RotoCacheKey, adoption: &MaskAdoption<'_>) -> Result<i64, MaskError> {
+        let cache_key = key.cache_key();
+        let MaskAdoption { output_dir, first_frame, frame_count, frame_rate, width, height } = *adoption;
+        if first_frame < 0 {
+            return Err(MaskError::Format(format!("adoption starts at a negative frame {first_frame}")));
+        }
+        if !(0..=MAX_MASK_FRAMES).contains(&frame_count) {
+            return Err(MaskError::Format(format!("adoption declares {frame_count} frames, outside 0..={MAX_MASK_FRAMES}")));
+        }
+        if width == 0 || height == 0 {
+            return Err(MaskError::Format(format!("adoption declares an empty mask {width}x{height}")));
+        }
+        if u64::from(width) * u64::from(height) > MAX_MASK_PIXELS {
+            return Err(MaskError::Format(format!("adoption declares a {width}x{height} mask, larger than the {MAX_MASK_PIXELS}-pixel limit")));
+        }
+        if frame_rate.num <= 0 || frame_rate.den <= 0 {
+            return Err(MaskError::Format("adoption declares an invalid frame rate".to_string()));
+        }
+
+        let dir = root.join(&cache_key);
+        std::fs::create_dir_all(&dir)?;
+
+        // Pass 1: the whole promised range exists and matches the working size.
+        for index in 0..frame_count {
+            read_worker_mask(output_dir, first_frame, index, width, height)?;
+        }
+        // Pass 2: publish the masks, one plane at a time (the writer never holds
+        // the whole run in memory, and neither does the reader).
+        for index in 0..frame_count {
+            let frame = first_frame.checked_add(index).ok_or_else(|| MaskError::Format("adoption frame index overflows".to_string()))?;
+            let gray = read_worker_mask(output_dir, first_frame, index, width, height)?;
+            gray.save(dir.join(format!("frame_{frame:08}.png"))).map_err(|source| MaskError::Image { frame, source })?;
+        }
+
+        let manifest = MaskManifest { version: MASK_CACHE_VERSION, key: cache_key, width, height, frame_rate, frame_start: first_frame, frame_count };
+        let text = serde_json::to_vec_pretty(&manifest).map_err(|error| MaskError::Format(format!("mask manifest JSON: {error}")))?;
+        let temp = dir.join("manifest.json.tmp");
+        std::fs::write(&temp, text)?;
+        let published = dir.join("manifest.json");
+        if published.exists() {
+            std::fs::remove_file(&published)?;
+        }
+        std::fs::rename(&temp, &published)?;
+        Ok(frame_count)
+    }
+
     pub fn key(&self) -> &str {
         &self.manifest.key
     }
@@ -209,6 +284,19 @@ impl MaskCache {
         }
         Ok(Some(MaskFrame { width: gray.width(), height: gray.height(), alpha: gray.into_raw() }))
     }
+}
+
+/// Read one mask the worker wrote, decoded to 8-bit gray and checked against the
+/// declared working size. `index` is relative to the adopted range.
+fn read_worker_mask(output_dir: &Path, first_frame: i64, index: i64, width: u32, height: u32) -> Result<image::GrayImage, MaskError> {
+    let frame = first_frame.checked_add(index).ok_or_else(|| MaskError::Format("worker mask frame index overflows".to_string()))?;
+    let path = output_dir.join(format!("frame_{frame:08}.png"));
+    let image = image::open(&path).map_err(|source| MaskError::Image { frame, source })?;
+    let gray = image.to_luma8();
+    if gray.width() != width || gray.height() != height {
+        return Err(MaskError::Format(format!("{} is {}x{} but the working size is {width}x{height}", path.display(), gray.width(), gray.height())));
+    }
+    Ok(gray)
 }
 
 /// One decoded alpha plane at the worker's working resolution.

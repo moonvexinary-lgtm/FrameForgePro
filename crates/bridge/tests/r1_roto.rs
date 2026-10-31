@@ -202,6 +202,96 @@ fn changed_corrections_miss_the_previous_cache() {
     assert!(MaskCache::open(&root, &new).is_err(), "a correction edit must not reuse the old mask bytes");
 }
 
+/// Write the shape a real worker leaves behind: `frame_<index>.png` masks at the
+/// working size, in its own output directory, with no manifest.
+fn write_worker_output(root: &Path, frames: &[Vec<u8>], first_frame: i64) -> PathBuf {
+    let dir = root.join("worker-out");
+    std::fs::create_dir_all(&dir).expect("worker output dir");
+    for (index, alpha) in frames.iter().enumerate() {
+        let frame = first_frame + index as i64;
+        let image = image::GrayImage::from_raw(W, H, alpha.clone()).expect("mask dimensions");
+        image.save(dir.join(format!("frame_{frame:08}.png"))).expect("worker mask PNG");
+    }
+    dir
+}
+
+#[test]
+fn a_workers_masks_are_adopted_and_drive_the_composed_matte() {
+    let root = temp_root("adopt");
+    let cache_key = key(vec![5]);
+    let masks = (0..FRAMES).map(|_| left_half_transparent()).collect::<Vec<_>>();
+    let worker_out = write_worker_output(&root, &masks, 0);
+
+    let adopted =
+        MaskCache::adopt(&root, &cache_key, &MaskAdoption { output_dir: &worker_out, first_frame: 0, frame_count: FRAMES, frame_rate: R, width: W, height: H })
+            .expect("adopt the worker's masks");
+    assert_eq!(adopted, FRAMES);
+
+    // The adopted cache is exactly what the renderer reads.
+    let cache = MaskCache::open(&root, &cache_key.cache_key()).expect("the adopted cache is readable");
+    assert_eq!(cache.frame_size(), (W, H));
+    let mask = cache.frame(R.tick_of(0)).expect("a mask").expect("inside coverage");
+    assert_eq!(mask.alpha()[0], 0, "the worker's transparent half stays transparent");
+    assert_eq!(mask.alpha()[(W * H - 1) as usize], 255, "the opaque half stays opaque");
+
+    let generator = Arc::new(GeneratorSource::new(Generator::ColorMatte { color: [1.0, 0.0, 0.0, 1.0] }, W, H, R, DURATION));
+    let source = ComposedSource::new(generator, Composition::default(), 7).with_roto_cache(cache);
+    let px = source.video_frame(FrameRequest::full(R.tick_of(0))).expect("masked frame").to_rgba8();
+    let at = |x: u32, y: u32| {
+        let i = ((y * W + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    };
+    assert_eq!(at(0, H / 2)[3], 0, "the adopted matte reaches the composed picture");
+    assert_eq!(at(W - 1, H / 2)[3], 255);
+}
+
+#[test]
+fn adoption_refuses_an_incomplete_run_without_publishing_a_manifest() {
+    let root = temp_root("adopt-incomplete");
+    let cache_key = key(vec![6]);
+    // The worker stopped after two frames, but three were promised.
+    let worker_out = write_worker_output(&root, &[left_half_transparent(), left_half_transparent()], 0);
+
+    let error =
+        MaskCache::adopt(&root, &cache_key, &MaskAdoption { output_dir: &worker_out, first_frame: 0, frame_count: 3, frame_rate: R, width: W, height: H })
+            .expect_err("a short run is not a cache");
+    assert!(error.to_string().contains("frame 2"), "the error names the missing frame: {error}");
+
+    let missing = MaskCache::open(&root, &cache_key.cache_key()).expect_err("no manifest means no cache");
+    assert!(matches!(missing, frameforge_bridge::MaskError::Missing(_)), "{missing}");
+}
+
+#[test]
+fn adoption_refuses_a_mask_that_is_not_the_working_size() {
+    let root = temp_root("adopt-size");
+    let cache_key = key(vec![7]);
+    let dir = root.join("worker-out");
+    std::fs::create_dir_all(&dir).expect("worker output dir");
+    let wrong = image::GrayImage::from_raw(W / 2, H, vec![255u8; ((W / 2) * H) as usize]).expect("wrong-size mask");
+    wrong.save(dir.join("frame_00000000.png")).expect("write the wrong-size mask");
+
+    let error = MaskCache::adopt(&root, &cache_key, &MaskAdoption { output_dir: &dir, first_frame: 0, frame_count: 1, frame_rate: R, width: W, height: H })
+        .expect_err("a mis-sized mask is not a cache");
+    assert!(error.to_string().contains("working size"), "{error}");
+}
+
+#[test]
+fn adoption_starts_at_the_first_frame_the_job_asked_for() {
+    let root = temp_root("adopt-offset");
+    let cache_key = key(vec![8]);
+    // A job that started at frame 100 writes frame_00000100.png and up.
+    let masks = (0..2).map(|_| left_half_transparent()).collect::<Vec<_>>();
+    let worker_out = write_worker_output(&root, &masks, 100);
+
+    MaskCache::adopt(&root, &cache_key, &MaskAdoption { output_dir: &worker_out, first_frame: 100, frame_count: 2, frame_rate: R, width: W, height: H })
+        .expect("adopt a run that starts later in the clip");
+
+    let cache = MaskCache::open(&root, &cache_key.cache_key()).expect("readable");
+    assert!(cache.frame(R.tick_of(0)).expect("lookup").is_none(), "frames before the run stay unmasked");
+    let at_100 = cache.frame(R.tick_of(100)).expect("lookup").expect("frame 100 is covered");
+    assert_eq!(at_100.alpha()[0], 0);
+}
+
 #[test]
 fn preview_and_export_share_the_cached_matte() {
     let root = temp_root("preview-export");

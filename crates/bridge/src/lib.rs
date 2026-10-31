@@ -47,7 +47,7 @@ pub use effectcraft_project::ParamUi as EffectParamUi;
 
 pub use convert::param_to_value;
 pub use document::{Composition, EffectLink, FFPROJ_SCHEMA, FrameForgeProject};
-pub use roto::{MaskCache, MaskError, MaskFrame, RotoCacheKey, RotoRef, XMEM_COMMIT, default_cache_root};
+pub use roto::{MaskAdoption, MaskCache, MaskError, MaskFrame, RotoCacheKey, RotoRef, XMEM_COMMIT, default_cache_root};
 pub use roto_job::{RotoJobError, RotoJobLimits, RotoJobOutcome, RotoJobReport, RotoJobSpec, run_job};
 pub use roto_runtime::{RotoConsent, RotoRuntime, RotoRuntimeError, RotoRuntimeRequest, python_candidates, python_candidates_from_env};
 pub use roto_worker::{
