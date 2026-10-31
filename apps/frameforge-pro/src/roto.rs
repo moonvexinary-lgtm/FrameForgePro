@@ -520,6 +520,7 @@ fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
         let width = panel.available_width().min(360.0);
         let height = (width * h as f32 / w as f32).max(60.0);
         let (rect, response) = panel.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
+        let response = response.on_hover_text("Drag to paint the initial mask");
 
         if app.roto.canvas_dirty || app.roto.texture.is_none() {
             let image = app.roto.canvas_image();
@@ -565,9 +566,6 @@ fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
         }
         if response.drag_stopped() {
             app.roto.end_stroke();
-        }
-        if response.hovered() {
-            panel.output(response.on_hover_text("Drag to paint the initial mask"));
         }
     }
 
@@ -696,7 +694,7 @@ struct JobRun<'a> {
 }
 
 /// The worker thread's whole body: export, spawn, handshake, run.
-fn execute_job(run: JobRun<'_>, cancel: &AtomicBool, progress: &Arc<Mutex<String>>) -> Result<String, String> {
+fn execute_job(run: JobRun<'_>, cancel: &AtomicBool, progress: &Arc<Mutex<String>>) -> Result<Published, String> {
     let JobRun { doc, item, range, rate, runtime, spec, limits } = run;
     let set_progress = |text: String| {
         if let Ok(mut slot) = progress.lock() {
