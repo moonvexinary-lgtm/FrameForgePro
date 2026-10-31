@@ -736,6 +736,11 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
   inside the deadline; a worker that ignores `cancel` is killed and reported as `Cancelled { killed:
   true }`; the exporter writes scaled PNGs in media order; an empty range is rejected. The fake
   workers are not XMem and the tests say so.
+- **One honest CI failure and its fix**: run `41146756706` failed three of these tests on a docs-only
+  commit because nine parallel PowerShell starts starved each other and one `hello` handshake missed a
+  20 s deadline. The fixtures now start under a lock (one interpreter at a time) with a 60 s
+  failure bound (run `6bcbf9b`/`41149355637` is green), so the tests bound failure without racing each
+  other's process start.
 - **Measured limits**: the runner exists and is tested, but nothing yet starts a worker from the app
   (no runtime discovery/consent flow, which is R5) and `request_shutdown` still sends a request
   (teardown kills the child). No Python runtime or weights ship in the app; `tools/` holds the local
