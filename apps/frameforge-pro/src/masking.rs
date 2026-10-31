@@ -1,6 +1,8 @@
 //! The Masking workspace: real FilmCraft masks on the selected video clip,
-//! their feather/opacity/mode, and the engine's own mask tracker. XMem status
-//! is reported honestly: the app does not run or download inference here.
+//! their feather/opacity/mode, and the engine's own mask tracker. Below that,
+//! [`crate::roto`] hosts the real Roto AI (XMem) panel: consent, verification
+//! and one propagation job per run. XMem is never downloaded or bundled, and
+//! the panel claims nothing it did not measure.
 
 use filmcraft_project::{ClipId, EffectKind};
 
@@ -265,15 +267,9 @@ fn mask_inspector(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: Opti
     }
 
     ui::spaced_rule(&mut panel);
-    ui::section(&mut panel, "ROTO AI (XMEM)");
-    panel.label(egui::RichText::new("Not wired in this build").size(11.0).strong().color(ui::WARN));
-    panel.label(ui::hint(
-        "XMem is the intended temporal VOS engine. The app job runner, timeout/kill policy, resume-from-corrections and enforced memory ceiling are still R3 work, so this panel never claims inference. Weights are never downloaded or bundled.",
-    ));
-    panel.add_space(3.0);
-    ui::kv(&mut panel, "Local probe", "measured separately");
-    ui::kv(&mut panel, "CI inference", "not measured");
-    ui::kv(&mut panel, "Runtime/weights", "not packaged");
+    // The real Roto AI path: consent, verification and one job. It is a separate
+    // engine from the FilmCraft mask tracker above and says so itself.
+    crate::roto::show(app, &mut panel);
     ui::footer_hint(&mut panel, "The mask tracker above is FilmCraft's engine path, not XMem.");
 }
 

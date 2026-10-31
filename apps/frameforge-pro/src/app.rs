@@ -159,6 +159,9 @@ pub struct App {
     pub color_effect: Option<usize>,
     /// The Color workspace's stack width (draggable gutter).
     pub color_stack_w: f32,
+    /// The Roto AI (XMem) panel: runtime fields, consent, the verified runtime
+    /// and at most one running job. Session state only — never saved.
+    pub roto: crate::roto::RotoState,
     /// When the last recovery autosave was written (shown in the status bar).
     pub autosaved_at: Option<Instant>,
     /// Throttles autosave writes.
@@ -247,6 +250,7 @@ impl App {
             timeline_drag: None,
             color_effect: None,
             color_stack_w: 380.0,
+            roto: crate::roto::RotoState::default(),
             autosaved_at: None,
             last_autosave: Instant::now(),
         }
@@ -901,6 +905,9 @@ impl eframe::App for App {
 
         // Recovery autosave (throttled; only for saved, dirty projects).
         self.maybe_autosave();
+
+        // Adopt a finished roto job (its thread never touches the App).
+        self.roto.poll();
 
         let full = ui.max_rect();
         let top = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), TOP_H));
