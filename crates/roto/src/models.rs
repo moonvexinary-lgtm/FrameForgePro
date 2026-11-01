@@ -143,7 +143,7 @@ pub struct LicenseRecord {
 }
 
 /// One publisher weight file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct WeightFile {
     pub url: &'static str,
     /// The publisher's file size. `None` means it was not verified, and the
@@ -161,7 +161,7 @@ impl WeightFile {
 }
 
 /// A model version the catalogue can install and use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct ModelVersion {
     pub version: &'static str,
     pub variant: &'static str,
@@ -172,7 +172,7 @@ pub struct ModelVersion {
 }
 
 /// One catalogue entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct ModelDescriptor {
     pub id: &'static str,
     pub name: &'static str,

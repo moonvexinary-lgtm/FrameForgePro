@@ -222,7 +222,9 @@ pub fn load(root: &Path, key: &MaskKey, object_id: u64, frame: i64) -> Result<Op
             manifest.height
         )));
     }
-    Plane::from_data(gray.width(), gray.height(), gray.into_raw()).ok_or_else(|| CacheError::Format("the cached mask has no pixels".to_string()))
+    let plane =
+        Plane::from_data(gray.width(), gray.height(), gray.into_raw()).ok_or_else(|| CacheError::Format("the cached mask has no pixels".to_string()))?;
+    Ok(Some(plane))
 }
 
 /// The object ids that have a readable cache under this key.
@@ -243,7 +245,7 @@ pub fn clear(root: &Path, key: &MaskKey) -> Result<(), CacheError> {
 mod tests {
     use super::*;
 
-    fn key(objects: Vec<u64>, corrections: Vec<i64>) -> MaskKey {
+    fn make_key(objects: Vec<u64>, corrections: Vec<i64>) -> MaskKey {
         MaskKey {
             model_id: "cutie-base".to_string(),
             weights_sha256: "ab".repeat(32),
@@ -262,7 +264,7 @@ mod tests {
         Plane::new(width, height, fill).expect("plane")
     }
 
-    fn root(name: &str) -> PathBuf {
+    fn temp_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("frameforge-roto-cache-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("temp root");
@@ -271,25 +273,25 @@ mod tests {
 
     #[test]
     fn the_digest_changes_with_every_input_that_changes_the_masks() {
-        let base = key(vec![1], vec![]).digest();
+        let base = make_key(vec![1], vec![]).digest();
         assert_eq!(base.len(), 16);
         assert!(base.bytes().all(|b| b.is_ascii_hexdigit()));
 
-        let mut model = key(vec![1], vec![]);
+        let mut model = make_key(vec![1], vec![]);
         model.model_id = "xmem".to_string();
-        let mut weights = key(vec![1], vec![]);
+        let mut weights = make_key(vec![1], vec![]);
         weights.weights_sha256 = "cd".repeat(32);
-        let mut source = key(vec![1], vec![]);
+        let mut source = make_key(vec![1], vec![]);
         source.source_identity.push_str(":edited");
-        let mut size = key(vec![1], vec![]);
+        let mut size = make_key(vec![1], vec![]);
         size.width = 32;
-        let mut rate = key(vec![1], vec![]);
+        let mut rate = make_key(vec![1], vec![]);
         rate.frame_rate_num = 25;
-        let mut objects = key(vec![1, 2], vec![]);
+        let mut objects = make_key(vec![1, 2], vec![]);
         objects.object_ids = vec![2, 1];
-        let mut corrections = key(vec![1], vec![7]);
+        let mut corrections = make_key(vec![1], vec![7]);
         corrections.correction_frames = vec![8];
-        let mut pipeline = key(vec![1], vec![]);
+        let mut pipeline = make_key(vec![1], vec![]);
         pipeline.pipeline = 2;
 
         for (name, variant) in [
@@ -306,15 +308,15 @@ mod tests {
         }
         // The object order is part of the key, so 1,2 and 2,1 differ; a caller
         // that always sorts its ids is stable.
-        let mut sorted = key(vec![1], vec![]);
+        let mut sorted = make_key(vec![1], vec![]);
         sorted.object_ids = vec![1];
         assert_eq!(sorted.digest(), base);
     }
 
     #[test]
     fn a_published_object_round_trips_and_reports_its_manifest() {
-        let root = root("round-trip");
-        let key = key(vec![1], vec![]);
+        let root = temp_root("round-trip");
+        let key = make_key(vec![1], vec![]);
         let mut mask = plane(16, 8, 0);
         for x in 8..16 {
             for y in 0..8 {
@@ -341,12 +343,12 @@ mod tests {
 
     #[test]
     fn a_missing_or_mismatched_cache_is_reported_rather_than_guessed() {
-        let root = root("missing");
-        let key = key(vec![1], vec![]);
+        let root = temp_root("missing");
+        let key = make_key(vec![1], vec![]);
         assert!(matches!(manifest(&root, &key, 1).expect_err("nothing published"), CacheError::Missing(_)));
 
         publish(&root, &key, 1, 0, &[plane(16, 8, 255)], MatteMode::Binary).expect("publish");
-        let other = key(vec![1], vec![9]);
+        let other = make_key(vec![1], vec![9]);
         assert!(manifest(&root, &other, 1).is_err(), "a different correction set must not read this cache");
         assert!(manifest(&root, &key, 2).is_err(), "an unexpected object id is refused");
         assert!(clear(&root, &key).is_ok());
@@ -355,8 +357,8 @@ mod tests {
 
     #[test]
     fn publishing_validates_everything_before_it_writes_anything() {
-        let root = root("validate");
-        let key = key(vec![1], vec![]);
+        let root = temp_root("validate");
+        let key = make_key(vec![1], vec![]);
         let wrong_size = plane(8, 8, 255);
         let error = publish(&root, &key, 1, 0, &[wrong_size], MatteMode::Alpha).expect_err("a mis-sized mask is refused");
         assert!(error.to_string().contains("16x8"), "{error}");
@@ -369,8 +371,8 @@ mod tests {
 
     #[test]
     fn two_objects_live_side_by_side_under_one_key() {
-        let root = root("objects");
-        let key = key(vec![1, 2], vec![]);
+        let root = temp_root("objects");
+        let key = make_key(vec![1, 2], vec![]);
         publish(&root, &key, 1, 0, &[plane(16, 8, 255)], MatteMode::Alpha).expect("object 1");
         publish(&root, &key, 2, 0, &[plane(16, 8, 0)], MatteMode::Alpha).expect("object 2");
         assert_eq!(cached_objects(&root, &key), vec![1, 2]);

@@ -6,8 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine::FrameRange;
 use crate::matting::Plane;
-use crate::tracking::{Direction, FrameRange};
+use crate::tracking::Direction;
 
 /// Boolean combination of two layers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

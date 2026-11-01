@@ -215,7 +215,7 @@ pub fn written_frames(directory: &Path, naming: FrameNaming) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
-    fn root(name: &str) -> PathBuf {
+    fn temp_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("frameforge-roto-export-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("temp root");
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn an_alpha_sequence_writes_the_frames_it_says_it_did() {
-        let root = root("alpha");
+        let root = temp_root("alpha");
         let frames = vec![(4i64, plane(8, 4, 0, 255)), (5i64, plane(8, 4, 255, 255))];
         let written = write_mask_sequence(&root, &frames, &ExportSpec::default(), Some("abc123"), Some(2)).expect("write");
         assert_eq!(written, 2);
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn binary_and_inverted_output_are_what_they_claim() {
-        let root = root("binary");
+        let root = temp_root("binary");
         let frames = vec![(0i64, plane(8, 4, 100, 200))];
         let spec = ExportSpec { mode: MatteMode::Binary, naming: FrameNaming::Mask, invert: true, premultiply: false };
         write_mask_sequence(&root, &frames, &spec, None, None).expect("write");
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn rgba_output_applies_the_matte_to_the_picture() {
-        let root = root("rgba");
+        let root = temp_root("rgba");
         let frames = vec![(0i64, plane(4, 2, 0, 255))];
         let rgb: Vec<u8> = (0..8).flat_map(|_| [10u8, 20, 30]).collect();
         let spec = ExportSpec::rgba(false);
@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(saved.get_pixel(3, 0).0, [10, 20, 30, 255]);
 
         let premultiplied = ExportSpec::rgba(true);
-        let root2 = root("rgba-premultiplied");
+        let root2 = temp_root("rgba-premultiplied");
         write_rgba_sequence(&root2, &frames, &rgb, &premultiplied, None, None).expect("write");
         let file = written_frames(&root2, FrameNaming::Frame).into_iter().next().expect("a file");
         let saved = image::open(&file).expect("png").to_rgba8();
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn export_refuses_an_empty_or_mismatched_sequence() {
-        let root = root("invalid");
+        let root = temp_root("invalid");
         assert!(write_mask_sequence(&root, &[], &ExportSpec::default(), None, None).is_err());
         let frames = vec![(0i64, plane(8, 4, 0, 255)), (1i64, plane(4, 2, 0, 255))];
         let error = write_mask_sequence(&root, &frames, &ExportSpec::default(), None, None).expect_err("a mismatched frame is refused");

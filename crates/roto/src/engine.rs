@@ -62,8 +62,9 @@ impl EngineCapabilities {
     }
 }
 
-/// One object the user is rotoscoping.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One object the user is rotoscoping. (`Eq` is not derived: a prompt carries
+/// `f32` coordinates, so only `PartialEq` is meaningful.)
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObjectSpec {
     /// Stable object id inside the project (the mask layer id).
     pub id: u64,
@@ -112,6 +113,9 @@ impl FrameRange {
         Some(match direction {
             Direction::Forward => FrameRange::new(from, self.last),
             Direction::Backward => FrameRange::new(self.first, from),
+            // Both ways is the whole range; a caller that wants two passes uses
+            // `tracking::plan_segments`, which expands the direction.
+            Direction::Both => *self,
         })
     }
 }
@@ -131,7 +135,7 @@ impl Correction {
 }
 
 /// One propagation request, backend-independent.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TrackRequest {
     pub object: ObjectSpec,
     pub range: FrameRange,
@@ -419,7 +423,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("model dir");
         std::fs::write(dir.join("cutie-base-mega.pth"), b"not weights").expect("weight placeholder");
         let cutie = find("cutie-base").expect("catalogue");
-        let engine = ExternalEngine::new(cutie, Box::new(FileProbe::new(&root)), "python.exe", "tools/roto_worker.py");
+        let engine = ExternalEngine::new(cutie, Arc::new(FileProbe::new(&root)), "python.exe", "tools/roto_worker.py");
 
         let dormant = engine.plan(&request(vec![Prompt::Mask { frame: 0 }]), false).expect("planned");
         assert!(dormant.dormant, "planning without a user action is dormant");
