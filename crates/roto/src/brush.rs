@@ -70,7 +70,7 @@ impl Stroke {
             x1 = x1.max(*x);
             y1 = y1.max(*y);
         }
-        (x0 <= x1).then(|| (x0 - self.settings.radius, y0 - self.settings.radius, x1 + self.settings.radius, y1 + self.settings.radius))
+        (x0 <= x1).then_some((x0 - self.settings.radius, y0 - self.settings.radius, x1 + self.settings.radius, y1 + self.settings.radius))
     }
 
     /// Apply the stroke to a plane; returns the number of pixels touched.

@@ -1,3 +1,5 @@
+#![allow(dead_code)] // The engine surface is complete; the workspace adopts pieces incrementally.
+
 //! The rotoscoping engine's workspace controls: which backend is chosen, the
 //! model manager (catalogue, install plan, download, verify, remove), and the
 //! runtime report.
@@ -335,7 +337,9 @@ fn backend_selectors(app: &mut App, panel: &mut egui::Ui) {
                 plan.command.as_ref().map(|command| format!("{} {}", command.program, command.args.join(" "))).unwrap_or_else(|| "in-process".to_string());
             panel.label(ui::hint(&format!("planned run (dormant): {command}")));
         }
-        Err(error) => panel.label(egui::RichText::new(format!("cannot plan a run yet: {error}")).size(10.0).color(ui::WARN)),
+        Err(error) => {
+            panel.label(egui::RichText::new(format!("cannot plan a run yet: {error}")).size(10.0).color(ui::WARN));
+        }
     }
     panel.label(ui::hint(
         "The protocol worker for these backends is a stub (tools/roto_worker.py): it answers the protocol and refuses to fabricate masks until the real runtime is wired.",
