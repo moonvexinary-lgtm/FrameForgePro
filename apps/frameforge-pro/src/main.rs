@@ -26,6 +26,7 @@ mod mixer;
 mod pixels;
 mod roto;
 mod roto_bench;
+mod roto_engine;
 mod ui;
 
 use std::process::ExitCode;

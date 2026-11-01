@@ -162,6 +162,9 @@ pub struct App {
     /// The Roto AI (XMem) panel: runtime fields, consent, the verified runtime
     /// and at most one running job. Session state only — never saved.
     pub roto: crate::roto::RotoState,
+    /// The model-independent rotoscoping engine panel: backend choice, the model
+    /// manager and the runtime report. Session state only.
+    pub roto_engine: crate::roto_engine::RotoEngineState,
     /// When the last recovery autosave was written (shown in the status bar).
     pub autosaved_at: Option<Instant>,
     /// Throttles autosave writes.
@@ -251,6 +254,7 @@ impl App {
             color_effect: None,
             color_stack_w: 380.0,
             roto: crate::roto::RotoState::default(),
+            roto_engine: crate::roto_engine::RotoEngineState::default(),
             autosaved_at: None,
             last_autosave: Instant::now(),
         }
@@ -908,6 +912,8 @@ impl eframe::App for App {
 
         // Adopt a finished roto job (its thread never touches the App).
         self.roto.poll();
+        // Watch the model manager's download, if one is running.
+        self.roto_engine.poll();
 
         let full = ui.max_rect();
         let top = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), TOP_H));

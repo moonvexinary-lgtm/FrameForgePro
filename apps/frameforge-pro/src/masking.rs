@@ -267,6 +267,10 @@ fn mask_inspector(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: Opti
     }
 
     ui::spaced_rule(&mut panel);
+    // The engine panel first: which backend, which models are installed, and what
+    // the machine can actually run. Then the XMem job path below it.
+    crate::roto_engine::show(app, &mut panel);
+    ui::spaced_rule(&mut panel);
     // The real Roto AI path: consent, verification and one job. It is a separate
     // engine from the FilmCraft mask tracker above and says so itself.
     crate::roto::show(app, &mut panel);
