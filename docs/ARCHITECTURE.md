@@ -692,14 +692,23 @@ the clip's alpha, without any model, Python or weights.
   the same mask bytes.
 - **`.ffproj` schema 3**: `roto` is optional; schema-2 files load unchanged, and schema-2 readers
   refuse schema-3 projects rather than silently dropping masks.
-- **Tests** (`crates/bridge/tests/r1_roto.rs`, 5): exact alpha inside coverage and pass-through
+- **The write side** (`MaskCache::adopt`, added 2026-10-31, run `41255268402`): a worker's own
+  `frame_<index>.png` output directory is validated (every promised frame exists, decodes and is
+  exactly the working size — **before** anything is published), copied into `root/<key>/`, and the
+  manifest is written last to a temporary file that is renamed into place. `MaskCache::open` therefore
+  sees either no manifest (`Missing`) or a complete cache, and a short or mis-sized run publishes
+  nothing.
+- **Tests** (`crates/bridge/tests/r1_roto.rs`, 9): exact alpha inside coverage and pass-through
   outside, missing in-range frame error, every key input changes the address, a correction edit misses
-  the old cache, and a two-track project renders + exports the background through the transparent
-  half. No new crate dependency: `image` was already a workspace dependency of the app; the bridge now
-  uses it too.
+  the old cache, a two-track project renders + exports the background through the transparent half,
+  and four adoption tests: a worker's masks are adopted and reach the composed picture, a short run is
+  refused **without** publishing a manifest, a mis-sized mask is refused, and a run that starts at a
+  later frame covers only that range. No new crate dependency: `image` was already a workspace
+  dependency of the app; the bridge now uses it too.
 - **Limitations**: mask and frame sizes must match (no proxy stretching; R3 regenerates at the working
-  size); decoded masks are not held in an in-memory LRU; no mask writer, initial-mask UI or in-app
-  XMem inference yet (the external `tools/` probe is not app-wired).
+  size); decoded masks are not held in an in-memory LRU; publishing is two decode passes (validate,
+  then copy) so memory stays at one plane, at the cost of decoding twice; `correction_ids` is still
+  always empty, so a re-run with the same inputs republishes the same directory.
 
 ## R2 — worker transport and frame exporter (✔ CI-verified, run 40059782293)
 
@@ -728,14 +737,21 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
   match the request or a progress frame outside the range, caps events at 4 per frame + 64, and kills
   the worker on a stall, a deadline or an unacknowledged cancel. A cancel that had to kill reports
   `killed: true`, so a killed job is never presented as a clean pass.
-- **Tests** (`crates/bridge/tests/r2_roto_worker.rs`, 9): a real PowerShell fake worker completes
+- **Memory ceiling** (added 2026-10-31, run `41255268402`): `progress` gained an optional `rss_mb`, and
+  `RotoJobLimits::memory_ceiling_mb` (default 4 GiB, `None` disables) kills a run whose reported
+  resident set exceeds it. The `on_progress` callback carries the worker's own figure, so a panel can
+  show it and the runner never invents one. A worker that reports nothing cannot be ceiling-enforced —
+  the limits' documentation and the docs say so rather than implying otherwise.
+- **Tests** (`crates/bridge/tests/r2_roto_worker.rs`, 12): a real PowerShell fake worker completes
   ready → progress → done → cancel → shutdown over pipes; a quiet worker yields a `Timeout` inside
   the deadline; a silent worker times out during the handshake and is killed; the job runner drives a
   fake worker to `Done` with progress in media order; it refuses bad requests without disturbing the
   worker (a valid job still runs afterwards); a stalling worker is reported as a stall and killed
   inside the deadline; a worker that ignores `cancel` is killed and reported as `Cancelled { killed:
-  true }`; the exporter writes scaled PNGs in media order; an empty range is rejected. The fake
-  workers are not XMem and the tests say so.
+  true }`; a worker that reports an enormous resident set is killed with `MemoryCeiling` naming both
+  numbers; the same worker finishes when no ceiling is set; the progress callback carries the worker's
+  own memory figure; the exporter writes scaled PNGs in media order; an empty range is rejected. The
+  fake workers are not XMem and the tests say so.
 - **One honest CI failure and its fix**: run `41146756706` failed three of these tests on a docs-only
   commit because nine parallel PowerShell starts starved each other and one `hello` handshake missed a
   20 s deadline. The fixtures now start under a lock (one interpreter at a time) with a 60 s
@@ -774,14 +790,14 @@ clip, drives the worker over pipes and computes IoU.
   after it).
 - **Cancel**: a 30-frame 480x270 job cancelled after the first progress event
   emitted `cancelled` 1.05 s later and stopped after 2 written masks.
-- **Not met**: no job queue, no resume/segmented correction runs, no memory ceiling enforcement and no
-  proof that a worker mask reaches preview/export through the R1 cache (the R4 panel runs one job on
-  the selected clip, and states that the manifest writer is missing). App wiring and the
-  consent/verification flow now exist: the transport has deadlines, `run_job` (runs `41144133581`) is
-  the policy, and the Roto AI panel drives both (run `41238338683`). There is still no CI coverage of
-  real inference (CI has no torch or weights), so this local evidence is not an R3 acceptance pass;
-  R3 and R4 remain open. The tools-only commit `23d03da` ran CI green (run `40517500476`, 54 tests,
-  25,564,165-byte artifact), confirming the Rust tree was unchanged.
+- **Connected since**: the manifest writer now exists (`MaskCache::adopt`) and is exercised end to end
+  — a worker's masks are published and drive the composed picture and the export (run `41255268402`) —
+  and the ceiling is enforced on the worker's own reported RSS. What is still **not met**: no job
+  queue (one job at a time), no resume/segmented correction runs, a ceiling that cannot be enforced on
+  a worker that reports nothing, and no CI coverage of real inference (CI has no torch or weights), so
+  this local evidence is not an R3 acceptance pass; R3 and R4 remain open. The tools-only commit
+  `23d03da` ran CI green (run `40517500476`, 54 tests, 25,564,165-byte artifact), confirming the Rust
+  tree was unchanged.
 
 ## R5 — consent gate and runtime/weights verification (partial; bridge, run 41161529133)
 
@@ -835,15 +851,28 @@ Status** already switches there. It is a single-clip, single-pass slice: no brus
   reported as a pass.
 - **Never hangs**: a thread that stopped without writing a result (a panic) is reported as such, so
   the panel cannot sit on "running" forever.
-- **Not met**: no brush or in-app initial-mask authoring (the user picks a PNG), no
-  corrections/resume runs, no memory ceiling, and masks are written as `frame_<index>.png` while the
-  R1 manifest writer is still missing — so a run does **not** yet feed the renderer's alpha, and the
-  panel says exactly that. Nothing is downloaded or bundled; an interpreter, a checkout and weights
-  are the user's.
+- **The brush** (added 2026-10-31, run `41255268402`): an in-panel canvas at the working size with
+  paint/erase, a round brush radius, a drag rectangle, clear and invert, a live coverage percentage,
+  and *Save as PNG…* which writes exactly the 8-bit grayscale plane the worker reads as frame 0. The
+  canvas is cleared whenever the working size changes, so a mask painted at one size is never reused
+  at another. **Limit**: the canvas has no frame backdrop — the user paints without seeing the picture
+  underneath (the clip's frames are exported later, for the worker).
+- **Publishing and attaching**: after a complete run the thread validates and publishes the masks into
+  the R1 cache (`MaskCache::adopt`) and reports the key; *Use this matte on the clip* then sets
+  `Composition.roto` as one undoable click. A short or mis-sized run publishes nothing and the failure
+  names the frame.
+- **The ceiling in the panel**: every progress line shows the worker's reported RSS against the
+  ceiling (4 GiB by default), and an over-ceiling run is killed by the runner with both numbers in the
+  report.
+- **Not met**: no corrections/resume runs, no job queue, and the ceiling is only as good as the
+  worker's own reporting. Nothing is downloaded or bundled; an interpreter, a checkout and weights are
+  the user's.
 - **Tests**: the app tests cover the pure parts (request validation naming the missing field, consent
-  refusal/acceptance, frame-range arithmetic); the panel itself is not UI-automated.
-- **CI**: run `41238338683` — fmt, clippy `-D warnings`, check, **75 tests**, release build, binary
-  self-test including `roto-bench 4`; artifact `frameforge-pro-windows-dev` is 25,959,820 bytes.
+  refusal/acceptance, frame-range arithmetic and cache identity, canvas painting/erasing/inverting, a
+  rectangle fill, a saved canvas round-tripping as the frame-0 PNG, and a resize clearing stale
+  paint); the panel itself is not UI-automated.
+- **CI**: run `41255268402` — fmt, clippy `-D warnings`, check, **87 tests**, release build, binary
+  self-test including `roto-bench 4`; artifact `frameforge-pro-windows-dev` is 26,040,820 bytes.
 
 ## Milestones
 
@@ -862,9 +891,9 @@ Status** already switches there. It is a single-clip, single-pass slice: no brus
 | M11 | one chronological undo history: composition snapshots paired with project-neutral engine steps, gesture coalescing, limit-aligned redo, composition rollback on failure, seven history tests plus an App-level Ctrl+Z test | ✔ (CI-verified, run 40037973347) |
 | M12 | export safety and close guard: overwrite confirmation on the exact resolved path, real cancellation through `Progress.cancel` with partial-file cleanup, and a Save/Discard/Cancel guard on the window close request | ✔ (CI-verified, run 40045638522) |
 | R1 | cached roto masks: validated cache key + manifest/PNG reader, alpha in `ComposedSource`, schema 3, preview + H.264 export test and cache-invalidation test | ✔ (CI-verified, run 40056112214) |
-| R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests; event channel with `recv_timeout`/`handshake_timeout`/`kill` and the tested `run_job` deadline/stall/cancel runner | ✔ (CI-verified, run 40059782293; deadlines run 40814011414; job runner run 41144133581; XMem CPU benchmark still open) |
-| R3 (partial) | Real XMem protocol worker and local probe: forward/backward IoU, cancel and peak RSS on the target Ryzen 5 7530U | 🟡 Local evidence only; resume, memory ceiling and renderer mask equality remain open (the bridge's deadline/stall/cancel policy is `run_job`, and R4 now drives it from the app) |
-| R4 (partial) | In-app Roto AI panel: runtime fields, consent, verification, and one clip job through `export_frames` → `XmemWorker` → `run_job` with progress, cancel and honest status | 🟡 CI-verified, run 41238338683; no brush/initial-mask authoring, no corrections/resume, no memory ceiling, no cache feeding |
+| R2 | XMem worker transport: JSON-lines protocol + child-process client, frame exporter, `roto-bench` command; fake-worker round-trip and PNG export tests; event channel with `recv_timeout`/`handshake_timeout`/`kill`, the tested `run_job` deadline/stall/cancel runner and the reported-RSS memory ceiling | ✔ (CI-verified, run 40059782293; deadlines run 40814011414; job runner run 41144133581; memory ceiling run 41255268402; XMem CPU benchmark still open) |
+| R3 (partial) | Real XMem protocol worker and local probe: forward/backward IoU, cancel and peak RSS on the target Ryzen 5 7530U | 🟡 Local evidence only; resume/corrections and a job queue remain open. The bridge's deadline/stall/cancel policy is `run_job`, the ceiling is enforced on reported RSS, and a worker's masks are published into the R1 cache and drive the composed picture (runs `41144133581`, `41255268402`) |
+| R4 (partial) | In-app Roto AI panel: runtime fields, consent, verification, one clip job through `export_frames` → `XmemWorker` → `run_job`, an initial-mask brush, publishing into the R1 cache and an undoable attach to the clip | 🟡 CI-verified, run `41255268402`; still no corrections/resume, no job queue, and the mask canvas has no frame backdrop to paint over |
 | R5 (partial) | Consent gate and runtime/weights verification: explicit consent recorded before any read, pinned-commit checkout check without running git, streamed SHA-256 weights check, `python -u` worker command, interpreter candidates | 🟡 Bridge only (CI-verified, run 41161529133); no UI to collect paths/consent, no worker-script packaging, no memory ceiling |
 | T1 | timeline track state: real `timeline.setTrack` visibility/mute/solo/lock header buttons with undo, plus the existing targeting/source-patch controls | ✔ (CI-verified, run 40063686209) |
 | T2 | sequence markers: ruler drawing, click-to-jump, `markers.add` / `markers.clearCurrent` undoable add & clear, previous/next navigation and the M shortcut; lazy audio-device open | ✔ (CI-verified, run 40128137965) |

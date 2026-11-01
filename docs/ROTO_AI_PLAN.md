@@ -222,11 +222,13 @@ weights are committed, and CI does not run them (no torch, no weights).
   that the weights match the caller's SHA-256. `sha256.rs` is a local FIPS 180-4 implementation with
   published vectors, so no crate and no licence were added. `python_candidates` only looks for files;
   it never runs an interpreter. No UI collects these paths yet.
-- **Still open**: a job queue (one job at a time runs today, from the Masking workspace panel), the
-  consent/paths UI storing its choices between sessions (paths are session state), resume from
-  corrections, a memory ceiling, and proof that worker masks are the bytes used by preview/export —
-  the run writes `frame_<index>.png` but the R1 manifest writer does not exist yet, so a job does not
-  reach the renderer's alpha. This is **not** an R3 pass.
+- **Closed since**: the manifest writer exists (`MaskCache::adopt`) and a finished run now reaches the
+  renderer — the adoption test drives the composed picture from a worker-shaped output directory — and
+  the memory ceiling is enforced on the worker's own reported RSS (both run `41255268402`).
+- **Still open**: a job queue (one job at a time today), the consent/paths choices are session state
+  (not saved), resume from corrections (`correction_ids` is always empty, so a re-run republishes the
+  same directory), and the ceiling cannot be enforced against a worker that reports no RSS. This is
+  **not** an R3 acceptance pass, because no CI job ever runs the real model.
 
 The 2026-10-28 UI milestone (run `40794727835`) added a **Masking** workspace over
 FilmCraft's own engine mask objects (`masks.*`) and its mask tracker. The bridge's
@@ -242,8 +244,8 @@ missing is listed under R4 above, and the panel states it in place.
 | **R0** | This plan, licensing record, protocol spec | Reviewed; no UI controls presented as working |
 | **R1** | Mask cache + alpha application in `ComposedSource`, synthetic mask | ✔ Implemented; 5 tests in `r1_roto.rs` (run `40056112214`): known alpha matte changes preview **and** H.264 export pixels; every key input invalidates the cache; a missing in-range mask is an error |
 | **R2** | Worker protocol + frame exporter, CPU benchmark command | 🟡 Protocol round-trip against a real fake child and PNG exporter tested (3 tests, run `40059782293`); `roto-bench` runs in CI. **Partially met:** the local probe measured the target-laptop CPU XMem benchmark (480x270, 0.818/1.252 fps wall, 710.2/610.7 MB peak RSS, 2026-10-27); it is not a CI gate and `roto-bench` still reports inference as not measured |
-| **R3** | Real XMem CPU end-to-end on a short synthetic clip | 🟡 Local probe: moving-rectangle IoU forward/backward, cancellation and peak RSS measured with the real model (see above). **Not met:** resume, memory ceiling, final-export mask equality, app integration and a repeatable CI/manual-dispatch job |
-| **R4** (partial) | Roto AI workspace (brush, initial mask, propagate, corrections, cache UI) | **Panel part met (run `41238338683`):** the Masking workspace hosts the XMem panel — runtime fields, consent, verification, one clip job through `export_frames` → `XmemWorker` → `run_job`, per-event progress, cancel and an honest report; the app tests cover the pure helpers. **Still open:** brush/in-app initial-mask authoring (the user picks a PNG), corrections/resume, a cache/manifest writer so a run feeds the renderer, no fake values anywhere (nothing is claimed that was not measured), screenshots not recorded |
+| **R3** | Real XMem CPU end-to-end on a short synthetic clip | 🟡 Local probe: moving-rectangle IoU forward/backward, cancellation and peak RSS measured with the real model (see above). **Met since:** app integration (R4), a memory ceiling enforced on the worker's reported RSS, and mask equality — a finished run is published into the R1 cache and drives the composed picture and export (run `41255268402`). **Not met:** resume/corrections, a job queue, and a repeatable CI/manual-dispatch inference job |
+| **R4** (partial) | Roto AI workspace (brush, initial mask, propagate, corrections, cache UI) | **Met (runs `41238338683`, `41255268402`):** the Masking workspace hosts the XMem panel — runtime fields, consent, verification, one clip job through `export_frames` → `XmemWorker` → `run_job`, per-event progress with the worker's RSS, cancel, an in-panel brush that writes the frame-0 PNG at the working size, and a finished run published into the R1 cache with an undoable *Use this matte on the clip*. Nothing is claimed that was not measured. **Still open:** corrections/resume, a job queue, a frame backdrop behind the brush canvas, screenshots |
 | **R5** (partial) | Weights consent download + optional pack | **Bridge part met (run `41161529133`):** `RotoRuntime::resolve` requires recorded consent before any read, verifies the pinned checkout commit without a git process, verifies the weights SHA-256 (local FIPS 180-4 implementation, `sha256.rs`), and `python_candidates` only looks for files. **Still open:** no UI collects the paths or the consent, no pack/packaging of the worker script, no in-app deletion, no download UI (there is deliberately no downloader at all) |
 | **R6** | Occlusion / disappearance / reappearance corpus, drift review, edge refinement | Documented results on the corpus, including failures |
 
