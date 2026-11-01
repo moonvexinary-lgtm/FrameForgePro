@@ -307,6 +307,19 @@ pub fn analyze(frames: &[MaskSummary], limits: &QcLimits) -> QualityReport {
             });
         }
 
+        // A ragged boundary is a property of one mask, not of a pair, so it is
+        // judged before any comparison with the previous frame.
+        let area = current.covered.max(1) as f32;
+        let raggedness = current.border as f32 / area;
+        if raggedness > limits.max_raggedness && current.covered > 64 {
+            signals.push(FrameSignal {
+                frame: current.frame,
+                kind: SignalKind::RaggedEdge,
+                severity: (raggedness / (limits.max_raggedness * 2.0)).clamp(0.0, 1.0),
+                detail: format!("boundary-to-area ratio {raggedness:.2}: the edge is poorly defined"),
+            });
+        }
+
         let Some(previous) = previous else { continue };
         let Some(iou) = current.iou(previous) else { continue };
 
@@ -362,17 +375,6 @@ pub fn analyze(frames: &[MaskSummary], limits: &QcLimits) -> QualityReport {
                     detail: "the mask oscillates in size across three frames".to_string(),
                 });
             }
-        }
-
-        let area = current.covered.max(1) as f32;
-        let raggedness = current.border as f32 / area;
-        if raggedness > limits.max_raggedness && current.covered > 64 {
-            signals.push(FrameSignal {
-                frame: current.frame,
-                kind: SignalKind::RaggedEdge,
-                severity: (raggedness / (limits.max_raggedness * 2.0)).clamp(0.0, 1.0),
-                detail: format!("boundary-to-area ratio {raggedness:.2}: the edge is poorly defined"),
-            });
         }
     }
 
