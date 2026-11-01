@@ -141,7 +141,7 @@ an in-memory LRU yet, so every render request decodes its PNG; there is no mask 
 {"command":"hello","protocol":1}
 {"event":"ready","protocol":1,"backend":"cpu","torch":"…","xmem":"…"}
 {"command":"propagate","frames_dir":"…","first_frame":0,"last_frame":119,"initial_mask":"…","output_dir":"…","width":480,"height":270,"model":"XMem.pth","model_sha256":"…","direction":"forward"}
-{"event":"progress","frame":0,"total":120,"elapsed":0.1,"fps":10.0}
+{"event":"progress","frame":0,"total":120,"elapsed":0.1,"fps":10.0,"rss_mb":712.4}
 {"event":"done","frames":120,"elapsed":12.0}
 {"command":"cancel"} / {"event":"cancelled"}
 {"command":"shutdown"}
@@ -149,9 +149,11 @@ an in-memory LRU yet, so every render request decodes its PNG; there is no mask 
 
 `XmemWorker` spawns a child process, sends a `hello` handshake and returns a typed `WorkerInfo`; a
 closed pipe is an error carrying the capped stderr tail, not a silent end of job. One event line is
-capped at 1 MiB. The test `crates/bridge/tests/r2_roto_worker.rs` (3 tests, run `40059782293`) spawns
-a real PowerShell fake worker and covers ready → progress → done → cancel → shutdown; the fake never
-claims to be XMem.
+capped at 1 MiB, and `rss_mb` is optional (a worker that cannot read its own resident set omits it or
+sends `null`; the runner then cannot enforce the ceiling and says so). `crates/bridge/tests/r2_roto_worker.rs`
+(12 tests, runs `40059782293`, `40814011414`, `41144133581`, `41255268402`) spawns real PowerShell fake
+workers and covers ready → progress → done → cancel → shutdown, the deadlines, the runner's refusal and
+stall/cancel-memory policies; the fakes never claim to be XMem.
 
 `export_frames` decodes the requested range through FilmCraft's codecs, scales to fit a working size
 without upscaling, and writes `frame_<index>.png` in media order. The same test exports three green
