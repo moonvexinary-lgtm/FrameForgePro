@@ -845,7 +845,7 @@ mod tests {
         assert_eq!(state.canvas()[(8 * 16 + 8) as usize], 255, "the dab paints the centre");
         assert_eq!(state.canvas()[0], 0, "the corner stays clear");
         let painted = state.coverage_percent();
-        assert!(painted > 0.0 && painted < 10.0, "a small dab is a small coverage: {painted}");
+        assert!((5.0..25.0).contains(&painted), "a dab of radius 3 on a 16x16 canvas is a small coverage: {painted}");
 
         state.invert_canvas();
         assert_eq!(state.canvas()[(8 * 16 + 8) as usize], 0);
