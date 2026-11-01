@@ -222,18 +222,25 @@ impl RotoEngineState {
 
     /// Verify a downloaded file and record the digest.
     pub fn verify_and_install(&mut self, model_id: &str, path: &Path) {
-        let expected = self.pinned_digest(model_id).map(str::to_string);
-        let Some(install) = self.install_mut(model_id) else {
+        let Some(model) = find(model_id) else {
             self.message = Some(format!("{model_id} is not in the catalogue"));
             return;
         };
-        match install.verify(path, expected.as_deref()) {
+        let expected = self.pinned_digest(model_id).map(str::to_string);
+        // Hash first, so the borrow of the install record cannot overlap the
+        // message write (and a long hash never holds a lock).
+        match models::verify_file(path, expected.as_deref()) {
             Ok(digest) => {
-                self.message = Some(format!("{model_id} verified: {digest}"));
+                if let Some(install) = self.install_mut(model.id) {
+                    install.state = InstallState::Installed { sha256: digest.clone() };
+                    install.file = Some(path.to_path_buf());
+                    install.expected_sha256 = expected.clone();
+                }
+                self.message = Some(format!("{} verified: {digest}", model.id));
                 if expected.is_none() {
                     // No publisher digest was known: pin what we measured so the
                     // next verification is a real check.
-                    self.pinned.push((install.model, digest));
+                    self.pinned.push((model.id, digest));
                 }
             }
             Err(error) => self.message = Some(error.to_string()),
@@ -376,9 +383,8 @@ fn model_manager(app: &mut App, panel: &mut egui::Ui) {
     panel.horizontal(|ui| {
         ui.label(ui::meta("Disk budget"));
         ui.add(egui::DragValue::new(&mut app.roto_engine.budget_mb).range(256..=204_800).suffix(" MB"));
-        let known = total_bytes(&["cutie-base", "sam2.1-tiny"]);
-        if let Some(bytes) = known {
-            panel.label(ui::hint(&format!("Cutie + SAM 2.1 Tiny: {:.2} GB", bytes as f64 / 1e9)));
+        if let Some(bytes) = total_bytes(&["cutie-base", "sam2.1-tiny"]) {
+            ui.label(ui::hint(&format!("Cutie + SAM 2.1 Tiny: {:.2} GB", bytes as f64 / 1e9)));
         }
     });
 

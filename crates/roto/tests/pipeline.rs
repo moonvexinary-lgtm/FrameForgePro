@@ -61,13 +61,16 @@ fn the_whole_deterministic_pipeline_runs_without_a_model() {
 
     // 2. The mask a selection engine would return (here: the truth we painted).
     let first = subject(W, H, 10, 10, 24);
+    assert_eq!(first.covered(128), 24 * 24, "the selection's mask is the subject, nothing else");
+    let first_summary = summarise(0, &first);
+    assert_eq!(first_summary.bbox, Some((10, 10, 33, 33)), "and it is where the box was drawn");
     let mut track = ObjectTrack::new(1, "Subject");
     track.plan(FrameRange::new(0, 5), Direction::Forward);
     assert_eq!(track.status, TrackStatus::Untracked);
     assert_eq!(track.total_frames(), 6);
 
     // 3. Propagation results, with a deliberate break at frame 3.
-    let propagated = vec![
+    let propagated = [
         subject(W, H, 10, 10, 24),
         subject(W, H, 12, 11, 24),
         subject(W, H, 14, 12, 24),
@@ -134,7 +137,7 @@ fn the_whole_deterministic_pipeline_runs_without_a_model() {
         pipeline: 1,
     };
     let cache_root = work.join("cache");
-    let published = cache::publish(&cache_root, &key, 1, 0, &[cleaned.clone()], MatteMode::Alpha).expect("publish the corrected mask");
+    let published = cache::publish(&cache_root, &key, 1, 0, std::slice::from_ref(&cleaned), MatteMode::Alpha).expect("publish the corrected mask");
     assert_eq!(published, 1);
     let loaded = cache::load(&cache_root, &key, 1, 0).expect("load").expect("frame 0");
     assert_eq!(loaded.covered(128), cleaned.covered(128), "the cache returns the exact bytes it was given");
@@ -197,7 +200,7 @@ fn a_projects_masks_survive_a_cache_round_trip_for_every_object() {
     let two = subject(W, H, 20, 8, 6);
 
     cache::publish(&cache_root, &key, 1, 0, &[one.clone(), one.clone()], MatteMode::Alpha).expect("object 1");
-    cache::publish(&cache_root, &key, 2, 0, &[two.clone()], MatteMode::Alpha).expect("object 2");
+    cache::publish(&cache_root, &key, 2, 0, std::slice::from_ref(&two), MatteMode::Alpha).expect("object 2");
 
     assert_eq!(cache::cached_objects(&cache_root, &key), vec![1, 2]);
     let loaded_one = cache::load(&cache_root, &key, 1, 1).expect("load").expect("frame 1");
