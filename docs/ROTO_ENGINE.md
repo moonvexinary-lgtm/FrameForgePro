@@ -149,6 +149,15 @@ Known gaps, stated plainly:
   `cargo check`, `cargo test --workspace`, a release build and the binary self-test
   (including `roto-bench 4`) run in CI. The crate adds **no new dependency**: it
   reuses `image`, `serde`, `serde_json`, `thiserror` and the bridge's SHA-256.
+* CI run **`41345085275`** (commit `309fcb8`, `frameforge-rust-rewrite`) is green on
+  all thirteen steps — fmt, clippy `-D warnings`, check, tests, release build,
+  binary self-test including `roto-bench 4` — with **153 tests** across the
+  workspace (64 of them in `frameforge-roto` plus the 2 whole-pipeline integration
+  tests) and a 26,088,741-byte `frameforge-pro-windows-dev` artifact. Earlier runs
+  in the same sequence (`41333253570`, `41335272433`, `41338563897`, `41340776558`,
+  `41340975193`, `41343042188`) are the failures that produced the fixes listed in
+  this document's history — visibility, `Eq`, serde on static slices, the backward
+  segment plan, the ragged-edge threshold and two over-strict test assertions.
 * Tests added by this work: catalogue/licence invariants (including "SAM 3 must not
   appear"), install planning and refusal, the download command and resume flag, the
   install state machine and verification (FIPS 180-4 "abc" vector), adapter
