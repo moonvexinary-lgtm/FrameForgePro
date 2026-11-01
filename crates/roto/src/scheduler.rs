@@ -325,7 +325,7 @@ mod tests {
         assert!(queue.job(a).expect("job").status.label().contains("worker exited"));
         queue.report(b, 1);
         assert_eq!(queue.cancel_all(), 1, "only the still-active job is cancelled");
-        assert!(queue.job(c).expect("job").status.is_active() == false);
+        assert!(!queue.job(c).expect("job").status.is_active());
 
         let removed = queue.clear_finished();
         assert_eq!(removed, 3, "every job is terminal now");

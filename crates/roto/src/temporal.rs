@@ -235,7 +235,7 @@ pub struct QcLimits {
 
 impl Default for QcLimits {
     fn default() -> Self {
-        Self { area_ratio: 1.6, centroid_jump: 0.75, min_iou: 0.35, min_coverage: 0.0002, max_raggedness: 1.2 }
+        Self { area_ratio: 1.6, centroid_jump: 0.75, min_iou: 0.35, min_coverage: 0.0002, max_raggedness: 0.8 }
     }
 }
 
@@ -529,7 +529,7 @@ mod tests {
         frames.push(square(2, 20, 10, 10));
         let report = analyze(&frames, &QcLimits::default());
         assert!(report.signals.iter().any(|signal| signal.kind == SignalKind::Flicker), "{:?}", report.signals);
-        assert!(report.flagged[0].kinds.len() >= 1);
+        assert!(!report.flagged[0].kinds.is_empty());
     }
 
     #[test]

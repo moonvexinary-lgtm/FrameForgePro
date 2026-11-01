@@ -852,8 +852,8 @@ mod tests {
         assert_eq!(plan.exact_bytes(), Some(140_443_788), "the size was verified with a HEAD request");
         assert_eq!(plan.steps[0].file_name, "cutie-base-mega.pth");
         assert!(plan.steps[0].destination.ends_with("cutie-base/cutie-base-mega.pth"), "the plan writes into the model's own directory");
-        assert_eq!(DiskBudget { budget_mb: 200 }.fits(&plan), true, "140 MB fits a 200 MB budget");
-        assert_eq!(DiskBudget { budget_mb: 100 }.fits(&plan), false);
+        assert!(DiskBudget { budget_mb: 200 }.fits(&plan), "140 MB fits a 200 MB budget");
+        assert!(!DiskBudget { budget_mb: 100 }.fits(&plan), "140 MB does not fit a 100 MB budget");
     }
 
     #[test]

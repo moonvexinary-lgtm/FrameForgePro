@@ -128,7 +128,7 @@ pub fn report(memory_budget_mb: Option<u64>) -> RuntimeReport {
                 id: "onnx-vulkan",
                 label: "ONNX Runtime · Vulkan",
                 state: ProviderState::NotProbed,
-                note: "Vulkan execution has operator gaps for these models; nothing is claimed until a runtime reports success.",
+                note: "Not probed. Vulkan execution has operator gaps for these models; nothing is claimed until a runtime reports success.",
                 usable_for_inference: false,
             },
             ProviderStatus {

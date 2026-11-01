@@ -95,12 +95,24 @@ pub fn plan_segments(range: FrameRange, direction: Direction, corrections: &[Cor
             segments.push(Segment { range, direction: dir, from_correction: None });
             continue;
         }
-        // With corrections, each mark starts a new piece up to the next mark (or
-        // the end of the range in that direction).
+        // With corrections, every piece starts at a correction and runs to the
+        // next boundary in the direction of travel: forward to the next
+        // correction (or the end of the range), backward from the correction down
+        // to the previous one (or the start). Corrected frames are therefore never
+        // overwritten, and each piece is independently resumable.
         for (index, mark) in marks.iter().enumerate() {
-            let fallback = if dir == Direction::Backward { range.first } else { range.last };
-            let next = marks.get(index + 1).copied().unwrap_or(fallback);
-            let piece = if dir == Direction::Backward { FrameRange::new(next.min(*mark), *mark) } else { FrameRange::new(*mark, next.max(*mark)) };
+            let piece = match dir {
+                Direction::Forward => {
+                    let next = marks.get(index + 1).copied().unwrap_or(range.last);
+                    FrameRange::new(*mark, next.max(*mark))
+                }
+                Direction::Backward => {
+                    let previous = index.checked_sub(1).and_then(|earlier| marks.get(earlier)).copied().unwrap_or(range.first);
+                    FrameRange::new(previous.min(*mark), *mark)
+                }
+                // `Both` was expanded into the two directions above.
+                Direction::Both => continue,
+            };
             if piece.count() > 0 {
                 segments.push(Segment { range: piece, direction: dir, from_correction: Some(*mark) });
             }
@@ -234,8 +246,10 @@ mod tests {
         assert!(segments.iter().all(|segment| segment.range.first >= 10), "frames before the first correction are untouched");
 
         let backward = plan_segments(range, Direction::Backward, &corrections);
-        assert_eq!(backward[0].range, FrameRange::new(10, 20));
-        assert_eq!(backward[1].range, FrameRange::new(0, 20), "the last backward piece reaches the start of the range");
+        assert_eq!(backward.len(), 2, "{backward:?}");
+        assert!(backward.iter().all(|segment| segment.from_correction.is_some()));
+        assert_eq!(backward[0].range, FrameRange::new(0, 10), "the first backward piece runs down to the start of the range");
+        assert_eq!(backward[1].range, FrameRange::new(10, 20), "and the next one stops at the previous correction");
     }
 
     #[test]
@@ -247,7 +261,13 @@ mod tests {
 
         track.correct(6, FrameRange::new(0, 11));
         assert_eq!(track.corrections, vec![6]);
-        assert_eq!(track.segments.len(), 1, "one correction is one resumable piece: {:?}", track.segments);
+        assert_eq!(track.segments.len(), 2, "a correction re-plans both ways from it: {:?}", track.segments);
+        assert!(
+            track.segments.iter().any(|segment| segment.direction == Direction::Forward && segment.range.first == 6),
+            "the forward piece starts at the correction: {:?}",
+            track.segments
+        );
+        assert!(track.segments.iter().any(|segment| segment.direction == Direction::Backward && segment.range.last == 6));
         assert_eq!(track.status, TrackStatus::NeedsReview);
 
         track.set_visible(false);

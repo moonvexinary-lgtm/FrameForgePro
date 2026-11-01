@@ -383,7 +383,7 @@ mod tests {
 
         let inverted = matte(&plane, &MattingParams { invert: true, ..MattingParams::default() }, MatteMode::Alpha);
         assert!(inverted.covered(128) > plane.covered(128), "inverting a small subject covers most of the frame");
-        assert!(MattingParams::default().is_identity() == false);
+        assert!(!MattingParams::default().is_identity());
         assert!(MattingParams { feather: 0.0, expand: 0.0, smooth: 0.0, invert: false }.is_identity());
     }
 
