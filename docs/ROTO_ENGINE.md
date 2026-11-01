@@ -1,0 +1,208 @@
+# The FrameForge Pro rotoscoping engine
+
+A model-independent pipeline for interactive selection, video tracking, temporal
+quality control, matting, refinement, caching, scheduling and export, built as
+`crates/roto` (`frameforge-roto`) and driven from the **Masking** workspace.
+
+> **Development rule this document is written under.** No model inference was
+> executed while building this. No weights were loaded, no video was segmented, no
+> FPS was benchmarked and no GPU memory was consumed. Every model claim below is
+> either a publisher fact (a licence read from the project, a file size read with a
+> HEAD request) or something this repository measured earlier and recorded. The
+> engine is prepared to run models locally; it stays dormant until a user asks it
+> to, and most backends still need their real worker wired.
+
+---
+
+## 1. Modules
+
+| Module | Responsibility | Model needed? |
+|---|---|---|
+| `roto_engine` | The interface every backend implements (`RotoEngine`, `LaunchPlan`, capabilities), the runtime probe (file presence only) | no |
+| `roto_selection` | Points, boxes and mask prompts, prompt sessions, box maths | no |
+| `roto_tracking` | Backends (Cutie / SAMURAI / XMem), per-object track state, resumable propagation segments | adapters only |
+| `roto_temporal` | Model-independent mask metrics: area change, centroid jump, identity drift, disappearance, flicker, ragged edges; recovery suggestions | no |
+| `roto_matting` | Feather, expand/contract, edge smoothing, invert, premultiply, alpha application; the seam for a learned matting backend | no |
+| `roto_refinement` | Boolean combination, opening/closing, despeckle, polygon fill, correction keyframes | no |
+| `roto_brush` | Paint/erase strokes with spacing along a drag and soft edges | no |
+| `roto_cache` | Multi-object, multi-model mask cache: `root/<digest>/object_<id>/frame_%08d.png` + manifest written last | no |
+| `roto_scheduler` | One job queue with priorities, pause, resume, cancel; starts nothing by itself | no |
+| `roto_export` | Binary / grayscale / alpha sequences, RGBA sequences, sidecar manifest | no |
+| `roto_models` | The catalogue, licences, install plans, downloads, verification, removal | no |
+| `roto_runtime` | Hardware/provider reporting and resolution/batching policy | no |
+
+The pipeline the modules implement:
+
+```
+ prompts ─▶ selection ─▶ tracking ─▶ temporal QC ─▶ matting ─▶ refinement ─▶ cache ─▶ export
+                │            │             │            │           │
+                └─ model ────┴─ model ─────┘  (all deterministic from here)
+```
+
+Everything to the right of *tracking* is FrameForge's own arithmetic: it runs
+today, in CI, with no model, and the integration test
+`crates/roto/tests/pipeline.rs` walks the whole path (prompts → mask → QC flags a
+tracking break → brush correction → matting → cache → alpha and RGBA export →
+queue).
+
+## 2. Models, licences, sizes and storage
+
+Licences below were read from each project's own repository on **2026-11-01**
+(the `LICENSE` file, or the SPDX id GitHub reports for the repository). Sizes were
+read with a `HEAD` request to the publisher's URL on the same date — metadata
+only, no download.
+
+| Model | Task | Licence (verified) | Redistribution | Weight file | Size (verified) | Runtime |
+|---|---|---|---|---|---|---|
+| SAM 2.1 Tiny | selection | Apache-2.0 | download offered | `sam2.1_hiera_tiny.pt` | 156,008,466 B (149 MB) | external Python |
+| SAM 2.1 Small | selection | Apache-2.0 | download offered | `sam2.1_hiera_small.pt` | 184,416,285 B (176 MB) | external Python |
+| EdgeTAM | selection | Apache-2.0 | download offered | publisher asset (URL unverified) | **not verified** | external Python |
+| Cutie Base | tracking (**preferred**) | MIT | download offered | `cutie-base-mega.pth` | 140,443,788 B (134 MB) | external Python |
+| SAMURAI | tracking (optional) | Apache-2.0 | download offered | `sam2.1_hiera_base_plus.pt` (it reuses SAM 2.1) | 323,606,802 B (309 MB) | external Python |
+| XMem | tracking (legacy fallback) | MIT | download offered | `XMem.pth` | 249,026,057 B (238 MB) | external Python |
+| Robust Video Matting | matting | **GPL-3.0-or-later** | **prohibited** | — (no download offered) | — | external Python |
+| MatAnyone / MatAnyone 2 | matting | **S-Lab 1.0, non-commercial** (v2: unasserted custom licence) | **prohibited** | — (no download offered) | — | external Python |
+| Temporal QC, edge matting | QC, matting | FrameForge's own (MIT OR Apache-2.0) | built in | none | 0 B | in-process Rust |
+
+Where weights are stored: `%LOCALAPPDATA%\FrameForgePro\models\<model id>\…` by
+default, configurable in the panel. Nothing is stored inside the project file, and
+no weight is ever bundled with the application.
+
+**Deliberately absent: SAM 3 and SAM 3.1.** A catalogue test fails the build if any
+entry even mentions them.
+
+### Licence consequences that shape the design
+
+* **RVM (GPL-3.0)** and **MatAnyone (non-commercial)** cannot be bundled with or
+  linked into FrameForge Pro. They are marked `Redistribution::Prohibited`, no
+  download is offered for them, and the UI says "user-supplied only". Use would be
+  an isolated external process the owner installed and cleared legally.
+* EdgeTAM's repository is Apache-2.0, but its **weight asset URL and size could not
+  be verified from this environment**, so the catalogue says so and the manager
+  requires the user to confirm the file before it is trusted.
+* No publisher SHA-256 was available for any checkpoint from this environment, so
+  the manager computes the digest after download, shows it, and lets the user pin
+  it — the same posture the existing XMem flow already takes.
+
+## 3. Runtimes and hardware (what may and may not be claimed)
+
+`roto_runtime` reports:
+
+* **CPU** — available, always, because the process is running on one. The XMem
+  CPU numbers in `docs/ROTO_AI_PLAN.md` (0.818 / 1.252 fps wall, 710.2 / 610.7 MB
+  peak RSS at 480×270 on the target Ryzen 5 7530U) were measured on the owner's
+  laptop, not in CI.
+* **ONNX Runtime + DirectML, CUDA and Vulkan** — **not probed**. No model is
+  claimed to run on them. Per the project rules, a provider may only be enabled
+  once its operators and runtime compatibility have actually been verified.
+* **Python + PyTorch (CPU)** — the path the existing XMem adapter uses; absent
+  until the user installs a runtime and consents.
+
+GPU memory and system RAM are **not probed** by this build (that needs an OS API
+this crate deliberately does not add a dependency for). The manager therefore works
+to a *disk* budget the user sets, and batching uses a conservative, documented
+estimate rather than a guess about free memory.
+
+## 4. What is implemented versus what still needs a real runtime
+
+Implemented and covered by tests that run in CI without any model:
+
+* prompt sessions (points, boxes, masks), box normalisation and clamping;
+* backend registry and adapters: a run is **planned** (command line, protocol,
+  weights) and refused with a named reason when the model is not installed or the
+  prompt type is unsupported;
+* resumable propagation segments that start from every user correction;
+* temporal quality control with eight signal kinds, contiguous flagged ranges, a
+  re-init suggestion and a seam for a learned QC scorer;
+* brush strokes, boolean refinement, morphology, despeckle and polygon fill;
+* matting (feather/expand/smooth/invert/premultiply) and alpha application;
+* the multi-object mask cache with a digest over every input that changes masks;
+* the job queue (priority, pause, resume, cancel, cancel-all, clear-finished);
+* mask/alpha/RGBA export with a manifest;
+* the model catalogue, install planning, download command rendering (including
+  `-C -` resume), checksum verification and removal;
+* runtime reporting, resolution fitting and batch sizing.
+
+**Still requires a real runtime to validate** (and is therefore *not* claimed as
+working): the actual selection, tracking and model-based matting of any backend.
+`tools/roto_worker.py` is an honest protocol stub: it answers `hello`/`ready`,
+`propagate`, `cancel` and `shutdown`, and refuses to fabricate a mask, an IoU or a
+timing number. Wiring a real backend means installing its runtime and weights and
+pointing the workspace at a real worker; nothing in the UI pretends otherwise.
+
+Known gaps, stated plainly:
+
+* No real Cutie, SAM 2.1, EdgeTAM or SAMURAI worker ships yet — the protocol path
+  is shared with the existing XMem worker, which IS real.
+* Occlusion/disappearance corpora and drift review (the plan's R6) have not been
+  run against a real model.
+* Temporal QC thresholds are arithmetic defaults; they have not been tuned against
+  real tracker output.
+* Resume-from-correction is planned and unit-tested, but not yet executed against a
+  live tracking backend.
+* The matting stage is deterministic; no learned mattter is enabled (licence
+  reasons above).
+
+## 5. Verification
+
+* `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo check`, `cargo test --workspace`, a release build and the binary self-test
+  (including `roto-bench 4`) run in CI. The crate adds **no new dependency**: it
+  reuses `image`, `serde`, `serde_json`, `thiserror` and the bridge's SHA-256.
+* Tests added by this work: catalogue/licence invariants (including "SAM 3 must not
+  appear"), install planning and refusal, the download command and resume flag, the
+  install state machine and verification (FIPS 180-4 "abc" vector), adapter
+  planning dormancy, prompt geometry, segment planning around corrections, temporal
+  signals (disappearance, reappearance, area explosion, identity swap, flicker,
+  ragged edge, degenerate mask), plane maths (expand/contract/feather/premultiply),
+  boolean and morphological refinement, polygon fill, brush strokes, cache key
+  sensitivity and round-trip, queue behaviour, export naming/modes/RGBA, runtime
+  reporting (no accelerator claimed), plus the whole-pipeline integration test.
+* No AI inference runs in CI, and none can: there is no weights download in the
+  workflow, and the adapter tests use `NoRuntime`, which finds nothing.
+
+## 6. Final report
+
+1. **Integrated models.** Cutie (primary tracking), SAM 2.1 Tiny/Small (interactive
+   selection), EdgeTAM (alternative selection), SAMURAI (optional motion-aware
+   tracking), XMem (legacy fallback), plus built-in temporal QC and built-in edge
+   matting. RVM and MatAnyone / MatAnyone 2 are catalogued but **disabled**: their
+   licences forbid this app from distributing them.
+2. **Licences.** Apache-2.0: SAM 2.1, EdgeTAM, SAMURAI. MIT: Cutie, XMem.
+   GPL-3.0-or-later: RVM (prohibited here). S-Lab 1.0 non-commercial (v2: custom,
+   unasserted): MatAnyone (prohibited here). FrameForge's own MIT OR Apache-2.0 for
+   the built-ins.
+3. **Weight sizes.** Verified with HEAD requests: SAM 2.1 Tiny 156,008,466 B;
+   SAM 2.1 Small 184,416,285 B; SAM 2.1 base+ (SAMURAI) 323,606,802 B; Cutie Base
+   140,443,788 B; XMem 249,026,057 B. EdgeTAM and the matting models: unknown /
+   not offered.
+4. **Where weights are stored.** `%LOCALAPPDATA%\FrameForgePro\models\<model id>\`
+   by default (configurable), outside the project file, never bundled.
+5. **Supported runtimes.** External Python processes speaking protocol 1 for every
+   AI backend (the XMem adapter is the one that exists today). ONNX Runtime and
+   DirectML are *investigated and declared*, not enabled. The deterministic half of
+   the pipeline runs in-process in Rust.
+6. **Hardware limitations.** Only the CPU is claimed usable. DirectML, CUDA and
+   Vulkan are "not probed"; no GPU, AMD, NVIDIA or Intel claim is made anywhere.
+   RAM/GPU memory are not probed.
+7. **Implemented features.** Prompted selection (points/boxes/masks), multi-object
+   tracks with ids, renaming and visibility, forward/backward/both propagation
+   planning, correction-split resumable segments, brush corrections, boolean and
+   morphological refinement, polygon fill, temporal QC with flagged ranges and
+   recovery actions, deterministic matting and alpha, multi-object caching,
+   a job queue with pause/resume/cancel, mask/alpha/RGBA export with a manifest,
+   a model manager (catalogue, plan, download with resume, verify, remove) and
+   runtime reporting.
+8. **Features needing inference validation.** Real masks from any backend; motion
+   handling under occlusion; QC thresholds against real tracker output; resume from
+   corrections on a live backend; any performance or memory measurement of the new
+   models.
+9. **Build and test results.** Recorded in the CI section of
+   `docs/ARCHITECTURE.md` for each commit; the crate compiles and its tests pass in
+   the same workflow as the rest of the workspace (fmt, clippy `-D warnings`, check,
+   tests, release, binary self-test with `roto-bench`).
+10. **Remaining work.** Real worker scripts per backend; a UI that draws prompts and
+    plays a tracking run; wiring the queue to the runners; shipping the workspace's
+    brush into the cache/export path in the app; recording the model manager's
+    verified digests in the consent record the XMem panel already keeps; the R6
+    occlusion/disappearance corpus.

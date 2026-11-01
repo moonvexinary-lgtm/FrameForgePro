@@ -1,5 +1,14 @@
 # Roto AI — XMem integration plan (mandatory engine)
 
+> **Superseded in scope by [`ROTO_ENGINE.md`](ROTO_ENGINE.md).** This document remains
+> the record of the XMem work (R1–R5), which is still the only backend with a real,
+> user-installed runtime. The multi-model engine in `crates/roto` now owns the
+> wider pipeline: Cutie as the preferred tracker, SAM 2.1 and EdgeTAM for selection,
+> SAMURAI as an optional tracker, XMem as the legacy fallback, a model-independent
+> temporal quality-control pass, deterministic matting/refinement, a multi-object
+> cache, a job queue and the model manager. XMem's place in that engine is a
+> `Task::Tracking` entry in the catalogue, not the only implementation.
+
 Status: **R1 and the R2 transport/exporter are implemented and CI-verified; a real XMem protocol
 worker and local R3 probe now run the official model on CPU. XMem is not app-wired, and the Roto AI
 workspace (R4), consent-based pack/weights (R5) and full R3 acceptance are not complete.** R1 (run

@@ -874,6 +874,29 @@ Status** already switches there. It is a single-clip, single-pass slice: no brus
 - **CI**: run `41255268402` — fmt, clippy `-D warnings`, check, **87 tests**, release build, binary
   self-test including `roto-bench 4`; artifact `frameforge-pro-windows-dev` is 26,040,820 bytes.
 
+## R7 — the multi-model rotoscoping engine (partial; `crates/roto`)
+
+XMem is no longer the only tracking engine and is no longer the default:
+`crates/roto` (`frameforge-roto`) is a model-independent engine — selection
+prompts, tracking backends (Cutie preferred, SAMURAI optional, XMem legacy
+fallback), model-independent temporal quality control, deterministic matting and
+refinement, a multi-object mask cache, a job queue with pause/resume/cancel,
+mask/alpha/RGBA export, the model catalogue and manager, and hardware *reporting*
+that never claims an unverified provider.
+
+The full module map, the verified licence and size table for every model, what is
+implemented versus what still needs a real runtime, and the ten-point report live
+in **[`ROTO_ENGINE.md`](ROTO_ENGINE.md)**. Two rules are structural, not promises:
+
+* no model inference runs anywhere in this repository's build or tests — backend
+  adapters *plan* a run (command, protocol, weights) and stay dormant until the
+  workspace asks, and the adapter tests use a probe that finds nothing;
+* SAM 3 and SAM 3.1 appear nowhere, and a catalogue test fails the build if they
+  ever do.
+
+The XMem path documented in R1–R5 above is unchanged and remains the one backend
+with a real, user-installed runtime.
+
 ## Milestones
 
 | # | Milestone | Status |
@@ -909,6 +932,7 @@ Status** already switches there. It is a single-clip, single-pass slice: no brus
 | T12 | Marker CSV export with RFC 4180 quoting, exact ticks, padded start timecode and a byte-for-byte file test | CI-verified, run 40260600879 |
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
+| R7 | Multi-model rotoscoping engine: `crates/roto` (selection, tracking backends with Cutie preferred and XMem legacy, temporal QC, matting, refinement, cache, scheduler, export), model catalogue/manager and the workspace panel | 🟡 Partial: everything deterministic is tested, no model is wired to a real runtime yet. See `ROTO_ENGINE.md` |
 
 ## Dependency policy
 
