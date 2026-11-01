@@ -47,6 +47,9 @@ cpal = "0.16"
 # --- FrameForge Pro ------------------------------------------------------------
 frameforge-core = { path = "crates/core" }
 frameforge-bridge = { path = "crates/bridge" }
+# The model-independent rotoscoping engine: selection, tracking, temporal QC,
+# matting, refinement, caching, scheduling and export.
+frameforge-roto = { path = "crates/roto" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

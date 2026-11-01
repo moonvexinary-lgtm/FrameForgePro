@@ -1,0 +1,20 @@
+[package]
+name = "frameforge-roto"
+description = "FrameForge Pro's model-independent rotoscoping engine: selection, tracking, temporal quality control, matting, refinement, caching, scheduling and export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The bridge is reused for exactly one thing: its SHA-256, so weights
+# verification has a single implementation in the tree.
+frameforge-bridge = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+image = { workspace = true }
+
+[lints]
+workspace = true
