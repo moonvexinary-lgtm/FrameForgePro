@@ -186,15 +186,19 @@ Known gaps, stated plainly:
   `cargo check`, `cargo test --workspace`, a release build and the binary self-test
   (including `roto-bench 4`) run in CI. The crate adds **no new dependency**: it
   reuses `image`, `serde`, `serde_json`, `thiserror` and the bridge's SHA-256.
-* CI run **`41345085275`** (commit `309fcb8`, `frameforge-rust-rewrite`) is green on
+* CI run **`41581127327`** (commit `ba87930`, `frameforge-rust-rewrite`) is green on
   all thirteen steps — fmt, clippy `-D warnings`, check, tests, release build,
-  binary self-test including `roto-bench 4` — with **153 tests** across the
-  workspace (64 of them in `frameforge-roto` plus the 2 whole-pipeline integration
-  tests) and a 26,088,741-byte `frameforge-pro-windows-dev` artifact. Earlier runs
-  in the same sequence (`41333253570`, `41335272433`, `41338563897`, `41340776558`,
-  `41340975193`, `41343042188`) are the failures that produced the fixes listed in
-  this document's history — visibility, `Eq`, serde on static slices, the backward
-  segment plan, the ragged-edge threshold and two over-strict test assertions.
+  binary self-test including `roto-bench 4`, artifact upload — including the five
+  tests added with the Cutie run path (four gate/run decisions, one cache
+  adoption). Earlier green run **`41345085275`** (commit `309fcb8`) recorded **153
+  tests** across the workspace (64 in `frameforge-roto` plus the 2 whole-pipeline
+  integration tests) and a 26,088,741-byte artifact; **`41347694498`** (`a36edb9`)
+  repeated it for the documentation change. Runs `41578955634` and `41579916787`
+  are the two failures that produced this section's run-path fixes — a `&str`/`String`
+  mismatch in the licence line, the missing `SourceProvider` import, and the
+  `FrameRate` fields being `i64` rather than `i32`.
+* CI proof does **not** cover inference: the Cutie worker is never started there
+  (no torch, no weights), by design.
 * Tests added by this work: catalogue/licence invariants (including "SAM 3 must not
   appear"), install planning and refusal, the download command and resume flag, the
   install state machine and verification (FIPS 180-4 "abc" vector), adapter
@@ -203,7 +207,11 @@ Known gaps, stated plainly:
   ragged edge, degenerate mask), plane maths (expand/contract/feather/premultiply),
   boolean and morphological refinement, polygon fill, brush strokes, cache key
   sensitivity and round-trip, queue behaviour, export naming/modes/RGBA, runtime
-  reporting (no accelerator claimed), plus the whole-pipeline integration test.
+  reporting (no accelerator claimed), cache adoption from a worker's directory
+  (missing and mis-sized frames publish nothing), the run gate's ordered refusals,
+  the restricted-licence refusal, "no command line or no mask means no run", and
+  "a report without an R1 key is not attachable", plus the whole-pipeline
+  integration test.
 * No AI inference runs in CI, and none can: there is no weights download in the
   workflow, and the adapter tests use `NoRuntime`, which finds nothing.
 
