@@ -390,19 +390,17 @@ impl RotoEngineState {
 
     /// Watch the running backend job; adopt its report when it finishes.
     pub fn poll_run(&mut self) {
-        let Some(run) = self.run.as_mut() else { return };
-        if let Some(result) = run.handle.try_finish() {
-            let model = run.model_id.clone();
-            self.run = None;
-            match result {
-                Ok(report) => {
-                    self.message = Some(format!("{model}: {}", report.summary));
-                    self.last_run = Some(report);
-                }
-                Err(error) => {
-                    self.message = Some(format!("{model}: {error}"));
-                    self.last_run = None;
-                }
+        let Some(result) = self.run.as_mut().and_then(|run| run.handle.try_finish()) else { return };
+        let Some(run) = self.run.take() else { return };
+        let model = run.model_id;
+        match result {
+            Ok(report) => {
+                self.message = Some(format!("{model}: {}", report.summary));
+                self.last_run = Some(report);
+            }
+            Err(error) => {
+                self.message = Some(format!("{model}: {error}"));
+                self.last_run = None;
             }
         }
     }
@@ -568,12 +566,10 @@ fn run_controls(app: &mut App, panel: &mut egui::Ui) {
     }
 
     // Attaching is the same undoable document edit the XMem panel uses.
-    let attachable = app
-        .roto_engine
-        .last_run
-        .as_ref()
-        .filter(|report| crate::roto_run::attach_available(report))
-        .and_then(|report| Some((report.r1_key.clone()?, report.item?)));
+    let attachable: Option<(String, filmcraft_project::ItemId)> = match app.roto_engine.last_run.as_ref() {
+        Some(report) if crate::roto_run::attach_available(report) => report.r1_key.clone().zip(report.item),
+        _ => None,
+    };
     if let Some((key, item)) = attachable {
         let already = app.compositions.get(&item).and_then(|comp| comp.roto.as_ref()).is_some_and(|roto| roto.key == key);
         if already {
