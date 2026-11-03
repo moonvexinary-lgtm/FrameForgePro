@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use filmcraft_engine::{EditorState, Session};
 use filmcraft_project::{ClipId, ItemId, Project};
-use filmcraft_time::{FrameRate, Tick};
+use filmcraft_time::{FrameRate, Tick, TimeRange};
 use frameforge_bridge::{Composition, FFPROJ_SCHEMA, FrameForgeProject, ProjectSources};
 
 use crate::audio::Player;
@@ -525,6 +525,24 @@ impl App {
         self.session.project.items.get(&id).and_then(|it| it.as_sequence())
     }
 
+    /// The active sequence's frame rate (the project default before one exists).
+    pub fn sequence_rate(&self) -> FrameRate {
+        self.sequence().map(|s| s.settings.frame_rate).unwrap_or(SEQUENCE_RATE)
+    }
+
+    /// The timeline range of one clip in the active sequence.
+    pub fn clip_range(&self, clip: ClipId) -> Option<TimeRange> {
+        let s = self.sequence()?;
+        for track in s.video_tracks.iter().chain(&s.audio_tracks) {
+            for item in &track.items {
+                if item.id == clip {
+                    return Some(TimeRange::new(item.start, item.duration));
+                }
+            }
+        }
+        None
+    }
+
     /// The sequence's duration (its last clip's end), or zero.
     pub fn sequence_end(&self) -> Tick {
         self.sequence()
@@ -912,8 +930,10 @@ impl eframe::App for App {
 
         // Adopt a finished roto job (its thread never touches the App).
         self.roto.poll();
-        // Watch the model manager's download, if one is running.
+        // Watch the model manager's download, if one is running, and adopt a
+        // finished backend run.
         self.roto_engine.poll();
+        self.roto_engine.poll_run();
 
         let full = ui.max_rect();
         let top = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), TOP_H));

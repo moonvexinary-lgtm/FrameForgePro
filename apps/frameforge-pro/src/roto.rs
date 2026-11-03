@@ -451,7 +451,7 @@ pub fn show(app: &mut App, panel: &mut egui::Ui) {
 
 /// Attach a published cache to the clip as an undoable composition edit — the
 /// same seam `RotoRef` uses, so preview and export both read the matte.
-fn attach_matte(app: &mut App, item: ItemId, key: &str) {
+pub(crate) fn attach_matte(app: &mut App, item: ItemId, key: &str) {
     let before = app.compositions.get(&item).cloned();
     {
         let composition = app.compositions.entry(item).or_default();
@@ -593,7 +593,7 @@ fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
 }
 
 /// A labelled path field with a browse button. `folder` picks a directory.
-fn path_row(panel: &mut egui::Ui, label: &str, value: &mut String, filter: &str, folder: bool) {
+pub(crate) fn path_row(panel: &mut egui::Ui, label: &str, value: &mut String, filter: &str, folder: bool) {
     panel.label(ui::meta(label));
     panel.horizontal(|ui| {
         let width = (ui.available_width() - 74.0).max(60.0);
@@ -789,7 +789,7 @@ fn cache_key_for(doc: &FrameForgeProject, item: ItemId, runtime: &RotoRuntime, w
 
 /// A stable, content-sensitive identity for the clip's media: a different file
 /// (path, size, fingerprint) or a different generator is a different cache.
-fn source_identity(item: ItemId, clip: &MediaClip) -> String {
+pub(crate) fn source_identity(item: ItemId, clip: &MediaClip) -> String {
     let media = match &clip.media {
         MediaRef::File { path } => match &clip.identity {
             Some(identity) => format!("file:{path}:{:016x}:{}", identity.fingerprint, identity.size),

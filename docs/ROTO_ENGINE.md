@@ -10,7 +10,8 @@ quality control, matting, refinement, caching, scheduling and export, built as
 > either a publisher fact (a licence read from the project, a file size read with a
 > HEAD request) or something this repository measured earlier and recorded. The
 > engine is prepared to run models locally; it stays dormant until a user asks it
-> to, and most backends still need their real worker wired.
+> to. Cutie has a real worker adapter (written, not executed — see §4); SAM 2.1,
+> EdgeTAM and SAMURAI still need theirs.
 
 ---
 
@@ -19,6 +20,7 @@ quality control, matting, refinement, caching, scheduling and export, built as
 | Module | Responsibility | Model needed? |
 |---|---|---|
 | `roto_engine` | The interface every backend implements (`RotoEngine`, `LaunchPlan`, capabilities), the runtime probe (file presence only) | no |
+| `roto_run` (app) | Gate, frame export, worker spawn, job run and double publish for any backend | adapters only |
 | `roto_selection` | Points, boxes and mask prompts, prompt sessions, box maths | no |
 | `roto_tracking` | Backends (Cutie / SAMURAI / XMem), per-object track state, resumable propagation segments | adapters only |
 | `roto_temporal` | Model-independent mask metrics: area change, centroid jump, identity drift, disappearance, flicker, ragged edges; recovery suggestions | no |
@@ -130,10 +132,45 @@ working): the actual selection, tracking and model-based matting of any backend.
 timing number. Wiring a real backend means installing its runtime and weights and
 pointing the workspace at a real worker; nothing in the UI pretends otherwise.
 
+### The Cutie worker (written, not executed)
+
+`tools/cutie_worker.py` is a real adapter over a **user-supplied Cutie checkout**,
+written to the same protocol-1 contract as the XMem worker. It:
+
+* hands the caller's `hello`/`propagate`/`cancel`/`shutdown` traffic unchanged, so
+  the bridge's runner drives it without a new transport;
+* hashes the weights **before** importing torch and refuses a mismatch (all-zero
+  means "not pinned yet", and the measured digest is reported instead);
+* never downloads: no `get_default_model()`, no `torch.hub`, no network call;
+* builds Cutie from the checkout's own Hydra config, and if that path differs in
+  the user's version it reports the exact file it looked for rather than guessing;
+* reports `rss_mb` with every progress event, so the memory ceiling is enforced on
+  a real number, and honours cancel between frames;
+* writes 8-bit grayscale `frame_%08d.png` masks, which both caches adopt as-is.
+
+**It was not executed while building this**: no weights were loaded, no inference
+ran, no GPU memory was touched. Its protocol, verification, frame conversion,
+cancellation, progress and mask writing mirror the adapter that already runs for
+XMem; only the model-construction step is unproven, and it fails loudly.
+
+### From a plan to a live run
+
+The engine panel now runs a backend end to end: `RUN THE SELECTED BACKEND` asks for
+consent, a checkout (Cutie/XMem), the initial mask and a selected clip, then
+`roto_run::gate` refuses anything that is not licensed, installed and consented
+*before* a thread is spawned. A passing gate exports the clip's frames, spawns the
+worker with the plan's own command line plus the backend's checkout flags, drives
+it under `run_job` (stall, deadline and memory ceilings), and publishes twice: the
+multi-object cache of `frameforge-roto` (adopting the worker's bytes), and the
+bridge's R1 cache the renderer reads. The finished run offers the same undoable
+"Use this matte on the clip" edit the XMem panel uses, so a Cutie matte reaches the
+timeline through the same seam.
+
 Known gaps, stated plainly:
 
-* No real Cutie, SAM 2.1, EdgeTAM or SAMURAI worker ships yet — the protocol path
-  is shared with the existing XMem worker, which IS real.
+* SAM 2.1, EdgeTAM and SAMURAI still have no worker of their own: their runs go
+  through the stub, which refuses rather than pretending.
+* The Cutie worker's model-construction step is unproven (above).
 * Occlusion/disappearance corpora and drift review (the plan's R6) have not been
   run against a real model.
 * Temporal QC thresholds are arithmetic defaults; they have not been tuned against
@@ -188,9 +225,11 @@ Known gaps, stated plainly:
 4. **Where weights are stored.** `%LOCALAPPDATA%\FrameForgePro\models\<model id>\`
    by default (configurable), outside the project file, never bundled.
 5. **Supported runtimes.** External Python processes speaking protocol 1 for every
-   AI backend (the XMem adapter is the one that exists today). ONNX Runtime and
-   DirectML are *investigated and declared*, not enabled. The deterministic half of
-   the pipeline runs in-process in Rust.
+   AI backend: XMem has a real worker, Cutie now has a real adapter over a
+   user-supplied checkout (`tools/cutie_worker.py`, written, not executed), and the
+   rest use the honest stub. ONNX Runtime and DirectML are *investigated and
+   declared*, not enabled. The deterministic half of the pipeline runs in-process
+   in Rust.
 6. **Hardware limitations.** Only the CPU is claimed usable. DirectML, CUDA and
    Vulkan are "not probed"; no GPU, AMD, NVIDIA or Intel claim is made anywhere.
    RAM/GPU memory are not probed.
@@ -210,8 +249,8 @@ Known gaps, stated plainly:
    `docs/ARCHITECTURE.md` for each commit; the crate compiles and its tests pass in
    the same workflow as the rest of the workspace (fmt, clippy `-D warnings`, check,
    tests, release, binary self-test with `roto-bench`).
-10. **Remaining work.** Real worker scripts per backend; a UI that draws prompts and
-    plays a tracking run; wiring the queue to the runners; shipping the workspace's
-    brush into the cache/export path in the app; recording the model manager's
-    verified digests in the consent record the XMem panel already keeps; the R6
-    occlusion/disappearance corpus.
+10. **Remaining work.** Real workers for SAM 2.1 / EdgeTAM / SAMURAI (Cutie's is
+    written but unproven); a prompt-drawing canvas that feeds a selection backend;
+    tracked-run playback with the QC review list; recording the model manager's
+    verified digests in the consent record the XMem panel keeps; the R6
+    occlusion/disappearance corpus and QC threshold tuning.

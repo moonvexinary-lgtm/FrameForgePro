@@ -27,6 +27,7 @@ mod pixels;
 mod roto;
 mod roto_bench;
 mod roto_engine;
+mod roto_run;
 mod ui;
 
 use std::process::ExitCode;

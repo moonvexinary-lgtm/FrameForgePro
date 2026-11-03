@@ -333,6 +333,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--xmem-source", required=True, help="path to an official XMem checkout")
     parser.add_argument("--xmem-version", default="external", help="commit/version label for the handshake")
+    # The editor's launch plan names the catalogue model and the weight file it
+    # installed; the propagate message carries the same path, so these are
+    # accepted for a uniform command line and reported, not reloaded from here.
+    parser.add_argument("--model", default="", help="catalogue id the editor planned (informational)")
+    parser.add_argument("--weights", default="", help="weight file the editor installed (informational)")
     args = parser.parse_args()
 
     source = str(Path(args.xmem_source).resolve())

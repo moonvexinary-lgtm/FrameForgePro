@@ -177,6 +177,79 @@ pub fn publish(root: &Path, key: &MaskKey, object_id: u64, first_frame: i64, fra
     Ok(count)
 }
 
+/// Publish masks a worker already wrote into `source_dir` as
+/// `frame_%08d.png`, without holding the run in memory: every file is decoded and
+/// size-checked first, then copied byte-for-byte (so the cache holds exactly the
+/// worker's bytes), and the manifest lands last.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_from_dir(
+    root: &Path,
+    key: &MaskKey,
+    object_id: u64,
+    first_frame: i64,
+    source_dir: &Path,
+    count: i64,
+    mode: MatteMode,
+) -> Result<i64, CacheError> {
+    if key.object_ids.binary_search(&object_id).is_err() {
+        return Err(CacheError::Format(format!("object {object_id} is not part of this key's object set")));
+    }
+    if !(0..=MAX_CACHED_FRAMES).contains(&count) {
+        return Err(CacheError::Format(format!("{count} frames is outside the cache's frame limit")));
+    }
+    if first_frame < 0 {
+        return Err(CacheError::Format(format!("a cache cannot start at frame {first_frame}")));
+    }
+    if key.width == 0 || key.height == 0 || u64::from(key.width) * u64::from(key.height) > MAX_CACHED_PIXELS {
+        return Err(CacheError::Format(format!("the key declares a {}x{} mask", key.width, key.height)));
+    }
+    if count == 0 {
+        return Err(CacheError::Format("there is nothing to publish".to_string()));
+    }
+
+    // Pass one: every promised frame is there and is the right size.
+    for index in 0..count {
+        let frame = first_frame + index;
+        let path = source_dir.join(format!("frame_{frame:08}.png"));
+        if !path.is_file() {
+            return Err(CacheError::Format(format!("frame {frame} is missing from {}", source_dir.display())));
+        }
+        let image = image::open(&path).map_err(|error| CacheError::Format(format!("{}: {error}", path.display())))?;
+        let gray = image.to_luma8();
+        if gray.width() != key.width || gray.height() != key.height {
+            return Err(CacheError::Format(format!("{} is {}x{} but the key says {}x{}", path.display(), gray.width(), gray.height(), key.width, key.height)));
+        }
+    }
+
+    // Pass two: copy the worker's own bytes, then publish the manifest.
+    let dir = object_dir(root, key, object_id);
+    std::fs::create_dir_all(&dir)?;
+    for index in 0..count {
+        let frame = first_frame + index;
+        let file = format!("frame_{frame:08}.png");
+        std::fs::copy(source_dir.join(&file), dir.join(&file))?;
+    }
+    let manifest = ObjectManifest {
+        version: CACHE_VERSION,
+        key: key.digest(),
+        object_id,
+        width: key.width,
+        height: key.height,
+        first_frame,
+        frame_count: count,
+        mode: mode_code(mode),
+    };
+    let text = serde_json::to_vec_pretty(&manifest).map_err(|error| CacheError::Format(format!("manifest JSON: {error}")))?;
+    let temp = dir.join("manifest.json.tmp");
+    std::fs::write(&temp, text)?;
+    let published = dir.join("manifest.json");
+    if published.exists() {
+        std::fs::remove_file(&published)?;
+    }
+    std::fs::rename(&temp, &published)?;
+    Ok(count)
+}
+
 /// Read one object's manifest, if it is there and consistent with the key.
 pub fn manifest(root: &Path, key: &MaskKey, object_id: u64) -> Result<ObjectManifest, CacheError> {
     let dir = object_dir(root, key, object_id);
@@ -367,6 +440,33 @@ mod tests {
         let error = publish(&root, &key, 9, 0, &[plane(16, 8, 255)], MatteMode::Alpha).expect_err("an object outside the key is refused");
         assert!(error.to_string().contains("object 9"), "{error}");
         assert!(publish(&root, &key, 1, -1, &[plane(16, 8, 255)], MatteMode::Alpha).is_err(), "a negative first frame is refused");
+    }
+
+    #[test]
+    fn a_workers_directory_is_adopted_without_holding_the_run_in_memory() {
+        let root = temp_root("adopt-dir");
+        let worker = root.join("worker-out");
+        std::fs::create_dir_all(&worker).expect("worker dir");
+        let key = make_key(vec![1], vec![]);
+        for frame in 3..6 {
+            let image = image::GrayImage::from_raw(16, 8, plane(16, 8, 0).data().to_vec()).expect("mask");
+            image.save(worker.join(format!("frame_{frame:08}.png"))).expect("worker mask");
+        }
+        let published = publish_from_dir(&root, &key, 1, 3, &worker, 3, MatteMode::Alpha).expect("adopt the directory");
+        assert_eq!(published, 3);
+
+        let loaded = load(&root, &key, 1, 4).expect("load").expect("frame 4");
+        assert_eq!(loaded.covered(128), 0, "the worker's bytes are what the cache holds");
+        assert!(load(&root, &key, 1, 2).expect("outside").is_none());
+
+        // A short directory is refused and publishes nothing.
+        let other = temp_root("adopt-dir-short");
+        let short_worker = other.join("worker-out");
+        std::fs::create_dir_all(&short_worker).expect("worker dir");
+        image::GrayImage::from_raw(16, 8, plane(16, 8, 255).data().to_vec()).expect("mask").save(short_worker.join("frame_00000000.png")).expect("mask");
+        let error = publish_from_dir(&other, &key, 1, 0, &short_worker, 3, MatteMode::Alpha).expect_err("a short run is refused");
+        assert!(error.to_string().contains("frame 1"), "{error}");
+        assert!(manifest(&other, &key, 1).is_err(), "and no manifest was published");
     }
 
     #[test]

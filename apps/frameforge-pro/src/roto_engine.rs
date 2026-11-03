@@ -33,8 +33,24 @@ struct DownloadRun {
     model: &'static str,
 }
 
+/// One backend run in flight (frame export → worker → publish).
+pub struct BackendRun {
+    handle: crate::roto_run::RunHandle,
+    pub model_id: String,
+}
+
 /// Everything the engine panel remembers between frames.
 pub struct RotoEngineState {
+    /// The user's consent for the selected backend: they installed the runtime and
+    /// the weights themselves and accept the licence.
+    pub consent: bool,
+    /// The backend run in flight, if any.
+    pub run: Option<BackendRun>,
+    /// The last finished run's report.
+    pub last_run: Option<crate::roto_run::RunReport>,
+    /// The user's Cutie checkout: the Python package `tools/cutie_worker.py`
+    /// imports. FrameForge never ships or vendors it.
+    pub cutie_source: String,
     /// The tracking backend the workspace will use.
     pub tracking_model: String,
     /// The interactive selection backend.
@@ -63,6 +79,10 @@ pub struct RotoEngineState {
 impl Default for RotoEngineState {
     fn default() -> Self {
         Self {
+            consent: false,
+            run: None,
+            last_run: None,
+            cutie_source: String::new(),
             tracking_model: models::DEFAULT_TRACKING_MODEL.to_string(),
             selection_model: models::DEFAULT_SELECTION_MODEL.to_string(),
             models_root: default_models_root().display().to_string(),
@@ -281,6 +301,122 @@ impl RotoEngineState {
         self.verify_and_install(model, &destination);
     }
 
+    /// The interpreter a run would use: the one configured in the XMem runtime
+    /// section, or the first one found on PATH.
+    fn interpreter(&self, inputs: &RunInputs) -> Option<PathBuf> {
+        let configured = inputs.python.trim();
+        if configured.is_empty() { inputs.python_suggestion.clone() } else { Some(PathBuf::from(configured)) }
+    }
+
+    /// The backend's own checkout, when it needs one. FrameForge ships neither.
+    fn checkout_dir(&self, inputs: &RunInputs, model_id: &str) -> Option<PathBuf> {
+        let path = if model_id.starts_with("cutie") {
+            self.cutie_source.trim()
+        } else if model_id.starts_with("xmem") {
+            inputs.xmem_source.trim()
+        } else {
+            ""
+        };
+        (!path.is_empty()).then(|| PathBuf::from(path))
+    }
+
+    /// The gate the runner checks before anything starts.
+    pub fn run_gate(&self, inputs: &RunInputs, model_id: &str) -> crate::roto_run::RunGate {
+        let model = find(model_id);
+        crate::roto_run::RunGate {
+            model_id: model_id.to_string(),
+            // Prohibited and unreviewed licences may only be run as external tools
+            // the user installed; this build refuses to drive them at all.
+            licence_permits: model.is_some_and(|model| model.license.redistribution != Redistribution::Prohibited),
+            // A checkout is the "runtime": for backends that need one, it must be a
+            // directory; backends without one rely on their worker to say so.
+            runtime_installed: self.checkout_dir(inputs, model_id).is_none_or(|dir| dir.is_dir()),
+            weights_present: self.probe().is_installed(model_id),
+            interpreter: self.interpreter(inputs),
+            worker: PathBuf::from(worker_script_for(model_id)),
+            consent: self.consent,
+        }
+    }
+
+    /// Start a run of the selected backend on the selected clip.
+    ///
+    /// The interpreter, worker script and weights come from the engine's own
+    /// plan; the panel only adds the backend's checkout path, which the plan
+    /// cannot know. The caller snapshots the workspace into [`RunInputs`] first,
+    /// so this never needs two simultaneous borrows of the app.
+    pub fn start_run(&mut self, inputs: &RunInputs) -> Result<(), String> {
+        if let Some(run) = &self.run {
+            return Err(format!("{} is already running", run.model_id));
+        }
+        let model_id = self.tracking_model.clone();
+        crate::roto_run::gate(&self.run_gate(inputs, &model_id))?;
+
+        let interpreter = self.interpreter(inputs).ok_or_else(|| "no Python interpreter is configured; set one in the runtime section below".to_string())?;
+        let registry = self.backend_registry(worker_script_for(&model_id), interpreter);
+        let planned = registry.plan(&model_id, &inputs.track_request(), true).map_err(|error| format!("cannot plan a {model_id} run: {error}"))?;
+        let command = planned.command.ok_or_else(|| format!("{model_id} is not an external backend"))?;
+        let weights = planned.weights.first().cloned();
+        let digest = self.pinned_digest(&model_id).unwrap_or("").to_string();
+        if model_id.starts_with("xmem") && digest.is_empty() {
+            return Err("pin the XMem weights' SHA-256 in the runtime section before running".to_string());
+        }
+
+        let mut args = command.args;
+        args.extend(backend_args(inputs, &model_id, &digest)?);
+
+        let request = crate::roto_run::RunRequest {
+            program: PathBuf::from(command.program),
+            args,
+            model_id: model_id.clone(),
+            weights_path: weights,
+            weights_sha256: if digest.is_empty() { "0".repeat(64) } else { digest },
+            object_id: 1,
+            doc: inputs.doc.clone(),
+            item: inputs.item,
+            range: inputs.range,
+            rate: inputs.rate,
+            working: inputs.working,
+            initial_mask: inputs.initial_mask.clone(),
+            direction: inputs.direction,
+            limits: frameforge_bridge::RotoJobLimits::default(),
+            cache_root: self.models_root_path().join("cache"),
+            r1_root: frameforge_bridge::default_cache_root(),
+        };
+        let handle = crate::roto_run::start(request)?;
+        self.run = Some(BackendRun { handle, model_id });
+        self.message = None;
+        Ok(())
+    }
+
+    /// Watch the running backend job; adopt its report when it finishes.
+    pub fn poll_run(&mut self) {
+        let Some(run) = self.run.as_mut() else { return };
+        if let Some(result) = run.handle.try_finish() {
+            let model = run.model_id.clone();
+            self.run = None;
+            match result {
+                Ok(report) => {
+                    self.message = Some(format!("{model}: {}", report.summary));
+                    self.last_run = Some(report);
+                }
+                Err(error) => {
+                    self.message = Some(format!("{model}: {error}"));
+                    self.last_run = None;
+                }
+            }
+        }
+    }
+
+    pub fn run_progress(&self) -> Option<String> {
+        self.run.as_ref().and_then(|run| run.handle.progress())
+    }
+
+    pub fn cancel_run(&mut self) {
+        if let Some(run) = &self.run {
+            run.handle.request_cancel();
+        }
+    }
+
     /// The jobs the workspace would enqueue for a tracking run.
     pub fn plan_jobs(&mut self, object_id: u64, range: FrameRange) -> (u64, u64) {
         let tracking = self.queue.enqueue(JobKind::Tracking, self.tracking_model.clone(), Some(object_id), range, 5);
@@ -336,31 +472,154 @@ fn backend_selectors(app: &mut App, panel: &mut egui::Ui) {
     });
     licence_line(panel, selected_selection, app.roto_engine.probe().is_installed(selected_selection.id));
 
-    // What a run would look like — planned, never started here.
-    let registry = app.roto_engine.backend_registry("tools/roto_worker.py", "python.exe");
-    match registry.plan(&app.roto_engine.tracking_model, &planned_request(app), false) {
-        Ok(plan) => {
-            let command =
-                plan.command.as_ref().map(|command| format!("{} {}", command.program, command.args.join(" "))).unwrap_or_else(|| "in-process".to_string());
-            panel.label(ui::hint(&format!("planned run (dormant): {command}")));
-        }
-        Err(error) => {
-            panel.label(egui::RichText::new(format!("cannot plan a run yet: {error}")).size(10.0).color(ui::WARN));
-        }
-    }
-    panel.label(ui::hint(
-        "The protocol worker for these backends is a stub (tools/roto_worker.py): it answers the protocol and refuses to fabricate masks until the real runtime is wired.",
-    ));
+    run_controls(app, panel);
 }
 
-/// A minimal request used only to *describe* a run in the panel.
-fn planned_request(app: &App) -> frameforge_roto::TrackRequest {
-    use frameforge_roto::engine::ObjectSpec;
-    use frameforge_roto::selection::Prompt;
+/// The workspace as it was when the user pressed Run: a snapshot, so the engine
+/// state can be borrowed mutably on its own while the plan is built.
+#[derive(Clone)]
+pub struct RunInputs {
+    pub doc: frameforge_bridge::FrameForgeProject,
+    pub item: filmcraft_project::ItemId,
+    pub range: filmcraft_time::TimeRange,
+    pub rate: filmcraft_time::FrameRate,
+    pub working: (u32, u32),
+    pub initial_mask: PathBuf,
+    pub direction: frameforge_bridge::WorkerDirection,
+    pub python: String,
+    pub python_suggestion: Option<PathBuf>,
+    pub cutie_source: String,
+    pub xmem_source: String,
+}
 
-    let object = ObjectSpec::new(1, "Subject").with_prompts(vec![Prompt::Mask { frame: 0 }]);
-    let first = app.sequence().map(|_| 0).unwrap_or(0);
-    frameforge_roto::TrackRequest::new(object, FrameRange::new(first, first + 23), Direction::Forward, (app.roto.width.max(16), app.roto.height.max(16)))
+impl RunInputs {
+    pub fn from_app(app: &App) -> Result<Self, String> {
+        let Some((clip, item)) = app.selected_clip() else {
+            return Err("select a clip on the timeline first".to_string());
+        };
+        let range = app.clip_range(clip).ok_or_else(|| "the selected clip is not in the sequence".to_string())?;
+        Ok(Self {
+            doc: app.document(),
+            item,
+            range,
+            rate: app.sequence_rate(),
+            working: (app.roto.width.max(16), app.roto.height.max(16)),
+            initial_mask: PathBuf::from(app.roto.initial_mask.trim()),
+            direction: if app.roto.forward { frameforge_bridge::WorkerDirection::Forward } else { frameforge_bridge::WorkerDirection::Backward },
+            python: app.roto.python.clone(),
+            python_suggestion: app.roto.python_suggestion(),
+            cutie_source: app.roto_engine.cutie_source.clone(),
+            xmem_source: app.roto.xmem_source.clone(),
+        })
+    }
+
+    /// A minimal request used only to *describe* (and validate) the run: one
+    /// object, the clip's own range, the working size.
+    fn track_request(&self) -> frameforge_roto::TrackRequest {
+        use frameforge_roto::engine::ObjectSpec;
+        use frameforge_roto::selection::Prompt;
+
+        let object = ObjectSpec::new(1, "Subject").with_prompts(vec![Prompt::Mask { frame: 0 }]);
+        let (first, last) = crate::roto::frame_range(self.rate, self.range).unwrap_or((0, 23));
+        frameforge_roto::TrackRequest::new(object, FrameRange::new(first, last), Direction::Forward, self.working)
+    }
+}
+
+/// Consent, the backend's checkout, the run button, live progress, cancel and the
+/// attach action.
+fn run_controls(app: &mut App, panel: &mut egui::Ui) {
+    ui::section(panel, "RUN THE SELECTED BACKEND");
+    let model_id = app.roto_engine.tracking_model.clone();
+    let model = find(&model_id);
+    let installed = app.roto_engine.probe().is_installed(&model_id);
+    panel.label(ui::hint(match model {
+        Some(model) => format!("{} · {} · {}", model.name, model.license.spdx, if installed { "installed" } else { "not installed" }),
+        None => "no backend selected".to_string(),
+    }));
+
+    if model_id.starts_with("cutie") {
+        crate::roto::path_row(panel, "Cutie checkout", &mut app.roto_engine.cutie_source, "cutie", true);
+    }
+    panel.checkbox(&mut app.roto_engine.consent, "I installed this backend's runtime and weights myself and accept its licence");
+    ui::kv(panel, "Initial mask", if app.roto.initial_mask.trim().is_empty() { "none yet".to_string() } else { app.roto.initial_mask.clone() });
+
+    let running = app.roto_engine.run.is_some();
+    if running {
+        if let Some(line) = app.roto_engine.run_progress() {
+            panel.label(ui::live(&line));
+        } else {
+            panel.label(ui::hint("Starting the backend…"));
+        }
+        if ui::full_button(panel, "Cancel run").clicked() {
+            app.roto_engine.cancel_run();
+            app.status = "Cancelling the backend run…".to_string();
+        }
+    } else if ui::accent_button(panel, "Run on the selected clip").clicked() {
+        match RunInputs::from_app(app) {
+            Ok(inputs) => match app.roto_engine.start_run(&inputs) {
+                Ok(()) => app.status = format!("{model_id} run started"),
+                Err(error) => app.roto_engine.message = Some(error),
+            },
+            Err(error) => app.roto_engine.message = Some(error),
+        }
+    }
+    if let Some(message) = app.roto_engine.message.clone() {
+        panel.label(egui::RichText::new(message).size(10.5).color(ui::TEXT_MID));
+    }
+
+    // Attaching is the same undoable document edit the XMem panel uses.
+    let attachable = app
+        .roto_engine
+        .last_run
+        .as_ref()
+        .filter(|report| crate::roto_run::attach_available(report))
+        .and_then(|report| Some((report.r1_key.clone()?, report.item?)));
+    if let Some((key, item)) = attachable {
+        let already = app.compositions.get(&item).and_then(|comp| comp.roto.as_ref()).is_some_and(|roto| roto.key == key);
+        if already {
+            panel.label(ui::hint("This clip already uses the matte from this run."));
+        } else if ui::accent_button(panel, "Use this matte on the clip").clicked() {
+            crate::roto::attach_matte(app, item, &key);
+        }
+    }
+    ui::footer_hint(
+        panel,
+        "The run exports the clip's frames, drives the backend's worker over protocol 1 and publishes the masks into both caches; the renderer reads the R1 one.",
+    );
+}
+
+/// The worker script for a backend: the new backends have real adapters, XMem
+/// keeps the one its panel already drives, and anything else uses the protocol
+/// stub, which answers honestly and refuses to fabricate masks.
+fn worker_script_for(model_id: &str) -> &'static str {
+    if model_id.starts_with("cutie") {
+        "tools/cutie_worker.py"
+    } else if model_id.starts_with("xmem") {
+        "tools/xmem_worker.py"
+    } else {
+        "tools/roto_worker.py"
+    }
+}
+
+/// The flags only the backend itself understands: its checkout, and for Cutie the
+/// pinned digest it must verify before loading.
+fn backend_args(inputs: &RunInputs, model_id: &str, digest: &str) -> Result<Vec<String>, String> {
+    if model_id.starts_with("cutie") {
+        let source = inputs.cutie_source.trim();
+        if source.is_empty() {
+            return Err("set the Cutie checkout path first: the worker imports Cutie from your own copy".to_string());
+        }
+        let mut args = vec!["--cutie-source".to_string(), source.to_string(), "--device".to_string(), "cpu".to_string()];
+        if !digest.is_empty() {
+            args.push("--weights-sha256".to_string());
+            args.push(digest.to_string());
+        }
+        Ok(args)
+    } else if model_id.starts_with("xmem") {
+        Ok(vec!["--xmem-source".to_string(), inputs.xmem_source.trim().to_string()])
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 fn licence_line(panel: &mut egui::Ui, model: &'static ModelDescriptor, installed: bool) {
