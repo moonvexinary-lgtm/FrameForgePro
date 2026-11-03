@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use filmcraft_project::ItemId;
+use filmcraft_render::SourceProvider;
 use filmcraft_time::{FrameRate, TimeRange};
 use frameforge_bridge::{
     FrameForgeProject, MaskAdoption, MaskCache, ProjectSources, RotoCacheKey, RotoJobLimits, RotoJobOutcome, RotoJobSpec, WorkerDirection, XmemWorker,
@@ -259,8 +260,8 @@ fn execute(request: &RunRequest, cancel: &AtomicBool, progress: &Arc<Mutex<Strin
         source_identity: identity.clone(),
         width,
         height,
-        frame_rate_num: request.rate.num,
-        frame_rate_den: request.rate.den,
+        frame_rate_num: request.rate.num as i32,
+        frame_rate_den: request.rate.den as i32,
         object_ids: vec![request.object_id],
         correction_frames: Vec::new(),
         pipeline: 1,

@@ -530,10 +530,11 @@ fn run_controls(app: &mut App, panel: &mut egui::Ui) {
     let model_id = app.roto_engine.tracking_model.clone();
     let model = find(&model_id);
     let installed = app.roto_engine.probe().is_installed(&model_id);
-    panel.label(ui::hint(match model {
+    let licence_line = match model {
         Some(model) => format!("{} · {} · {}", model.name, model.license.spdx, if installed { "installed" } else { "not installed" }),
         None => "no backend selected".to_string(),
-    }));
+    };
+    panel.label(ui::hint(&licence_line));
 
     if model_id.starts_with("cutie") {
         crate::roto::path_row(panel, "Cutie checkout", &mut app.roto_engine.cutie_source, "cutie", true);
