@@ -685,6 +685,14 @@ impl App {
         self.playhead = rate.tick_of(frame).min(self.sequence_end());
     }
 
+    /// Put the playhead on a sequence frame. Used by the QC review list, so a
+    /// flagged frame is one click away.
+    pub(crate) fn goto_frame(&mut self, frame: i64) {
+        let rate = self.sequence_rate();
+        self.playhead = rate.tick_of(frame.max(0)).min(self.sequence_end());
+        self.status = format!("Reviewing frame {frame}");
+    }
+
     fn start_playback(&mut self) {
         let Some(seq) = self.sequence_id() else { return };
         let Some(sources) = self.built_sources() else {

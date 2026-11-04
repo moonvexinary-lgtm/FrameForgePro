@@ -579,10 +579,49 @@ fn run_controls(app: &mut App, panel: &mut egui::Ui) {
             crate::roto::attach_matte(app, item, &key);
         }
     }
+
+    review_controls(app, panel);
     ui::footer_hint(
         panel,
         "The run exports the clip's frames, drives the backend's worker over protocol 1 and publishes the masks into both caches; the renderer reads the R1 one.",
     );
+}
+
+/// The temporal QC verdict over the finished run: flagged frames are one click
+/// away, and each kind says what to do about it. All arithmetic on the masks —
+/// nothing here ran a model.
+fn review_controls(app: &mut App, panel: &mut egui::Ui) {
+    let Some(report) = app.roto_engine.last_run.clone() else { return };
+    ui::section(panel, "REVIEW THE RUN");
+    let Some(qc) = report.qc else {
+        panel.label(ui::hint("The masks were published, but they could not be read back for review."));
+        return;
+    };
+    if qc.is_clean() {
+        panel.label(ui::hint(&qc.summary()));
+        return;
+    }
+    panel.label(egui::RichText::new(qc.summary()).size(10.5).color(ui::WARN));
+    for range in &qc.flagged {
+        let kinds: Vec<&str> = {
+            let mut kinds: Vec<&str> = range.kinds.iter().map(|kind| kind.label()).collect();
+            kinds.dedup();
+            kinds
+        };
+        panel.label(ui::hint(&format!("frames {}-{} · {} · severity {:.2}", range.first, range.last, kinds.join(", "), range.worst_severity)));
+    }
+    // The worst flag decides what the workspace suggests; the list is ascending so
+    // skipping the first frame of each range walks the run in order.
+    if let Some(worst) = qc.signals.iter().max_by(|a, b| a.severity.total_cmp(&b.severity)) {
+        panel.label(ui::hint(&format!("Suggested fix: {}", worst.kind.suggested_action().label())));
+    }
+    panel.horizontal_wrapped(|ui| {
+        for frame in qc.review_frames() {
+            if ui.small_button(format!("frame {frame}")).clicked() {
+                app.goto_frame(frame);
+            }
+        }
+    });
 }
 
 /// The worker script for a backend: the new backends have real adapters, XMem

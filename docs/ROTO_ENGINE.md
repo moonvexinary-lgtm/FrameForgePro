@@ -166,6 +166,14 @@ bridge's R1 cache the renderer reads. The finished run offers the same undoable
 "Use this matte on the clip" edit the XMem panel uses, so a Cutie matte reaches the
 timeline through the same seam.
 
+The run ends with a **review pass** that is pure arithmetic on the published masks:
+`roto_run::review` reads them back from the cache, builds a `MaskSummary` per frame
+and runs `temporal::analyze`. The panel then lists the flagged ranges with their
+kinds and severity, names the suggested fix for the worst signal (re-detect,
+re-initialise from a box, or brush-correct and re-propagate) and offers each
+flagged frame as a button that moves the playhead to it. A run whose masks cannot
+be read back says so instead of showing an empty, falsely clean pass.
+
 Known gaps, stated plainly:
 
 * SAM 2.1, EdgeTAM and SAMURAI still have no worker of their own: their runs go
@@ -209,8 +217,10 @@ Known gaps, stated plainly:
   sensitivity and round-trip, queue behaviour, export naming/modes/RGBA, runtime
   reporting (no accelerator claimed), cache adoption from a worker's directory
   (missing and mis-sized frames publish nothing), the run gate's ordered refusals,
-  the restricted-licence refusal, "no command line or no mask means no run", and
-  "a report without an R1 key is not attachable", plus the whole-pipeline
+  the restricted-licence refusal, "no command line or no mask means no run",
+  "a report without an R1 key is not attachable", and the review pass — a clean
+  run reviews clean, a vanished mask is flagged and offered for review, and
+  reviewing nothing is an error rather than a blank pass — plus the whole-pipeline
   integration test.
 * No AI inference runs in CI, and none can: there is no weights download in the
   workflow, and the adapter tests use `NoRuntime`, which finds nothing.

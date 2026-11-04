@@ -28,6 +28,7 @@ use frameforge_bridge::{
 };
 use frameforge_roto::cache::{self, MaskKey};
 use frameforge_roto::matting::{MatteMode, Plane};
+use frameforge_roto::temporal::{MaskSummary, QcLimits, QualityReport, analyze};
 
 use crate::roto::{frame_range, source_identity};
 
@@ -120,6 +121,36 @@ pub struct RunReport {
     pub item: Option<ItemId>,
     pub frames: i64,
     pub killed: bool,
+    /// The temporal QC verdict over the published masks, when they could be read
+    /// back. This is arithmetic on the masks — no model is involved.
+    pub qc: Option<QualityReport>,
+}
+
+impl RunReport {
+    /// The frames the review list should offer, worst first in the list order the
+    /// QC pass chose (ascending by flagged range).
+    pub fn review_frames(&self) -> Vec<i64> {
+        self.qc.as_ref().map(QualityReport::review_frames).unwrap_or_default()
+    }
+}
+
+/// Score a published run with the temporal QC pass, reading the masks back from
+/// the cache. Deterministic arithmetic: no model, no inference, no GPU.
+pub fn review(root: &Path, key: &MaskKey, object_id: u64, first_frame: i64, count: i64) -> Result<QualityReport, String> {
+    if count <= 0 {
+        return Err("there is nothing to review".to_string());
+    }
+    let mut summaries = Vec::with_capacity(usize::try_from(count).unwrap_or(0));
+    for index in 0..count {
+        let frame = first_frame + index;
+        let plane = cache::load(root, key, object_id, frame)
+            .map_err(|error| format!("frame {frame}: {error}"))?
+            .ok_or_else(|| format!("frame {frame} is not in the cache"))?;
+        let summary = MaskSummary::from_alpha(frame, plane.data(), key.width, key.height, 128)
+            .ok_or_else(|| format!("frame {frame} could not be summarised at {}x{}", key.width, key.height))?;
+        summaries.push(summary);
+    }
+    Ok(analyze(&summaries, &QcLimits::default()))
 }
 
 /// A run in flight.
@@ -291,7 +322,13 @@ fn execute(request: &RunRequest, cancel: &AtomicBool, progress: &Arc<Mutex<Strin
         Ok(text) => format!("{} frames in {note}; {text}; {cache_note}", frames),
         Err(error) => format!("{} frames in {note}, but the renderer's matte was not published: {error}", frames),
     };
-    Ok(RunReport { summary, cache_key: Some(key.digest()), r1_key: Some(r1_key.cache_key()), item: Some(request.item), frames, killed })
+
+    // 3) the temporal QC verdict, read back from the cache we just published. It
+    //    is arithmetic on masks, not inference, so it can run here, once.
+    announce("Checking the masks over time…".to_string());
+    let qc = review(&request.cache_root, &key, request.object_id, first, count).ok();
+
+    Ok(RunReport { summary, cache_key: Some(key.digest()), r1_key: Some(r1_key.cache_key()), item: Some(request.item), frames, killed, qc })
 }
 
 /// Whether the panel can offer the attach action for a finished run: the run
@@ -308,6 +345,7 @@ pub fn read_frame(root: &Path, key: &MaskKey, object_id: u64, frame: i64) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frameforge_roto::temporal::SignalKind;
 
     fn gate_with(changes: impl FnOnce(&mut RunGate)) -> Result<(), String> {
         let dir = std::env::temp_dir().join(format!("frameforge-roto-gate-{}", std::process::id()));
@@ -383,5 +421,72 @@ mod tests {
     fn a_report_without_an_r1_key_is_not_attachable() {
         let report = RunReport { r1_key: None, ..RunReport::default() };
         assert!(!attach_available(&report));
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("frameforge-roto-review-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp root");
+        root
+    }
+
+    fn review_key(w: u32, h: u32) -> MaskKey {
+        MaskKey {
+            model_id: "cutie-base".to_string(),
+            weights_sha256: "ab".repeat(32),
+            source_identity: "item:7:file:clip.mp4:0f1e2d3c4b5a6978:1048576".to_string(),
+            width: w,
+            height: h,
+            frame_rate_num: 24,
+            frame_rate_den: 1,
+            object_ids: vec![1],
+            correction_frames: Vec::new(),
+            pipeline: 1,
+        }
+    }
+
+    /// A square of side `side` at `(x, y)`, painted into an empty plane.
+    fn square(w: u32, h: u32, x: u32, y: u32, side: u32) -> Plane {
+        let mut plane = Plane::new(w, h, 0).expect("plane");
+        for row in y..(y + side).min(h) {
+            for column in x..(x + side).min(w) {
+                plane.data_mut()[(row * w + column) as usize] = 255;
+            }
+        }
+        plane
+    }
+
+    #[test]
+    fn a_clean_run_reviews_clean() {
+        let root = temp_root("clean");
+        let key = review_key(32, 32);
+        let frames: Vec<Plane> = (0..6).map(|index| square(32, 32, 4 + index, 8, 10)).collect();
+        cache::publish(&root, &key, 1, 0, &frames, MatteMode::Alpha).expect("publish");
+
+        let qc = review(&root, &key, 1, 0, 6).expect("review");
+        assert_eq!(qc.frames, 6);
+        assert!(qc.is_clean(), "a steadily moving square is clean: {:?}", qc.signals);
+        assert!(qc.review_frames().is_empty());
+    }
+
+    #[test]
+    fn a_vanished_mask_is_flagged_and_offered_for_review() {
+        let root = temp_root("vanish");
+        let key = review_key(32, 32);
+        let mut frames: Vec<Plane> = (0..6).map(|index| square(32, 32, 4 + index, 8, 10)).collect();
+        frames[3] = Plane::new(32, 32, 0).expect("empty"); // the tracker lost the object
+        cache::publish(&root, &key, 1, 0, &frames, MatteMode::Alpha).expect("publish");
+
+        let qc = review(&root, &key, 1, 0, 6).expect("review");
+        assert!(!qc.is_clean());
+        assert!(qc.signals.iter().any(|signal| signal.kind == SignalKind::Disappeared && signal.frame == 3), "{:?}", qc.signals);
+        assert!(qc.review_frames().contains(&3), "the review list offers the lost frame");
+    }
+
+    #[test]
+    fn a_review_of_nothing_is_an_error_rather_than_a_blank_pass() {
+        let root = temp_root("empty");
+        let key = review_key(32, 32);
+        assert!(review(&root, &key, 1, 0, 0).is_err());
     }
 }
