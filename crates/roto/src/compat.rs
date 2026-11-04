@@ -65,7 +65,7 @@ impl ProviderPath {
 }
 
 /// One model's compatibility cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct ModelCompat {
     pub model_id: &'static str,
     pub family: Family,
@@ -185,7 +185,7 @@ const MATRIX: [ModelCompat; 8] = [
 pub const DIRECTML_NOTE: &str = "DirectML is reachable through ONNX Runtime / Windows ML, not through the PyTorch wheels these checkpoints use. No ONNX export has been validated for these models, so no DirectML run is offered.";
 
 /// A runtime file found on disk.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RuntimeFile {
     pub provider: &'static str,
     pub file: &'static str,
