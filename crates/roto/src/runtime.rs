@@ -153,6 +153,124 @@ pub struct ResolutionPolicy {
     pub adaptive: bool,
 }
 
+/// The speed/fidelity knobs, as planning inputs.
+///
+/// Nothing here measures the machine: every number is either the user's choice
+/// or arithmetic on it. `per_frame_mb` is an *estimate* and says so, because a
+/// fabricated measurement is worse than an honest guess the user can override.
+///
+/// `frame_stride` is the one knob that changes what a tracker does: it propagates
+/// every Nth frame and repeats the last mask in between. That is a real speed
+/// trade, so the mask cache still holds every frame and the temporal QC pass sees
+/// the repeated masks and can flag the stutter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerformanceSettings {
+    pub max_width: u32,
+    pub max_height: u32,
+    /// Propagate every Nth frame (1 = every frame).
+    pub frame_stride: u32,
+    /// Planning budget for resident memory, in MiB.
+    pub memory_budget_mb: u64,
+    /// Keep inference off the UI thread. The run path always does; this records
+    /// the preference for the queue.
+    pub background: bool,
+}
+
+impl Default for PerformanceSettings {
+    fn default() -> Self {
+        Self { max_width: 480, max_height: 270, frame_stride: 1, memory_budget_mb: 2_048, background: true }
+    }
+}
+
+impl PerformanceSettings {
+    pub const MIN_SIDE: u32 = 64;
+    pub const MAX_SIDE: u32 = 3_840;
+    pub const MAX_STRIDE: u32 = 8;
+    pub const MIN_BUDGET_MB: u64 = 512;
+    pub const MAX_BUDGET_MB: u64 = 65_536;
+    /// The largest working area offered, so "3840x2160" cannot quietly become a
+    /// 32 MP tensor on integrated graphics.
+    pub const MAX_AREA: u64 = 1_920 * 1_080;
+
+    /// Clamp every field into a range this build will actually honour.
+    pub fn sanitised(self) -> Self {
+        let mut width = self.max_width.clamp(Self::MIN_SIDE, Self::MAX_SIDE);
+        let mut height = self.max_height.clamp(Self::MIN_SIDE, Self::MAX_SIDE);
+        let area = width as u64 * height as u64;
+        if area > Self::MAX_AREA {
+            let scale = (Self::MAX_AREA as f64 / area as f64).sqrt();
+            width = ((width as f64 * scale) as u32).max(Self::MIN_SIDE);
+            height = ((height as f64 * scale) as u32).max(Self::MIN_SIDE);
+        }
+        Self {
+            max_width: width,
+            max_height: height,
+            frame_stride: self.frame_stride.clamp(1, Self::MAX_STRIDE),
+            memory_budget_mb: self.memory_budget_mb.clamp(Self::MIN_BUDGET_MB, Self::MAX_BUDGET_MB),
+            background: self.background,
+        }
+    }
+
+    pub fn resolution(self) -> ResolutionPolicy {
+        let clean = self.sanitised();
+        ResolutionPolicy { max_width: clean.max_width, max_height: clean.max_height, adaptive: true }
+    }
+
+    pub fn working_size(self, source: (u32, u32)) -> (u32, u32) {
+        self.resolution().fit(source.0, source.1)
+    }
+
+    /// A *planning estimate* of one frame's resident cost at the working size:
+    /// the RGB float tensor, the mask logits and one more activation buffer,
+    /// plus the checkpoint's own footprint and framework overhead. It is not a
+    /// measurement, and the panel says so.
+    pub fn per_frame_mb(self, source: (u32, u32)) -> u64 {
+        let (width, height) = self.working_size(source);
+        let pixels = u64::from(width) * u64::from(height);
+        (pixels.saturating_mul(16) / (1024 * 1024)).saturating_add(192)
+    }
+
+    /// How many frames the budget could hold, for an adapter that batches. The
+    /// per-frame workers do not batch; the panel shows this as a ceiling, not a
+    /// promise.
+    pub fn recommended_batch(self, source: (u32, u32)) -> u32 {
+        self.resolution().batch_frames(Some(self.sanitised().memory_budget_mb), self.per_frame_mb(source))
+    }
+
+    /// The frames a stride would actually propagate. The last frame is always
+    /// included, so the tail of a range is never left to a repeat.
+    pub fn tracked_frames(self, first: i64, last: i64) -> Vec<i64> {
+        if last < first {
+            return Vec::new();
+        }
+        let stride = i64::from(self.sanitised().frame_stride);
+        let mut frames = Vec::new();
+        let mut frame = first;
+        while frame <= last {
+            frames.push(frame);
+            frame += stride;
+        }
+        if frames.last().copied() != Some(last) {
+            frames.push(last);
+        }
+        frames
+    }
+
+    /// One line for the panel.
+    pub fn summary(self, source: (u32, u32)) -> String {
+        let clean = self.sanitised();
+        let (width, height) = clean.working_size(source);
+        let stride = if clean.frame_stride == 1 { "every frame".to_string() } else { format!("every {}th frame", clean.frame_stride) };
+        format!(
+            "{width}x{height} · {stride} · budget {} MB · ~{} MB/frame (estimate) · batch ceiling {} · {}",
+            clean.memory_budget_mb,
+            clean.per_frame_mb(source),
+            clean.recommended_batch(source),
+            if clean.background { "background" } else { "foreground" }
+        )
+    }
+}
+
 impl Default for ResolutionPolicy {
     fn default() -> Self {
         Self { max_width: 480, max_height: 270, adaptive: true }
@@ -225,5 +343,47 @@ mod tests {
         assert_eq!(policy.batch_frames(Some(100), 512), 1, "a batch never drops below one frame");
         assert_eq!(policy.batch_frames(Some(1_000_000), 1), 64, "and never grows past the cap");
         assert_eq!(policy.batch_frames(None, 0), 64, "a zero cost estimate is treated as one");
+    }
+
+    #[test]
+    fn performance_settings_clamp_into_the_ranges_the_engine_honours() {
+        let defaults = PerformanceSettings::default();
+        assert_eq!(defaults.sanitised(), defaults);
+
+        let wild = PerformanceSettings { max_width: 0, max_height: 9_000, frame_stride: 99, memory_budget_mb: 1, background: false }.sanitised();
+        assert_eq!(wild.max_width, PerformanceSettings::MIN_SIDE);
+        assert!(wild.max_height <= PerformanceSettings::MAX_SIDE);
+        assert_eq!(wild.frame_stride, PerformanceSettings::MAX_STRIDE);
+        assert_eq!(wild.memory_budget_mb, PerformanceSettings::MIN_BUDGET_MB);
+        assert!(!wild.background);
+
+        let huge = PerformanceSettings { max_width: 3_840, max_height: 3_840, ..PerformanceSettings::default() }.sanitised();
+        assert!(u64::from(huge.max_width) * u64::from(huge.max_height) <= PerformanceSettings::MAX_AREA);
+    }
+
+    #[test]
+    fn a_stride_propagates_keyframes_and_never_drops_the_last_frame() {
+        let settings = PerformanceSettings { frame_stride: 3, ..PerformanceSettings::default() };
+        assert_eq!(settings.tracked_frames(0, 9), vec![0, 3, 6, 9]);
+        assert_eq!(settings.tracked_frames(0, 10), vec![0, 3, 6, 9, 10], "the tail is always tracked");
+        assert_eq!(settings.tracked_frames(5, 5), vec![5]);
+        assert!(settings.tracked_frames(9, 5).is_empty());
+
+        let every = PerformanceSettings::default();
+        assert_eq!(every.tracked_frames(0, 3), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn the_cost_estimate_is_an_estimate_and_scales_with_the_working_size() {
+        let small = PerformanceSettings { max_width: 320, max_height: 180, ..PerformanceSettings::default() };
+        let large = PerformanceSettings { max_width: 1_280, max_height: 720, ..PerformanceSettings::default() };
+        assert!(large.per_frame_mb((1_920, 1_080)) > small.per_frame_mb((1_920, 1_080)));
+        assert!(small.per_frame_mb((1_920, 1_080)) > 0);
+        assert_eq!(small.working_size((1_920, 1_080)), (320, 180));
+        assert_eq!(small.working_size((100, 100)), (100, 100), "no upscaling");
+        let batch = small.recommended_batch((1_920, 1_080));
+        assert!((1u32..=64).contains(&batch), "{batch}");
+        assert!(small.summary((1_920, 1_080)).contains("estimate"));
+        assert!(PerformanceSettings { frame_stride: 4, ..PerformanceSettings::default() }.summary((1_920, 1_080)).contains("every 4th frame"));
     }
 }

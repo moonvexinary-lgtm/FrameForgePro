@@ -23,6 +23,10 @@
 //! ```
 //!
 //! * [`selection`] — points, boxes and mask prompts in image coordinates.
+//! * [`segment`] — the model-independent one-frame segmentation contract: a
+//!   versioned request, a checked reply and a dormant launch plan.
+//! * [`compat`] — per-model inference paths (PyTorch, ONNX Runtime, Windows ML)
+//!   and detection of runtime files already on disk, without loading anything.
 //! * [`tracking`] — backends (Cutie preferred, SAMURAI optional, XMem legacy),
 //!   per-object track state and resumable propagation segments.
 //! * [`temporal`] — model-independent mask metrics that flag drift, jumps,
@@ -56,6 +60,7 @@
 
 pub mod brush;
 pub mod cache;
+pub mod compat;
 pub mod engine;
 pub mod export;
 pub mod matting;
@@ -63,15 +68,19 @@ pub mod models;
 pub mod refinement;
 pub mod runtime;
 pub mod scheduler;
+pub mod segment;
 pub mod selection;
 pub mod temporal;
 pub mod tracking;
 
+pub use compat::{ModelCompat, ProviderPath, RuntimeFile, SupportStatus, detect_files, matrix};
 pub use engine::{
     EngineCapabilities, EngineError, ExternalEngine, FileProbe, FrameRange, LaunchPlan, NoRuntime, ObjectSpec, RotoEngine, RuntimeProbe, TrackRequest,
 };
 pub use matting::{MatteMode, MattingParams, Plane};
 pub use models::{Family, InstallPlan, InstallState, LicenseRecord, ModelDescriptor, PlanError, Redistribution, RuntimeKind, Task, catalogue, install_plan};
+pub use runtime::PerformanceSettings;
+pub use segment::{SEGMENT_PROTOCOL, SegmentError, SegmentPlan, SegmentReply, SegmentRequest, plan_segment};
 pub use selection::{BoxRect, Prompt, SelectionSession};
 pub use temporal::{MaskSummary, QcLimits, QualityReport, RecoveryAction, SignalKind};
 pub use tracking::{BackendRegistry, Direction, ObjectTrack, Segment, TrackStatus};

@@ -22,6 +22,8 @@ quality control, matting, refinement, caching, scheduling and export, built as
 | `roto_engine` | The interface every backend implements (`RotoEngine`, `LaunchPlan`, capabilities), the runtime probe (file presence only) | no |
 | `roto_run` (app) | Gate, frame export, worker spawn, job run and double publish for any backend | adapters only |
 | `roto_selection` | Points, boxes and mask prompts, prompt sessions, box maths | no |
+| `roto_segment` | The one-frame segmentation contract: a versioned request, a checked reply and a dormant launch plan shared by every selector family | adapters only |
+| `roto_compat` | Per-model inference routes (PyTorch, ONNX Runtime, Windows ML) and detection of runtime files already on disk — presence only, nothing loaded | no |
 | `roto_tracking` | Backends (Cutie / SAMURAI / XMem), per-object track state, resumable propagation segments | adapters only |
 | `roto_temporal` | Model-independent mask metrics: area change, centroid jump, identity drift, disappearance, flicker, ragged edges; recovery suggestions | no |
 | `roto_matting` | Feather, expand/contract, edge smoothing, invert, premultiply, alpha application; the seam for a learned matting backend | no |
@@ -31,7 +33,7 @@ quality control, matting, refinement, caching, scheduling and export, built as
 | `roto_scheduler` | One job queue with priorities, pause, resume, cancel; starts nothing by itself | no |
 | `roto_export` | Binary / grayscale / alpha sequences, RGBA sequences, sidecar manifest | no |
 | `roto_models` | The catalogue, licences, install plans, downloads, verification, removal | no |
-| `roto_runtime` | Hardware/provider reporting and resolution/batching policy | no |
+| `roto_runtime` | Hardware/provider reporting and the resolution, stride and batching policy (planning estimates, never measurements) | no |
 
 The pipeline the modules implement:
 
