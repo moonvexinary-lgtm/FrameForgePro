@@ -89,6 +89,9 @@ pub struct RunRequest {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub model_id: String,
+    /// The backend's SPDX licence identifier, carried into the run's provenance
+    /// line so the report says what the user consented to run.
+    pub licence: String,
     /// The weight file the worker should read, when the plan resolved one.
     pub weights_path: Option<PathBuf>,
     /// The weights digest the manager verified, or 64 zeros when the user has not
@@ -124,6 +127,9 @@ pub struct RunReport {
     /// The temporal QC verdict over the published masks, when they could be read
     /// back. This is arithmetic on the masks — no model is involved.
     pub qc: Option<QualityReport>,
+    /// Exactly what produced the run: model, licence and the weights digest the
+    /// worker was told to expect.
+    pub provenance: String,
 }
 
 impl RunReport {
@@ -327,8 +333,20 @@ fn execute(request: &RunRequest, cancel: &AtomicBool, progress: &Arc<Mutex<Strin
     //    is arithmetic on masks, not inference, so it can run here, once.
     announce("Checking the masks over time…".to_string());
     let qc = review(&request.cache_root, &key, request.object_id, first, count).ok();
+    let provenance = provenance(&request.model_id, &request.licence, &request.weights_sha256);
 
-    Ok(RunReport { summary, cache_key: Some(key.digest()), r1_key: Some(r1_key.cache_key()), item: Some(request.item), frames, killed, qc })
+    Ok(RunReport { summary, cache_key: Some(key.digest()), r1_key: Some(r1_key.cache_key()), item: Some(request.item), frames, killed, qc, provenance })
+}
+
+/// One line naming exactly what a run used: the backend, its licence and the
+/// weights digest the worker was told to expect. An unpinned digest is said out
+/// loud — "no digest" is a weaker guarantee than a hash, and the report must not
+/// make the two look alike.
+pub fn provenance(model_id: &str, licence: &str, weights_sha256: &str) -> String {
+    let licence = if licence.trim().is_empty() { "licence unrecorded" } else { licence.trim() };
+    let pinned = weights_sha256.len() == 64 && !weights_sha256.trim_matches('0').is_empty() && weights_sha256.chars().all(|c| c.is_ascii_hexdigit());
+    let digest = if pinned { format!("weights sha256 {}", &weights_sha256[..12]) } else { "weights digest unpinned".to_string() };
+    format!("{model_id} · {licence} · {digest}")
 }
 
 /// Whether the panel can offer the attach action for a finished run: the run
@@ -400,6 +418,7 @@ mod tests {
             program: PathBuf::from("python.exe"),
             args: Vec::new(),
             model_id: "cutie-base".to_string(),
+            licence: "Apache-2.0".to_string(),
             weights_path: None,
             weights_sha256: "0".repeat(64),
             object_id: 1,
@@ -488,5 +507,19 @@ mod tests {
         let root = temp_root("empty");
         let key = review_key(32, 32);
         assert!(review(&root, &key, 1, 0, 0).is_err());
+    }
+
+    #[test]
+    fn provenance_names_the_model_licence_and_pinned_digest() {
+        let line = provenance("cutie-base", "Apache-2.0", &"ab".repeat(32));
+        assert_eq!(line, "cutie-base · Apache-2.0 · weights sha256 abababababab");
+    }
+
+    #[test]
+    fn an_unpinned_digest_is_stated_rather_than_looking_like_a_hash() {
+        assert!(provenance("cutie-base", "Apache-2.0", &"0".repeat(64)).contains("unpinned"));
+        assert!(provenance("cutie-base", "Apache-2.0", "").contains("unpinned"));
+        assert!(provenance("cutie-base", "Apache-2.0", "not-a-digest").contains("unpinned"));
+        assert!(provenance("cutie-base", "", &"ab".repeat(32)).contains("licence unrecorded"));
     }
 }

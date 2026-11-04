@@ -368,6 +368,7 @@ impl RotoEngineState {
             program: PathBuf::from(command.program),
             args,
             model_id: model_id.clone(),
+            licence: find(&model_id).map(|model| model.license.spdx.to_string()).unwrap_or_default(),
             weights_path: weights,
             weights_sha256: if digest.is_empty() { "0".repeat(64) } else { digest },
             object_id: 1,
@@ -593,6 +594,7 @@ fn run_controls(app: &mut App, panel: &mut egui::Ui) {
 fn review_controls(app: &mut App, panel: &mut egui::Ui) {
     let Some(report) = app.roto_engine.last_run.clone() else { return };
     ui::section(panel, "REVIEW THE RUN");
+    panel.label(ui::hint(&report.provenance));
     let Some(qc) = report.qc else {
         panel.label(ui::hint("The masks were published, but they could not be read back for review."));
         return;

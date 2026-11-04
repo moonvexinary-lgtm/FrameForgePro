@@ -174,6 +174,12 @@ re-initialise from a box, or brush-correct and re-propagate) and offers each
 flagged frame as a button that moves the playhead to it. A run whose masks cannot
 be read back says so instead of showing an empty, falsely clean pass.
 
+Above the verdict the panel states the run's **provenance** in one line —
+`roto_run::provenance` joins the backend id, the SPDX licence the user consented
+under and either the first twelve hex digits of the weights digest the worker was
+told to expect, or the words "weights digest unpinned". An unpinned run is never
+allowed to look like a hashed one.
+
 Known gaps, stated plainly:
 
 * SAM 2.1, EdgeTAM and SAMURAI still have no worker of their own: their runs go
@@ -218,7 +224,9 @@ Known gaps, stated plainly:
   reporting (no accelerator claimed), cache adoption from a worker's directory
   (missing and mis-sized frames publish nothing), the run gate's ordered refusals,
   the restricted-licence refusal, "no command line or no mask means no run",
-  "a report without an R1 key is not attachable", and the review pass — a clean
+  "a report without an R1 key is not attachable", the provenance line (a pinned
+  digest prints its prefix, a zero or malformed digest is stated as unpinned,
+  an empty licence is stated as unrecorded) and the review pass — a clean
   run reviews clean, a vanished mask is flagged and offered for review, and
   reviewing nothing is an error rather than a blank pass — plus the whole-pipeline
   integration test.
