@@ -553,8 +553,8 @@ fn performance_section(app: &mut App, panel: &mut egui::Ui) {
         ui.add(egui::DragValue::new(&mut perf.max_width).range(64..=3_840).prefix("w "));
         ui.add(egui::DragValue::new(&mut perf.max_height).range(64..=3_840).prefix("h "));
     });
-    ui.add(egui::Slider::new(&mut perf.frame_stride, 1..=8).text("propagate every Nth frame"));
-    ui.add(egui::Slider::new(&mut perf.memory_budget_mb, 512..=16_384).text("memory budget (MB)"));
+    panel.add(egui::Slider::new(&mut perf.frame_stride, 1..=8).text("propagate every Nth frame"));
+    panel.add(egui::Slider::new(&mut perf.memory_budget_mb, 512..=16_384).text("memory budget (MB)"));
     panel.checkbox(&mut perf.background, "keep inference in the background");
     let clean = perf.sanitised();
     app.roto_engine.performance = clean;
