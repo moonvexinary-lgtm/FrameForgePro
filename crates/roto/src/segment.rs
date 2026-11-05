@@ -58,6 +58,10 @@ pub struct SegmentRequest {
     /// The 8-bit mask a `Mask` prompt refers to, as a path the worker can open.
     /// `None` is only valid when no `Mask` prompt is present.
     pub mask: Option<String>,
+    /// The frame image the worker should read. `None` while the plan is still
+    /// dormant: a runner exports the frame before it spawns the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     /// The longest side the worker may resize to. Never upscales.
     pub max_side: u32,
 }
@@ -103,12 +107,18 @@ impl SegmentRequest {
             };
             checked.push(prompt);
         }
-        Ok(Self { version: SEGMENT_VERSION, frame, width, height, prompts: checked, mask: None, max_side: max_side.clamp(64, 4_096) })
+        Ok(Self { version: SEGMENT_VERSION, frame, width, height, prompts: checked, mask: None, image: None, max_side: max_side.clamp(64, 4_096) })
     }
 
     /// Attach the mask file a `Mask` prompt refers to.
     pub fn with_mask(mut self, path: &Path) -> Self {
         self.mask = Some(path.display().to_string());
+        self
+    }
+
+    /// Attach the frame image the worker should read.
+    pub fn with_image(mut self, path: &Path) -> Self {
+        self.image = Some(path.display().to_string());
         self
     }
 
@@ -477,6 +487,10 @@ mod tests {
         assert_eq!(SegmentRequest::from_json(&json).expect("round trip"), masked);
         assert_ne!(masked.digest().expect("digest"), bare.digest().expect("digest"), "the mask file is part of the question");
         plan_segment(&masked, Path::new("w.py"), Path::new("python.exe"), model, &weights, Path::new("C:\\work"), true).expect("plan");
+
+        let framed = masked.clone().with_image(Path::new("C:\\work\\frame-7.rgb.png"));
+        assert_ne!(framed.digest().expect("digest"), masked.digest().expect("digest"), "the image is part of the question");
+        assert_eq!(SegmentRequest::from_json(&framed.to_json().expect("json")).expect("round trip"), framed);
     }
 
     #[test]

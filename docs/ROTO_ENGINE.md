@@ -155,6 +155,36 @@ ran, no GPU memory was touched. Its protocol, verification, frame conversion,
 cancellation, progress and mask writing mirror the adapter that already runs for
 XMem; only the model-construction step is unproven, and it fails loudly.
 
+`--stride N` propagates every Nth frame and copies the previous mask's bytes onto
+the frames in between. The cache still receives every frame — the renderer needs
+the full range — so the trade is visible: `temporal::analyze` sees the repeats and
+flags the stutter they cause rather than hiding it.
+
+### The segmentation worker (written, not executed)
+
+`tools/segment_worker.py` is the process `segment::plan_segment` describes for the
+selector families (SAM 2.1 Tiny and Small). It:
+
+* reads the `segment-1` request, validates the version, the image size and every
+  prompt, and writes an **error reply**, never a plausible mask, when anything is
+  missing;
+* hashes the checkpoint before importing torch, and imports torch only after that
+  check, so an argument mistake costs nothing;
+* refuses `--device` other than `cpu`: DirectML and CUDA are not execution
+  providers for these PyTorch checkpoints on Windows, and no ONNX export has been
+  validated, so offering the flag would be a lie;
+* refuses `edgetam` with the reason (its image-predictor API has not been verified
+  in this build) instead of guessing at it;
+* intersects the returned mask with a painted mask prompt, which is what "keep only
+  what I painted" means — it does not fabricate model logits from a PNG;
+* has a `--self-test` mode that exercises request validation and atomic replies
+  with **no torch and no weights** (it passes, locally).
+
+The **selection runner** — the code that exports the requested frame, writes the
+plan's `request_json`, spawns this worker and reads the reply back into the mask
+canvas — is the next increment. Until it exists the plan is shown and says it
+cannot run.
+
 ### From a plan to a live run
 
 The engine panel now runs a backend end to end: `RUN THE SELECTED BACKEND` asks for
@@ -182,10 +212,19 @@ under and either the first twelve hex digits of the weights digest the worker wa
 told to expect, or the words "weights digest unpinned". An unpinned run is never
 allowed to look like a hashed one.
 
+The Masking workspace now draws the other half of the input: a **Brush**, **Add
+point**, **Remove point** and **Box** tool over the same frame-0 canvas, with the
+prompts listed, undoable and drawn as markers. Roto AI → *Selection prompts* shows
+the chosen selector's compatibility route, offers the no-load runtime-file scan,
+and builds the dormant `segment-1` plan from what was drawn. *Speed and quality*
+carries the working resolution, the propagation stride and the memory budget,
+labelled as planning estimates.
+
 Known gaps, stated plainly:
 
-* SAM 2.1, EdgeTAM and SAMURAI still have no worker of their own: their runs go
-  through the stub, which refuses rather than pretending.
+* SAM 2.1 and EdgeTAM have a worker but no **runner**: nothing exports the frame,
+  writes the request and reads the reply yet, so their plans are shown and refused.
+  SAMURAI still has neither and runs through the stub, which refuses.
 * The Cutie worker's model-construction step is unproven (above).
 * Occlusion/disappearance corpora and drift review (the plan's R6) have not been
   run against a real model.

@@ -318,7 +318,7 @@ def save_mask(path: Path, mask) -> None:
     Image.fromarray(array, mode="L").save(path)
 
 
-def propagate(message: dict, source: str, model_path: Path, config_path: Path | None, digest: str, device: str) -> None:
+def propagate(message: dict, source: str, model_path: Path, config_path: Path | None, digest: str, device: str, stride: int = 1) -> None:
     global CANCEL_REQUESTED
     import numpy as np
     import torch
@@ -354,12 +354,38 @@ def propagate(message: dict, source: str, model_path: Path, config_path: Path | 
     processor.set_all_labels(labels)
     first_frame = order[0]
 
+    # A stride above one propagates every Nth frame and repeats the previous
+    # mask on the frames in between. The cache still receives every frame (the
+    # renderer needs the full range), and the temporal QC pass sees the repeats,
+    # so a stride that breaks the mask is flagged in review rather than hidden.
+    step = max(1, int(stride))
+
     started = time.perf_counter()
     written = 0
-    for index in order:
+    repeated = 0
+    last_mask_png: bytes | None = None
+    for position, index in enumerate(order):
         if poll_cancel():
             emit({"event": "cancelled"})
             return
+        target = output_dir / f"frame_{index:08d}.png"
+        propagate = position % step == 0 or index == order[-1] or last_mask_png is None
+        if not propagate:
+            target.write_bytes(last_mask_png)
+            repeated += 1
+            written += 1
+            elapsed = time.perf_counter() - started
+            emit(
+                {
+                    "event": "progress",
+                    "frame": index,
+                    "total": total,
+                    "elapsed": round(elapsed, 4),
+                    "fps": round(written / elapsed, 4) if elapsed > 0 else 0.0,
+                    "rss_mb": resident_mb(),
+                }
+            )
+            continue
         frame_path = frames_dir / f"frame_{index:08d}.png"
         image_array = load_rgb(frame_path, width, height)
         image_tensor = torch.from_numpy(image_array).float().to(device)
@@ -372,7 +398,8 @@ def propagate(message: dict, source: str, model_path: Path, config_path: Path | 
             probability = processor.step(image_tensor, end=(index == order[-1]))
         # Channel 0 is background; the single object is channel 1. The editor's
         # mask cache reads 8-bit grayscale PNGs, which save_mask writes.
-        save_mask(output_dir / f"frame_{index:08d}.png", probability[1].detach().cpu().numpy())
+        save_mask(target, probability[1].detach().cpu().numpy())
+        last_mask_png = target.read_bytes()
         written += 1
         elapsed = time.perf_counter() - started
         emit(
@@ -387,7 +414,7 @@ def propagate(message: dict, source: str, model_path: Path, config_path: Path | 
         )
         _ = np  # numpy is used by the loaders; keep the import explicit for them
 
-    emit({"event": "done", "frames": written, "elapsed": round(time.perf_counter() - started, 4)})
+    emit({"event": "done", "frames": written, "repeated": repeated, "stride": step, "elapsed": round(time.perf_counter() - started, 4)})
 
 
 def main() -> int:
@@ -398,6 +425,7 @@ def main() -> int:
     parser.add_argument("--weights-sha256", default="", help="expected SHA-256 of the weights, checked before loading")
     parser.add_argument("--cutie-config", default="", help="override the Hydra config inside the checkout")
     parser.add_argument("--device", default="cpu", help="torch device (cpu is the only one this project has verified)")
+    parser.add_argument("--stride", type=int, default=1, help="propagate every Nth frame and repeat the last mask in between")
     args = parser.parse_args()
 
     source_path = Path(args.cutie_source).resolve()
@@ -439,7 +467,7 @@ def main() -> int:
             global CANCEL_REQUESTED
             CANCEL_REQUESTED = False
             try:
-                propagate(message, str(source_path), model_path, config_path, digest, args.device)
+                propagate(message, str(source_path), model_path, config_path, digest, args.device, args.stride)
             except Exception as error:  # keep the worker alive so the host can report it
                 emit({"event": "error", "message": f"{type(error).__name__}: {error}"})
                 import traceback

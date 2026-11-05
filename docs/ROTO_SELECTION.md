@@ -53,6 +53,7 @@ arithmetic or an explicit "unverified".
     {"Box": {"rect": {"x0": 100.0, "y0": 100.0, "x1": 500.0, "y1": 700.0}, "frame": 7}}
   ],
   "mask": null,
+  "image": null,
   "max_side": 480
 }
 ```
@@ -64,6 +65,9 @@ Rules the crate enforces before a worker sees anything:
   area;
 * a `Mask` prompt must carry the mask file it refers to (`mask`), because a
   prompt the worker cannot open is a question it cannot answer;
+* `image` is the frame the worker reads. It is `null` while a plan is dormant;
+  the runner adds it once the frame has been exported, and because it is part of
+  the canonical JSON it is part of the digest;
 * `max_side` is clamped to 64–4096 and the working size preserves aspect,
   never upscaling;
 * the request's canonical-JSON SHA-256 is the cache key, so moving one point by
@@ -153,12 +157,27 @@ First-run policy, when the user has not chosen: 480×270 (the size the local XMe
 probe used), stride 1, 2048 MB budget, background on. These are starting points,
 not claims about speed.
 
-## What is still missing (and why the build says so)
+## What exists now, and what is still missing
 
-* The workspace prompt canvas and the panel controls for the settings above are
-  the next increment; the crate contract they will call is in place and tested.
-* `tools/segment_worker.py` does not exist yet. Until it does, `plan_segment`
-  describes a process that cannot be found, and the panel must say exactly that.
+Shipped and tested in the crate: the request/reply contract, the compatibility
+matrix, the runtime-file detection and the speed policy.
+
+Shipped in the workspace: the Brush / Add point / Remove point / Box tools on the
+mask canvas with visible, undoable prompts; the compatibility route and the
+no-load runtime scan in Roto AI; the speed/quality controls; and a *Plan
+selection* button that builds the dormant plan and prints the exact command line.
+
+Shipped as a script (written, never executed): `tools/segment_worker.py`, the
+SAM 2.1 CPU adapter over the protocol, with an EdgeTAM refusal and a
+`--self-test` that runs without torch. Its checkpoint-construction call against
+Meta's package is the one unproven step, and it fails loudly.
+
+Still missing, and said out loud by the UI:
+
+* The **selection runner**: export the requested frame, write the plan's
+  request JSON, spawn the worker, validate the reply, adopt the mask into the
+  canvas. No plan can run without it, and the panel says so rather than showing a
+  runnable-looking button.
 * No ONNX export has been produced or validated for any model here.
 * No inference, weight load or benchmark has been run for this document, by
   design. The only measured numbers in the project remain the local XMem CPU

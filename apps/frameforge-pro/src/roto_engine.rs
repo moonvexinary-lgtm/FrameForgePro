@@ -17,8 +17,10 @@ use frameforge_roto::models::{
     self, DiskBudget, Install, InstallPlan, InstallState, ModelDescriptor, PlanError, Redistribution, RuntimeKind, Task, download_command, find, install_plan,
     installed_bytes, total_bytes,
 };
-use frameforge_roto::runtime::{self, RuntimeReport};
+use frameforge_roto::runtime::{self, PerformanceSettings, RuntimeReport};
 use frameforge_roto::scheduler::{JobKind, Queue};
+use frameforge_roto::segment::{SegmentPlan, SegmentRequest, plan_segment};
+use frameforge_roto::selection::{Prompt, SelectionSession};
 use frameforge_roto::tracking::{BackendRegistry, Direction};
 
 use crate::app::App;
@@ -74,6 +76,17 @@ pub struct RotoEngineState {
     pub message: Option<String>,
     /// The digest the user pinned for a model, per session.
     pub pinned: Vec<(&'static str, String)>,
+    /// The speed/quality policy the workspace runs under.
+    pub performance: PerformanceSettings,
+    /// The last segmentation plan built from the drawn prompts. Dormant by
+    /// construction: planning never starts a process.
+    pub selection_plan: Option<SegmentPlan>,
+    /// Why the last attempt to plan a selection was refused.
+    pub selection_error: Option<String>,
+    /// Runtime files found by the last explicit scan. `None` until the user
+    /// asks: scanning `PATH` on every frame would be wasteful and would look
+    /// like probing.
+    pub detected: Option<Vec<frameforge_roto::RuntimeFile>>,
 }
 
 impl Default for RotoEngineState {
@@ -94,6 +107,10 @@ impl Default for RotoEngineState {
             queue: Queue::new(1),
             message: None,
             pinned: Vec::new(),
+            performance: PerformanceSettings::default(),
+            selection_plan: None,
+            selection_error: None,
+            detected: None,
         }
     }
 }
@@ -109,6 +126,54 @@ pub fn default_models_root() -> PathBuf {
 impl RotoEngineState {
     pub fn models_root_path(&self) -> PathBuf {
         PathBuf::from(self.models_root.trim())
+    }
+
+    /// Keep the working size, the mask canvas and the speed policy describing
+    /// the same image. The policy's area ceiling applies, so a huge value is
+    /// reduced instead of becoming a huge tensor.
+    pub fn set_working_size(&mut self, width: u32, height: u32) -> (u32, u32) {
+        self.performance.max_width = width.max(16);
+        self.performance.max_height = height.max(16);
+        self.performance = self.performance.sanitised();
+        (self.performance.max_width, self.performance.max_height)
+    }
+
+    /// Turn the prompts drawn in the Masking workspace into a segmentation
+    /// plan. This is a *plan*: it names the model, the worker, the request file
+    /// and the arguments, and starts nothing. Every refusal names what is
+    /// missing, so the panel never shows a runnable-looking command for a
+    /// backend that is not installed.
+    pub fn plan_selection(
+        &self,
+        prompts: &SelectionSession,
+        width: u32,
+        height: u32,
+        mask: Option<&Path>,
+        python: &str,
+        frame: i64,
+    ) -> Result<SegmentPlan, String> {
+        let model = find(&self.selection_model).ok_or_else(|| format!("{} is not in the model catalogue", self.selection_model))?;
+        if prompts.for_frame(frame).is_empty() {
+            return Err("draw at least one prompt for this frame first".to_string());
+        }
+        let python = python.trim();
+        if python.is_empty() {
+            return Err("set the Python interpreter in the runtime section first".to_string());
+        }
+        let (width, height) = (width.max(16), height.max(16));
+        let max_side = self.performance.max_width.max(self.performance.max_height).max(width).max(height);
+        let mut request = SegmentRequest::new(frame, width, height, prompts.for_frame(frame), max_side).map_err(|error| error.to_string())?;
+        if request.prompts.iter().any(|prompt| matches!(prompt, Prompt::Mask { .. })) {
+            let mask = mask.ok_or_else(|| "a mask prompt needs a saved mask: press \"Save as PNG…\" first".to_string())?;
+            request = request.with_mask(mask);
+        }
+        let weights = self.probe().found_weights(&self.selection_model);
+        if weights.is_empty() {
+            return Err(format!("{} is not installed: install its checkpoint in the model manager first", self.selection_model));
+        }
+        let worker = PathBuf::from(worker_script_for(&self.selection_model));
+        plan_segment(&request, &worker, Path::new(python), model, &weights, &self.models_root_path().join("selection"), false)
+            .map_err(|error| error.to_string())
     }
 
     /// The probe the engine adapters consult: file presence only.
@@ -362,7 +427,7 @@ impl RotoEngineState {
         }
 
         let mut args = command.args;
-        args.extend(backend_args(inputs, &model_id, &digest)?);
+        args.extend(backend_args(inputs, &model_id, &digest, self.performance.frame_stride)?);
 
         let request = crate::roto_run::RunRequest {
             program: PathBuf::from(command.program),
@@ -471,7 +536,112 @@ fn backend_selectors(app: &mut App, panel: &mut egui::Ui) {
     });
     licence_line(panel, selected_selection, app.roto_engine.probe().is_installed(selected_selection.id));
 
+    performance_section(app, panel);
+    selection_section(app, panel);
     run_controls(app, panel);
+}
+
+/// The real speed levers, with what each one costs.
+fn performance_section(app: &mut App, panel: &mut egui::Ui) {
+    ui::section(panel, "SPEED AND QUALITY");
+    panel.label(ui::hint(
+        "Resolution and stride are the levers that matter on integrated graphics. The mask cache still holds every frame; a stride repeats the last mask in between, and the QC review flags the stutter that causes.",
+    ));
+    let mut perf = app.roto_engine.performance;
+    panel.horizontal(|ui| {
+        ui.label(ui::meta("Working size"));
+        ui.add(egui::DragValue::new(&mut perf.max_width).range(64..=3_840).prefix("w "));
+        ui.add(egui::DragValue::new(&mut perf.max_height).range(64..=3_840).prefix("h "));
+    });
+    ui.add(egui::Slider::new(&mut perf.frame_stride, 1..=8).text("propagate every Nth frame"));
+    ui.add(egui::Slider::new(&mut perf.memory_budget_mb, 512..=16_384).text("memory budget (MB)"));
+    panel.checkbox(&mut perf.background, "keep inference in the background");
+    let clean = perf.sanitised();
+    app.roto_engine.performance = clean;
+    if app.roto.width != clean.max_width || app.roto.height != clean.max_height {
+        // The canvas is the mask at this size, so it cannot survive a resize.
+        app.roto.width = clean.max_width;
+        app.roto.height = clean.max_height;
+        app.roto.clear_canvas();
+        app.status = "Working size changed; the initial-mask canvas was cleared".to_string();
+    }
+    panel.label(ui::hint(&clean.summary((clean.max_width, clean.max_height))));
+    panel.label(ui::hint(
+        "The per-frame estimate is arithmetic on the working size, not a measurement. FrameForge does not print benchmark numbers it did not measure.",
+    ));
+}
+
+/// Prompts drawn in the Masking workspace, the compatibility route for the
+/// chosen selector, and the dormant plan they produce.
+fn selection_section(app: &mut App, panel: &mut egui::Ui) {
+    ui::section(panel, "SELECTION PROMPTS");
+    panel.label(ui::hint(
+        "Draw clicks, a box or a mask in the Masking workspace, then plan the selection here. Planning writes nothing and starts nothing: it names the worker and the request.",
+    ));
+    if app.roto.prompts.is_empty() {
+        panel.label(ui::hint("No prompts yet. The Masking workspace has Add point / Remove point / Box tools."));
+    } else {
+        panel.label(ui::hint(&app.roto.prompts.summary()));
+    }
+
+    if let Some(row) = frameforge_roto::compat::find(&app.roto_engine.selection_model) {
+        panel.label(ui::hint(&format!(
+            "{} · ONNX export {} · Windows ML {} · providers: {}",
+            row.path.label(),
+            row.onnx_export.label(),
+            row.windows_ml.label(),
+            row.candidate_providers.join(", ")
+        )));
+        panel.label(ui::hint(row.note));
+    }
+    if ui::mini_button(
+        panel,
+        "Scan for runtime files",
+        "Look beside the app and on PATH for DirectML, Windows ML and torch DLLs. Presence is not compatibility and nothing is loaded.",
+    )
+    .clicked()
+    {
+        let dirs = frameforge_roto::compat::standard_dirs();
+        let refs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+        app.roto_engine.detected = Some(frameforge_roto::compat::detect_files(&refs));
+    }
+    if let Some(files) = &app.roto_engine.detected {
+        panel.label(ui::hint(&frameforge_roto::compat::detection_note(files)));
+    }
+
+    let mask = (!app.roto.initial_mask.trim().is_empty()).then(|| PathBuf::from(app.roto.initial_mask.trim()));
+    let python = app.roto.python.clone();
+    if ui::accent_button(panel, "Plan selection (no inference)").clicked() {
+        let planned = app.roto_engine.plan_selection(&app.roto.prompts, app.roto.width.max(16), app.roto.height.max(16), mask.as_deref(), &python, 0);
+        match planned {
+            Ok(plan) => {
+                app.roto_engine.selection_error = None;
+                app.roto_engine.selection_plan = Some(plan);
+            }
+            Err(error) => {
+                app.roto_engine.selection_plan = None;
+                app.roto_engine.selection_error = Some(error);
+            }
+        }
+    }
+    if let Some(plan) = &app.roto_engine.selection_plan {
+        panel.label(ui::hint(&format!("{} · {} · dormant: nothing will start", plan.protocol, plan.model)));
+        panel.label(egui::RichText::new(plan.command_line()).size(9.5).monospace());
+        let worker = plan.command.args.get(1).map(PathBuf::from);
+        match worker {
+            Some(worker) if worker.is_file() => {
+                panel.label(ui::hint("The worker script is present. The selection runner is the next increment; no frame is read until it exists."));
+            }
+            _ => {
+                panel.label(
+                    egui::RichText::new("The segmentation worker is not shipped in this build, so this plan cannot run yet.").size(10.0).color(ui::WARN),
+                );
+            }
+        }
+    }
+    if let Some(error) = &app.roto_engine.selection_error {
+        panel.label(egui::RichText::new(error).size(10.0).color(ui::DANGER));
+    }
 }
 
 /// The workspace as it was when the user pressed Run: a snapshot, so the engine
@@ -634,14 +804,17 @@ fn worker_script_for(model_id: &str) -> &'static str {
         "tools/cutie_worker.py"
     } else if model_id.starts_with("xmem") {
         "tools/xmem_worker.py"
+    } else if model_id.starts_with("sam2") || model_id.starts_with("edgetam") {
+        "tools/segment_worker.py"
     } else {
         "tools/roto_worker.py"
     }
 }
 
-/// The flags only the backend itself understands: its checkout, and for Cutie the
-/// pinned digest it must verify before loading.
-fn backend_args(inputs: &RunInputs, model_id: &str, digest: &str) -> Result<Vec<String>, String> {
+/// The flags only the backend itself understands: its checkout, the pinned
+/// digest it must verify before loading, and a propagation stride for the
+/// tracker that implements one.
+fn backend_args(inputs: &RunInputs, model_id: &str, digest: &str, stride: u32) -> Result<Vec<String>, String> {
     if model_id.starts_with("cutie") {
         let source = inputs.cutie_source.trim();
         if source.is_empty() {
@@ -651,6 +824,10 @@ fn backend_args(inputs: &RunInputs, model_id: &str, digest: &str) -> Result<Vec<
         if !digest.is_empty() {
             args.push("--weights-sha256".to_string());
             args.push(digest.to_string());
+        }
+        if stride > 1 {
+            args.push("--stride".to_string());
+            args.push(stride.to_string());
         }
         Ok(args)
     } else if model_id.starts_with("xmem") {

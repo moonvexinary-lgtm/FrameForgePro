@@ -21,8 +21,43 @@ use frameforge_bridge::{
     RotoRuntimeRequest, XMEM_COMMIT, XmemWorker, default_cache_root, export_frames, python_candidates_from_env, run_job,
 };
 
+use frameforge_roto::selection::{BoxRect, Prompt, SelectionSession};
+
 use crate::app::App;
 use crate::ui;
+
+/// What a pointer gesture on the mask canvas does.
+///
+/// Prompts are drawn in *working-size* coordinates: the canvas is the frame-0
+/// mask the worker starts from, so a click here is a click on the image the
+/// model will actually see.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptTool {
+    Brush,
+    AddPoint,
+    RemovePoint,
+    Box,
+}
+
+impl PromptTool {
+    pub fn label(self) -> &'static str {
+        match self {
+            PromptTool::Brush => "Brush",
+            PromptTool::AddPoint => "Add point",
+            PromptTool::RemovePoint => "Remove point",
+            PromptTool::Box => "Box",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            PromptTool::Brush => "Paint the initial mask; a mask prompt can reuse it",
+            PromptTool::AddPoint => "Click the object: a positive point",
+            PromptTool::RemovePoint => "Click what is not the object: a negative point",
+            PromptTool::Box => "Drag a box around the object",
+        }
+    }
+}
 
 /// How long a worker gets to answer `hello` before it is killed.
 const HANDSHAKE: Duration = Duration::from_secs(120);
@@ -84,6 +119,10 @@ pub struct RotoState {
     pub brush_add: bool,
     /// Fill the dragged rectangle instead of painting a stroke.
     pub brush_rect: bool,
+    /// What a click or drag on the canvas does.
+    pub prompt_tool: PromptTool,
+    /// The prompts drawn for the frame-0 selection.
+    pub prompts: SelectionSession,
     rect_start: Option<(f32, f32)>,
     last_point: Option<(f32, f32)>,
 }
@@ -117,6 +156,8 @@ impl Default for RotoState {
             brush_radius: 18.0,
             brush_add: true,
             brush_rect: false,
+            prompt_tool: PromptTool::Brush,
+            prompts: SelectionSession::new(),
             rect_start: None,
             last_point: None,
         }
@@ -389,15 +430,24 @@ pub fn show(app: &mut App, panel: &mut egui::Ui) {
         None => "Select a video clip on the timeline.".to_string(),
     };
     panel.label(ui::hint(&clip_label));
-    let (work_w, work_h) = (app.roto.width.max(16), app.roto.height.max(16));
+    let (work_w, work_h) = app.roto_engine.set_working_size(app.roto.width, app.roto.height);
+    app.roto.width = work_w;
+    app.roto.height = work_h;
     app.roto.ensure_canvas(work_w, work_h);
     mask_editor(app, panel);
     path_row(panel, "Initial mask PNG", &mut app.roto.initial_mask, "PNG", false);
     panel.horizontal(|ui| {
         ui.label(ui::meta("Working size"));
-        ui.add(egui::DragValue::new(&mut app.roto.width).range(16..=1920).prefix("w "));
-        ui.add(egui::DragValue::new(&mut app.roto.height).range(16..=1080).prefix("h "));
+        ui.add(egui::DragValue::new(&mut app.roto.width).range(64..=3_840).prefix("w "));
+        ui.add(egui::DragValue::new(&mut app.roto.height).range(64..=3_840).prefix("h "));
     });
+    let (synced_w, synced_h) = app.roto_engine.set_working_size(app.roto.width, app.roto.height);
+    if (synced_w, synced_h) != (app.roto.width, app.roto.height) {
+        app.roto.width = synced_w;
+        app.roto.height = synced_h;
+        app.roto.ensure_canvas(synced_w, synced_h);
+        app.status = "Working size clamped to the supported range and area".to_string();
+    }
     panel.horizontal(|ui| {
         ui.label(ui::meta("Direction"));
         ui.selectable_value(&mut app.roto.forward, true, "Forward");
@@ -496,20 +546,32 @@ fn consent_fields(app: &mut App, panel: &mut egui::Ui) {
     }
 }
 
-/// The initial-mask canvas: paint or erase with a round brush, or drag a
-/// rectangle, then save the result as the PNG the worker starts from.
+/// The initial-mask canvas and the prompt tools: paint or erase with a round
+/// brush, drag a filled rectangle, click a positive or negative point, or drag a
+/// box prompt. The brush writes the frame-0 mask; the other tools collect the
+/// prompts a segmentation backend consumes.
 fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
     ui::section(panel, "INITIAL MASK (FRAME 0)");
     panel.label(ui::hint(
         "Paint the region the model starts from, then save it. The PNG is written at the working size, which is exactly the resolution the worker is asked for.",
     ));
     panel.horizontal(|ui| {
-        ui.selectable_value(&mut app.roto.brush_add, true, "Paint");
-        ui.selectable_value(&mut app.roto.brush_add, false, "Erase");
-        ui.checkbox(&mut app.roto.brush_rect, "Rectangle");
+        for tool in [PromptTool::Brush, PromptTool::AddPoint, PromptTool::RemovePoint, PromptTool::Box] {
+            ui.selectable_value(&mut app.roto.prompt_tool, tool, tool.label());
+        }
     });
+    panel.label(ui::hint(app.roto.prompt_tool.hint()));
+    if app.roto.prompt_tool == PromptTool::Brush {
+        panel.horizontal(|ui| {
+            ui.selectable_value(&mut app.roto.brush_add, true, "Paint");
+            ui.selectable_value(&mut app.roto.brush_add, false, "Erase");
+            ui.checkbox(&mut app.roto.brush_rect, "Fill box");
+        });
+    }
     panel.horizontal(|ui| {
-        ui.add(egui::Slider::new(&mut app.roto.brush_radius, 2.0..=120.0).text("px"));
+        if app.roto.prompt_tool == PromptTool::Brush {
+            ui.add(egui::Slider::new(&mut app.roto.brush_radius, 2.0..=120.0).text("px"));
+        }
         if ui.small_button("Clear").clicked() {
             app.roto.clear_canvas();
         }
@@ -546,31 +608,107 @@ fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
             let y = ((pos.y - rect.min.y) / rect.height() * h as f32).clamp(0.0, h as f32 - 1.0);
             (x, y)
         };
-        let pressed = response.interact_pointer_pos().filter(|_| response.clicked() || response.dragged());
-        if let Some(pos) = pressed {
-            let (x, y) = to_canvas(pos);
-            if app.roto.brush_rect {
-                if response.drag_started() || app.roto.rect_start.is_none() {
-                    app.roto.rect_start = Some((x, y));
+        let pointer = response.interact_pointer_pos();
+        match app.roto.prompt_tool {
+            PromptTool::Brush => {
+                let pressed = pointer.filter(|_| response.clicked() || response.dragged());
+                if let Some(pos) = pressed {
+                    let (x, y) = to_canvas(pos);
+                    if app.roto.brush_rect {
+                        if response.drag_started() || app.roto.rect_start.is_none() {
+                            app.roto.rect_start = Some((x, y));
+                        }
+                        let start = app.roto.rect_start.unwrap_or((x, y));
+                        let preview = egui::Rect::from_two_pos(
+                            egui::pos2(rect.min.x + start.0 / w as f32 * rect.width(), rect.min.y + start.1 / h as f32 * rect.height()),
+                            pos,
+                        );
+                        panel.painter().rect_stroke(preview, 0.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
+                    } else {
+                        app.roto.stroke_to(x, y);
+                    }
                 }
-                let start = app.roto.rect_start.unwrap_or((x, y));
-                let preview =
-                    egui::Rect::from_two_pos(egui::pos2(rect.min.x + start.0 / w as f32 * rect.width(), rect.min.y + start.1 / h as f32 * rect.height()), pos);
-                panel.painter().rect_stroke(preview, 0.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
-            } else {
-                app.roto.stroke_to(x, y);
+                if response.drag_stopped()
+                    && app.roto.brush_rect
+                    && let (Some((x0, y0)), Some((x1, y1))) = (app.roto.rect_start.take(), pointer.map(to_canvas))
+                {
+                    app.roto.fill_rect(x0, y0, x1, y1);
+                }
+                if response.drag_stopped() {
+                    app.roto.end_stroke();
+                }
+            }
+            PromptTool::AddPoint | PromptTool::RemovePoint => {
+                if response.clicked()
+                    && let Some(pos) = pointer
+                {
+                    let (x, y) = to_canvas(pos);
+                    let positive = app.roto.prompt_tool == PromptTool::AddPoint;
+                    app.roto.prompts.add_point(x, y, positive, 0);
+                    app.status = format!("{} prompt at {x:.0}, {y:.0}", if positive { "Positive" } else { "Negative" });
+                }
+            }
+            PromptTool::Box => {
+                if let Some(pos) = pointer {
+                    let (x, y) = to_canvas(pos);
+                    if response.drag_started() || app.roto.rect_start.is_none() {
+                        app.roto.rect_start = Some((x, y));
+                    }
+                    let start = app.roto.rect_start.unwrap_or((x, y));
+                    let preview = egui::Rect::from_two_pos(
+                        egui::pos2(rect.min.x + start.0 / w as f32 * rect.width(), rect.min.y + start.1 / h as f32 * rect.height()),
+                        pos,
+                    );
+                    panel.painter().rect_stroke(preview, 0.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
+                }
+                if response.drag_stopped()
+                    && let (Some((x0, y0)), Some(pos)) = (app.roto.rect_start.take(), pointer)
+                {
+                    let (x1, y1) = to_canvas(pos);
+                    let boxed = BoxRect::from_corners(x0, y0, x1, y1);
+                    if boxed.area() >= 1.0 {
+                        app.roto.prompts.set_box(boxed, 0);
+                        app.status = format!("Box prompt {:.0}x{:.0}", boxed.width(), boxed.height());
+                    } else {
+                        app.status = "The box was too small to be a prompt".to_string();
+                    }
+                }
             }
         }
-        if response.drag_stopped()
-            && app.roto.brush_rect
-            && let (Some((x0, y0)), Some((x1, y1))) = (app.roto.rect_start.take(), pressed.map(to_canvas))
-        {
-            app.roto.fill_rect(x0, y0, x1, y1);
-        }
-        if response.drag_stopped() {
-            app.roto.end_stroke();
+
+        // Prompt markers, drawn over the mask so a click is visibly a prompt.
+        let to_screen = |x: f32, y: f32| egui::pos2(rect.min.x + x / w as f32 * rect.width(), rect.min.y + y / h as f32 * rect.height());
+        for prompt in app.roto.prompts.prompts() {
+            match prompt {
+                Prompt::Point { x, y, positive, .. } => {
+                    let colour = if *positive { ui::ACCENT } else { ui::DANGER };
+                    let centre = to_screen(*x, *y);
+                    panel.painter().circle_filled(centre, 4.0, colour);
+                    panel.painter().circle_stroke(centre, 4.5, egui::Stroke::new(1.0, egui::Color32::BLACK));
+                }
+                Prompt::Box { rect: boxed, .. } => {
+                    let marker = egui::Rect::from_two_pos(to_screen(boxed.x0, boxed.y0), to_screen(boxed.x1, boxed.y1));
+                    panel.painter().rect_stroke(marker, 0.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
+                }
+                Prompt::Mask { .. } => {}
+            }
         }
     }
+
+    panel.label(ui::hint(&app.roto.prompts.summary()));
+    panel.horizontal(|ui| {
+        if ui.small_button("Undo prompt").clicked() {
+            app.roto.prompts.pop();
+        }
+        if ui.small_button("Clear prompts").clicked() {
+            app.roto.prompts.clear();
+        }
+        if ui.small_button("Use the painted mask").clicked() {
+            app.roto.prompts.set_mask_prompt(0);
+            app.status = "The painted mask is a mask prompt; save it as a PNG before planning the selection".to_string();
+        }
+    });
+    panel.label(ui::hint("The prompts are planned in Roto AI → Selection prompts. Planning starts nothing."));
 
     panel.label(ui::hint(&format!("{}x{} · {:.1}% foreground", w, h, app.roto.coverage_percent())));
     panel.horizontal(|ui| {
