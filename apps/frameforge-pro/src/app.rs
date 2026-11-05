@@ -942,6 +942,23 @@ impl eframe::App for App {
         // finished backend run.
         self.roto_engine.poll();
         self.roto_engine.poll_run();
+        // A finished selection paints its mask into the frame-0 canvas; the
+        // worker never touches the App.
+        if let Some(result) = self.roto_engine.poll_selection() {
+            match result {
+                Ok(outcome) => {
+                    let (width, height) = (outcome.width, outcome.height);
+                    if self.roto.set_canvas(&outcome.coverage) {
+                        self.status = format!("Selection mask adopted into the canvas ({width}x{height})");
+                        self.roto.job_error = None;
+                    } else {
+                        self.roto.job_error =
+                            Some(format!("the selection mask is {width}x{height}, which is not the canvas size; set the working size to match and run again"));
+                    }
+                }
+                Err(error) => self.roto.job_error = Some(error),
+            }
+        }
 
         let full = ui.max_rect();
         let top = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), TOP_H));

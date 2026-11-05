@@ -282,6 +282,18 @@ impl RotoState {
         self.canvas_dirty = true;
     }
 
+    /// Adopt a mask a segmentation worker produced. It must be exactly the
+    /// canvas size: a mask at another size describes a different image, so it is
+    /// refused rather than stretched. Returns whether it was adopted.
+    pub fn set_canvas(&mut self, coverage: &[u8]) -> bool {
+        if self.canvas.is_empty() || coverage.len() != self.canvas.len() {
+            return false;
+        }
+        self.canvas.copy_from_slice(coverage);
+        self.canvas_dirty = true;
+        true
+    }
+
     pub fn invert_canvas(&mut self) {
         for value in &mut self.canvas {
             *value = 255 - *value;

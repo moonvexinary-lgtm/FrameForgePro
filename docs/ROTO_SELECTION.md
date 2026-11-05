@@ -172,12 +172,27 @@ SAM 2.1 CPU adapter over the protocol, with an EdgeTAM refusal and a
 `--self-test` that runs without torch. Its checkpoint-construction call against
 Meta's package is the one unproven step, and it fails loudly.
 
-Still missing, and said out loud by the UI:
+Also shipped: the **selection runner** (`roto_segment.rs`). *Run selection on the
+clip's first frame* exports that one frame at the working size, writes the
+request, clears any stale reply, spawns the worker on a thread with a timeout and
+a cancel flag, drains its stderr, requires a zero exit, checks the reply against
+the request it sent, and loads the mask only if it is exactly the requested size.
+The failure paths (no reply, an error reply, a reply for another frame or size, a
+mask of the wrong size, a program that cannot start, a dormant plan) are covered
+by tests; the mask handling is exercised with PNGs the tests write themselves.
 
-* The **selection runner**: export the requested frame, write the plan's
-  request JSON, spawn the worker, validate the reply, adopt the mask into the
-  canvas. No plan can run without it, and the panel says so rather than showing a
-  runnable-looking button.
+What that does *not* yet prove, and the UI says so:
+
+* No real model has been run through it. The one end-to-end path CI can verify
+  is the wiring, not a SAM 2.1 mask: there are no weights and no torch on the
+  build machine, by design.
+* `tools/segment_worker.py`'s checkpoint-construction call against Meta's `sam2`
+  package is still the unproven step (it was never executed).
+* The selection runs on the clip's first frame only; selecting mid-clip and
+  correcting a tracked result are later increments.
+
+Still missing:
+
 * No ONNX export has been produced or validated for any model here.
 * No inference, weight load or benchmark has been run for this document, by
   design. The only measured numbers in the project remain the local XMem CPU

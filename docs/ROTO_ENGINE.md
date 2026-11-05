@@ -180,10 +180,15 @@ selector families (SAM 2.1 Tiny and Small). It:
 * has a `--self-test` mode that exercises request validation and atomic replies
   with **no torch and no weights** (it passes, locally).
 
-The **selection runner** — the code that exports the requested frame, writes the
-plan's `request_json`, spawns this worker and reads the reply back into the mask
-canvas — is the next increment. Until it exists the plan is shown and says it
-cannot run.
+The **selection runner** (`roto_segment.rs`) exports the clip's first frame at
+the working size, writes the plan's `request_json`, deletes any stale reply,
+spawns the worker on a thread with a timeout and a cancel flag, drains its stderr,
+requires a zero exit, checks the reply against the request it sent, and adopts the
+mask only if it is exactly the requested size. The panel then paints it into the
+frame-0 canvas, from which the tracker starts. What CI verifies is that wiring and
+its failure paths (no reply, error reply, wrong frame, wrong size, wrong mask
+size, unspawnable program, dormant plan); **no model runs in CI**, so the mask a
+real SAM 2.1 checkpoint produces is still unproven.
 
 ### From a plan to a live run
 
@@ -222,9 +227,10 @@ labelled as planning estimates.
 
 Known gaps, stated plainly:
 
-* SAM 2.1 and EdgeTAM have a worker but no **runner**: nothing exports the frame,
-  writes the request and reads the reply yet, so their plans are shown and refused.
-  SAMURAI still has neither and runs through the stub, which refuses.
+* SAM 2.1 and EdgeTAM have a worker and a runner, but neither has been executed
+  against a real checkpoint: the runner's wiring and refusal paths are tested, the
+  model answer is not. EdgeTAM's adapter refuses by design until its API is
+  verified. SAMURAI has neither and runs through the stub, which refuses.
 * The Cutie worker's model-construction step is unproven (above).
 * Occlusion/disappearance corpora and drift review (the plan's R6) have not been
   run against a real model.

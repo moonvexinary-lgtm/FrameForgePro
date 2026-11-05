@@ -28,6 +28,7 @@ mod roto;
 mod roto_bench;
 mod roto_engine;
 mod roto_run;
+mod roto_segment;
 mod ui;
 
 use std::process::ExitCode;

@@ -12,6 +12,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Child;
 
+use filmcraft_render::SourceProvider;
+
 use frameforge_roto::engine::{FileProbe, FrameRange, RuntimeProbe};
 use frameforge_roto::models::{
     self, DiskBudget, Install, InstallPlan, InstallState, ModelDescriptor, PlanError, Redistribution, RuntimeKind, Task, download_command, find, install_plan,
@@ -87,6 +89,10 @@ pub struct RotoEngineState {
     /// asks: scanning `PATH` on every frame would be wasteful and would look
     /// like probing.
     pub detected: Option<Vec<frameforge_roto::RuntimeFile>>,
+    /// The segmentation worker in flight, if any.
+    pub selection_run: Option<crate::roto_segment::SegmentRun>,
+    /// What the last selection attempt is doing or did.
+    pub selection_message: Option<String>,
 }
 
 impl Default for RotoEngineState {
@@ -111,6 +117,8 @@ impl Default for RotoEngineState {
             selection_plan: None,
             selection_error: None,
             detected: None,
+            selection_run: None,
+            selection_message: None,
         }
     }
 }
@@ -174,6 +182,81 @@ impl RotoEngineState {
         let worker = PathBuf::from(worker_script_for(&self.selection_model));
         plan_segment(&request, &worker, Path::new(python), model, &weights, &self.models_root_path().join("selection"), false)
             .map_err(|error| error.to_string())
+    }
+
+    /// Export the clip's first frame and run the segmentation worker on it.
+    ///
+    /// This is the only path in the app that starts a selection process, and it
+    /// exists because the user clicked. Everything before the spawn is the
+    /// editor's own codec; the worker is what touches a model. The reply is
+    /// checked against the request, so a worker that answers about another frame
+    /// or size is a failure, not a mask.
+    pub fn start_selection(&mut self, inputs: RunInputs, prompts: Vec<Prompt>, mask: Option<PathBuf>) -> Result<(), String> {
+        if self.selection_run.as_ref().is_some_and(crate::roto_segment::SegmentRun::is_running) {
+            return Err("a segmentation is already running".to_string());
+        }
+        let model = find(&self.selection_model).ok_or_else(|| format!("{} is not in the model catalogue", self.selection_model))?;
+        let python = inputs.python.trim().to_string();
+        if python.is_empty() {
+            return Err("set the Python interpreter in the runtime section first".to_string());
+        }
+        if prompts.is_empty() {
+            return Err("draw at least one prompt first".to_string());
+        }
+        let weights = self.probe().found_weights(&self.selection_model);
+        if weights.is_empty() {
+            return Err(format!("{} is not installed: install its checkpoint in the model manager first", self.selection_model));
+        }
+        let worker = PathBuf::from(worker_script_for(&self.selection_model));
+        if !worker.is_file() {
+            return Err(format!("the segmentation worker {} is not shipped in this build", worker.display()));
+        }
+        let (width, height) = (inputs.working.0.max(16), inputs.working.1.max(16));
+        let (first, _last) = crate::roto::frame_range(inputs.rate, inputs.range).ok_or_else(|| "the selected clip has no frames".to_string())?;
+
+        // Export exactly the clip's first frame, at the working size the prompts
+        // were drawn against.
+        let frames_dir = std::env::temp_dir().join(format!("frameforge-roto-segment-{}", std::process::id())).join("frame");
+        let sources = frameforge_bridge::ProjectSources::build(&inputs.doc).map_err(|error| error.to_string())?;
+        let source = sources.source(inputs.item).ok_or_else(|| "the clip's media has no readable source".to_string())?;
+        let one_frame = filmcraft_time::TimeRange::new(inputs.rate.tick_of(first), inputs.rate.frame_duration());
+        let exported =
+            frameforge_bridge::export_frames(source.as_ref(), one_frame, inputs.rate, &frames_dir, (width, height)).map_err(|error| error.to_string())?;
+        let image = frames_dir.join(format!("frame_{:08d}.png", exported.first_frame));
+
+        let max_side = self.performance.max_width.max(self.performance.max_height).max(width).max(height);
+        let mut request = SegmentRequest::new(0, width, height, prompts, max_side).map_err(|error| error.to_string())?.with_image(&image);
+        if request.prompts.iter().any(|prompt| matches!(prompt, Prompt::Mask { .. })) {
+            let mask = mask.ok_or_else(|| "a mask prompt needs a saved mask: press \"Save as PNG…\" first".to_string())?;
+            request = request.with_mask(&mask);
+        }
+        let plan = plan_segment(&request, &worker, Path::new(&python), model, &weights, &self.models_root_path().join("selection"), true)
+            .map_err(|error| error.to_string())?;
+        self.selection_run = Some(crate::roto_segment::SegmentRun::spawn(plan, crate::roto_segment::SEGMENT_TIMEOUT)?);
+        self.selection_message = Some(format!("running {} on media frame {first}", model.id));
+        self.selection_error = None;
+        Ok(())
+    }
+
+    /// The finished selection, once, when its thread is done.
+    pub fn poll_selection(&mut self) -> Option<Result<crate::roto_segment::SegmentOutcome, String>> {
+        let result = self.selection_run.as_mut().and_then(crate::roto_segment::SegmentRun::try_finish)?;
+        self.selection_run = None;
+        self.selection_message = Some(match &result {
+            Ok(outcome) => format!("selection ready: {}", outcome.summary),
+            Err(error) => format!("selection failed: {error}"),
+        });
+        Some(result)
+    }
+
+    pub fn selection_running(&self) -> bool {
+        self.selection_run.as_ref().is_some_and(crate::roto_segment::SegmentRun::is_running)
+    }
+
+    pub fn cancel_selection(&self) {
+        if let Some(run) = &self.selection_run {
+            run.cancel();
+        }
     }
 
     /// The probe the engine adapters consult: file presence only.
@@ -625,19 +708,44 @@ fn selection_section(app: &mut App, panel: &mut egui::Ui) {
         }
     }
     if let Some(plan) = &app.roto_engine.selection_plan {
-        panel.label(ui::hint(&format!("{} · {} · dormant: nothing will start", plan.protocol, plan.model)));
+        panel.label(ui::hint(&format!("{} · {} · dormant until you run it", plan.protocol, plan.model)));
         panel.label(egui::RichText::new(plan.command_line()).size(9.5).monospace());
         let worker = plan.command.args.get(1).map(PathBuf::from);
-        match worker {
-            Some(worker) if worker.is_file() => {
-                panel.label(ui::hint("The worker script is present. The selection runner is the next increment; no frame is read until it exists."));
-            }
-            _ => {
-                panel.label(
-                    egui::RichText::new("The segmentation worker is not shipped in this build, so this plan cannot run yet.").size(10.0).color(ui::WARN),
-                );
+        let worker_present = worker.as_ref().is_some_and(|worker| worker.is_file());
+        if !worker_present {
+            panel.label(egui::RichText::new("The segmentation worker is not shipped in this build, so this plan cannot run yet.").size(10.0).color(ui::WARN));
+        }
+    }
+
+    if app.roto_engine.selection_running() {
+        panel.label(ui::hint(app.roto_engine.selection_message.as_deref().unwrap_or("running the segmentation worker…")));
+        if ui::full_button(panel, "Cancel the segmentation").clicked() {
+            app.roto_engine.cancel_selection();
+            app.status = "Cancelling the segmentation…".to_string();
+        }
+    } else if app.roto_engine.selection_plan.is_some() {
+        if ui::accent_button(panel, "Run selection on the clip's first frame").clicked() {
+            let prompts = app.roto.prompts.for_frame(0);
+            let mask = mask.clone();
+            match RunInputs::from_app(app) {
+                Ok(inputs) => match app.roto_engine.start_selection(inputs, prompts, mask) {
+                    Ok(()) => {
+                        app.status = "Exporting the clip's first frame, then segmenting…".to_string();
+                    }
+                    Err(error) => app.roto_engine.selection_error = Some(error),
+                },
+                Err(error) => app.roto_engine.selection_error = Some(error),
             }
         }
+        panel.label(ui::hint(
+            "The run exports the clip's first frame at the working size, writes the request, checks the reply against it and loads the mask into the canvas. Nothing is downloaded.",
+        ));
+    }
+
+    if let Some(message) = &app.roto_engine.selection_message
+        && !app.roto_engine.selection_running()
+    {
+        panel.label(ui::hint(message));
     }
     if let Some(error) = &app.roto_engine.selection_error {
         panel.label(egui::RichText::new(error).size(10.0).color(ui::DANGER));
