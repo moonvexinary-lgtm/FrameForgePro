@@ -19,7 +19,6 @@
 
 #![allow(dead_code)] // The run surface is complete; the panel reports what it uses.
 
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -198,7 +197,7 @@ mod tests {
     use super::*;
     use frameforge_roto::engine::ExternalCommand;
     use frameforge_roto::selection::Prompt;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     fn root(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("frameforge-segment-{}-{name}", std::process::id()));

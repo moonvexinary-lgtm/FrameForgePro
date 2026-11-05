@@ -222,7 +222,7 @@ impl RotoEngineState {
         let one_frame = filmcraft_time::TimeRange::new(inputs.rate.tick_of(first), inputs.rate.frame_duration());
         let exported =
             frameforge_bridge::export_frames(source.as_ref(), one_frame, inputs.rate, &frames_dir, (width, height)).map_err(|error| error.to_string())?;
-        let image = frames_dir.join(format!("frame_{:08d}.png", exported.first_frame));
+        let image = frames_dir.join(format!("frame_{:08}.png", exported.first_frame));
 
         let max_side = self.performance.max_width.max(self.performance.max_height).max(width).max(height);
         let mut request = SegmentRequest::new(0, width, height, prompts, max_side).map_err(|error| error.to_string())?.with_image(&image);
