@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use filmcraft_media::{FrameRequest, SharedSource};
@@ -295,14 +295,9 @@ impl<J: Send + 'static, D: Send + 'static> Worker<J, D> {
 
     fn poll(&self, generation: u64) -> Vec<D> {
         let mut out = Vec::new();
-        loop {
-            match self.done.try_recv() {
-                Ok((stamp, value)) => {
-                    if stamp == generation {
-                        out.push(value);
-                    }
-                }
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+        while let Ok((stamp, value)) = self.done.try_recv() {
+            if stamp == generation {
+                out.push(value);
             }
         }
         out
