@@ -87,10 +87,12 @@ pub fn downscale(rgba: &[u8], width: usize, height: usize, out_w: usize, out_h: 
                 }
             }
             let count = count.max(1);
-            for channel in sum {
+            // Straight alpha with an opaque result: the average of the RGB
+            // channels, and full coverage.
+            for channel in &sum[..3] {
                 out.push((channel / count) as u8);
             }
-            out[out.len() - 1] = 255;
+            out.push(255);
         }
     }
     Thumbnail { width: out_w, height: out_h, rgba: out }
@@ -271,19 +273,19 @@ impl<J: Send + 'static, D: Send + 'static> Worker<J, D> {
     fn spawn(name: &str, run: fn(&J) -> D, current: Arc<AtomicU64>) -> Option<Self> {
         let (jobs, incoming) = mpsc::channel::<(u64, J)>();
         let (outgoing, done) = mpsc::channel::<(u64, D)>();
-        thread::Builder::new()
-            .name(name.to_string())
-            .spawn(move || {
-                while let Ok((generation, job)) = incoming.recv() {
-                    if current.load(Ordering::Relaxed) != generation {
-                        continue;
-                    }
-                    if outgoing.send((generation, run(&job))).is_err() {
-                        break;
-                    }
+        let spawned = thread::Builder::new().name(name.to_string()).spawn(move || {
+            while let Ok((generation, job)) = incoming.recv() {
+                if current.load(Ordering::Relaxed) != generation {
+                    continue;
                 }
-            })
-            .ok()?;
+                if outgoing.send((generation, run(&job))).is_err() {
+                    break;
+                }
+            }
+        });
+        if spawned.is_err() {
+            return None;
+        }
         Some(Self { jobs, done })
     }
 
@@ -404,9 +406,9 @@ impl MediaPreviews {
     /// The thumbnail as an egui texture, uploaded once and kept until the item
     /// is evicted or the cache is cleared.
     pub fn thumbnail_texture(&mut self, context: &egui::Context, item: ItemId) -> Option<egui::TextureHandle> {
-        if let Some(texture) = self.textures.get(&item) {
+        if let Some(texture) = self.textures.get(&item).cloned() {
             self.touch(item);
-            return Some(texture.clone());
+            return Some(texture);
         }
         let thumbnail = {
             self.touch(item);
