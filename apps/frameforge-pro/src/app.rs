@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use filmcraft_engine::{EditorState, Session};
-use filmcraft_project::{ClipId, ItemId, Project};
+use filmcraft_project::{BinId, ClipId, ItemId, Project};
 use filmcraft_time::{FrameRate, Tick, TimeRange};
 use frameforge_bridge::{Composition, FFPROJ_SCHEMA, FrameForgeProject, ProjectSources};
 
@@ -135,6 +135,15 @@ pub struct App {
     pub project_tab: ProjectTab,
     pub inspector_tab: InspectorTab,
     pub media_search: String,
+    /// The bin the media browser is showing; `None` is the project root.
+    pub media_bin: Option<BinId>,
+    /// The name typed into the media browser's new-bin field.
+    pub new_bin_name: String,
+    /// The tag the media browser is filtering by, if any.
+    pub media_tag_filter: Option<String>,
+    /// The selected item's tags as typed, and which item the draft belongs to.
+    pub media_tags_draft: String,
+    pub media_tags_for: Option<ItemId>,
     /// The graphic clip selected in the Text & Graphics workspace.
     pub graphics_clip: Option<ClipId>,
     /// The layer index selected inside that graphic clip.
@@ -239,6 +248,11 @@ impl App {
             project_tab: ProjectTab::Media,
             inspector_tab: InspectorTab::Controls,
             media_search: String::new(),
+            media_bin: None,
+            new_bin_name: String::new(),
+            media_tag_filter: None,
+            media_tags_draft: String::new(),
+            media_tags_for: None,
             graphics_clip: None,
             graphics_layer: 0,
             text_draft: String::new(),

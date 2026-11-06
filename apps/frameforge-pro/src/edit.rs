@@ -6,7 +6,7 @@
 use filmcraft_engine::Targeting;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_media::{Generator, MediaSource};
-use filmcraft_project::{ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef, Project, Sequence, TrackId};
+use filmcraft_project::{Bin, BinEntry, BinId, ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef, Project, ProjectItem, Sequence, TrackId};
 use filmcraft_time::TICKS_PER_SECOND;
 use filmcraft_time::Tick;
 
@@ -500,6 +500,7 @@ fn add_generator(app: &mut App, command: &str) {
 fn add_tone(app: &mut App) {
     let hz = 440.0_f32;
     let db = -6.0_f32;
+    let bin = app.media_bin;
     let result = app.edit_project("New Tone", |project, state| {
         let source = GeneratorSource::new(Generator::Tone { hz, db }, SEQUENCE_W, SEQUENCE_H, SEQUENCE_RATE, Tick(10 * TICKS_PER_SECOND));
         let info = source.info().clone();
@@ -518,7 +519,7 @@ fn add_tone(app: &mut App) {
                 proxy: None,
                 identity: None,
             }),
-            None,
+            bin,
         );
         state.project_selection = vec![id];
         Ok(id)
@@ -532,7 +533,11 @@ fn add_tone(app: &mut App) {
 }
 
 fn add_file(app: &mut App, path: std::path::PathBuf) {
-    match app.execute("file.import", serde_json::json!({"paths": [path.display().to_string()]})) {
+    let mut params = serde_json::json!({"paths": [path.display().to_string()]});
+    if let Some(bin) = app.media_bin {
+        params["bin"] = serde_json::json!(bin.0);
+    }
+    match app.execute("file.import", params) {
         Ok(_) => app.status = "Imported".to_string(),
         Err(e) => app.status = e,
     }
@@ -976,8 +981,11 @@ fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 }
 
 fn media_browser(app: &mut App, panel: &mut egui::Ui) {
+    let bins = all_bins(&app.session.project.root);
+    let mut create_bin = false;
+    let mut move_to: Option<Option<BinId>> = None;
     panel.horizontal(|ui| {
-        if ui.button("+ Import").on_hover_text("Import a media file").clicked()
+        if ui.button("+ Import").on_hover_text("Import into the current bin").clicked()
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("Media", &["mp4", "mov", "mkv", "webm", "wav", "mp3", "flac", "png", "jpg", "jpeg", "tiff", "bmp", "tga"])
                 .pick_file()
@@ -1004,19 +1012,131 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
             open_source(app, id);
             app.status = "Opened in Source monitor".to_string();
         }
+        ui.menu_button("+ Bin", |ui| {
+            ui.label(ui::hint("Create a bin in the current location"));
+            let response = ui.add(egui::TextEdit::singleline(&mut app.new_bin_name).hint_text("Bin name").desired_width(150.0));
+            let entered = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Create").clicked() || entered {
+                create_bin = true;
+                ui.close();
+            }
+        });
+        ui.add_enabled_ui(app.bin_selection.is_some(), |ui| {
+            ui.menu_button("Move to", |ui| {
+                if ui.button("Project (root)").clicked() {
+                    move_to = Some(None);
+                    ui.close();
+                }
+                for (id, path) in &bins {
+                    if ui.button(path.as_str()).clicked() {
+                        move_to = Some(Some(*id));
+                        ui.close();
+                    }
+                }
+            });
+        });
     });
+    if create_bin {
+        new_bin(app);
+    }
+    if let (Some(target), Some(item)) = (move_to, app.bin_selection) {
+        move_item_to_bin(app, item, target);
+    }
+
     let width = panel.available_width();
-    panel.add_sized([width, 22.0], egui::TextEdit::singleline(&mut app.media_search).hint_text("Search media..."));
+    panel.add_sized([width, 22.0], egui::TextEdit::singleline(&mut app.media_search).hint_text("Search names, tags and metadata..."));
     panel.add_space(3.0);
 
+    // --- where we are ------------------------------------------------------
+    let trail = app.media_bin.and_then(|id| bin_trail(&app.session.project.root, id));
+    if app.media_bin.is_some() && trail.is_none() {
+        app.media_bin = None;
+        app.status = "That bin no longer exists".to_string();
+    }
+    let mut go: Option<Option<BinId>> = None;
+    panel.horizontal(|ui| {
+        if ui.selectable_label(app.media_bin.is_none(), "Project").clicked() {
+            go = Some(None);
+        }
+        if let Some(trail) = &trail {
+            for (id, name) in trail {
+                ui.label(ui::hint(">"));
+                if ui.selectable_label(app.media_bin == Some(*id), name.as_str()).clicked() {
+                    go = Some(Some(*id));
+                }
+            }
+        }
+    });
+    if let Some(target) = go {
+        app.media_bin = target;
+    }
+
+    let tags = collect_tags(&app.session.project);
+    panel.horizontal(|ui| {
+        ui.label(ui::meta("Tag"));
+        let selected = app.media_tag_filter.clone().unwrap_or_else(|| "Any tag".to_string());
+        egui::ComboBox::from_id_salt("media-tag-filter").selected_text(selected).show_ui(ui, |ui| {
+            if ui.selectable_label(app.media_tag_filter.is_none(), "Any tag").clicked() {
+                app.media_tag_filter = None;
+            }
+            for tag in &tags {
+                if ui.selectable_label(app.media_tag_filter.as_deref() == Some(tag.as_str()), tag.as_str()).clicked() {
+                    app.media_tag_filter = Some(tag.clone());
+                }
+            }
+        });
+        if app.media_tag_filter.is_some() && ui.small_button("Clear").clicked() {
+            app.media_tag_filter = None;
+        }
+        if let Some(id) = app.media_bin
+            && ui.small_button("Up").clicked()
+        {
+            app.media_bin = bin_parent(&app.session.project.root, id);
+        }
+    });
+
+    // --- the selected item's tags -----------------------------------------
+    if app.bin_selection != app.media_tags_for {
+        app.media_tags_for = app.bin_selection;
+        app.media_tags_draft =
+            app.bin_selection.and_then(|id| app.session.project.items.get(&id)).and_then(|item| item.metadata.get("Tags").cloned()).unwrap_or_default();
+    }
+    if let Some(item) = app.bin_selection {
+        let mut draft = app.media_tags_draft.clone();
+        let mut apply = false;
+        panel.horizontal(|ui| {
+            ui.label(ui::meta("Tags"));
+            ui.add(egui::TextEdit::singleline(&mut draft).hint_text("comma separated").desired_width(170.0));
+            apply = ui.small_button("Apply").clicked();
+        });
+        app.media_tags_draft = draft.clone();
+        if apply {
+            set_tags(app, item, &draft);
+        }
+    }
+
+    // --- rows --------------------------------------------------------------
+    let needle = app.media_search.trim().to_lowercase();
+    let tag_filter = app.media_tag_filter.clone();
+    let filtering = !needle.is_empty() || tag_filter.is_some();
+    let root = &app.session.project.root;
+    let current = app.media_bin.and_then(|id| root.find_bin(id)).unwrap_or(root);
+    let children: Vec<(BinId, String, usize)> = if filtering { Vec::new() } else { child_bins(current) };
     let mut ids = Vec::new();
-    app.session.project.root.all_items(&mut ids);
-    let needle = app.media_search.to_lowercase();
+    if filtering {
+        root.all_items(&mut ids);
+    } else {
+        for entry in &current.children {
+            if let BinEntry::Item(id) = entry {
+                ids.push(*id);
+            }
+        }
+    }
     let mut rows = Vec::new();
     for id in ids {
         let Some(item) = app.session.project.items.get(&id) else { continue };
         let ItemKind::Media(clip) = &item.kind else { continue };
-        if !needle.is_empty() && !item.name.to_lowercase().contains(&needle) {
+        if !item_matches(item, &needle, tag_filter.as_deref()) {
             continue;
         }
         let video = clip.info.video.is_some();
@@ -1028,21 +1148,43 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
         } else {
             "?"
         };
-        rows.push((id, item.name.clone(), kind, duration_text(clip.info.duration.seconds()), app.compositions.contains_key(&id), video));
+        let location = if filtering { item_location(root, id) } else { String::new() };
+        rows.push((
+            id,
+            item.name.clone(),
+            kind,
+            duration_text(clip.info.duration.seconds()),
+            app.compositions.contains_key(&id),
+            video,
+            tags_of(item),
+            location,
+        ));
     }
-    if rows.is_empty() {
-        panel.add_space(8.0);
-        panel.label(ui::hint(if app.media_search.is_empty() {
-            "No media yet. Import a file or create bars, a matte or a tone."
-        } else {
-            "No media matches this search."
-        }));
-    }
+    let empty = rows.is_empty() && children.is_empty();
     let mut chosen = None;
     let mut append = None;
     let mut remove = None;
+    let mut enter: Option<BinId> = None;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(panel, |ui| {
-        for (id, name, kind, duration, has_comp, video) in rows {
+        for (id, name, count) in &children {
+            let (row, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+            if ui.rect_contains_pointer(row) {
+                ui.painter().rect_filled(row, 3.0, ui::BG_HOVER);
+            }
+            ui.painter().text(row.left_center() + egui::vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, "\u{1f4c1}", egui::FontId::proportional(11.0), ui::ACCENT);
+            ui.painter().text(row.left_center() + egui::vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(11.0), ui::TEXT_MID);
+            ui.painter().text(
+                row.right_center() - egui::vec2(8.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                format!("{count}"),
+                egui::FontId::monospace(9.5),
+                ui::TEXT_LO,
+            );
+            if response.on_hover_text("Open this bin").clicked() {
+                enter = Some(*id);
+            }
+        }
+        for (id, name, kind, duration, has_comp, video, item_tags, location) in rows {
             let selected = app.bin_selection == Some(id);
             let (card, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::click());
             if ui.rect_contains_pointer(card) {
@@ -1064,8 +1206,13 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
             if has_comp {
                 ui.painter().circle_filled(egui::pos2(card.right() - 44.0, card.center().y), 3.0, ui::ACCENT);
             }
+            if !item_tags.is_empty() {
+                ui.painter().circle_filled(egui::pos2(card.right() - 56.0, card.center().y), 3.0, ui::CLIP_AUDIO);
+            }
             ui.painter().text(egui::pos2(card.right() - 8.0, card.center().y), egui::Align2::RIGHT_CENTER, duration, egui::FontId::monospace(9.5), ui::TEXT_LO);
-            let response = response.on_hover_text("Click to select, double-click to append, right-click to remove");
+            let tags_text = if item_tags.is_empty() { String::new() } else { format!("\nTags: {}", item_tags.join(", ")) };
+            let location_text = if location.is_empty() { String::new() } else { format!("\n{location}") };
+            let response = response.on_hover_text(format!("Click to select, double-click to append, right-click to remove{tags_text}{location_text}"));
             if response.double_clicked() {
                 append = Some(id);
             } else if response.secondary_clicked() {
@@ -1075,6 +1222,9 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
             }
         }
     });
+    if let Some(id) = enter {
+        app.media_bin = Some(id);
+    }
     if let Some(id) = chosen {
         app.bin_selection = Some(id);
         app.status = "Selected for Insert/Overwrite".to_string();
@@ -1085,8 +1235,204 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
     if let Some(id) = remove {
         remove_media(app, id);
     }
+    if empty {
+        panel.add_space(8.0);
+        panel.label(ui::hint(if filtering {
+            "No media matches this search or tag."
+        } else if app.media_bin.is_some() {
+            "This bin is empty. Import a file, create a bin, or move an item here."
+        } else {
+            "No media yet. Import a file or create bars, a matte or a tone."
+        }));
+    }
     panel.add_space(4.0);
     panel.label(ui::hint("Double-click appends at the patched tracks. Drag a clip or use Insert/Overwrite for a precise edit."));
+}
+
+// ---- bins, tags and search ------------------------------------------------
+
+/// Create a bin under the bin the browser is showing.
+fn new_bin(app: &mut App) {
+    let name = app.new_bin_name.trim().to_string();
+    if name.is_empty() {
+        app.status = "Type a bin name first".to_string();
+        return;
+    }
+    let parent = app.media_bin;
+    match app.edit_project("New Bin", |project, _| Ok(project.add_bin(&name, parent))) {
+        Ok(id) => {
+            app.media_bin = Some(id);
+            app.new_bin_name.clear();
+            app.status = format!("Created the bin {name}");
+        }
+        Err(error) => app.status = error.to_string(),
+    }
+}
+
+/// Move one item into `target` (`None` is the project root).
+fn move_item_to_bin(app: &mut App, item: ItemId, target: Option<BinId>) {
+    match app.edit_project("Move to Bin", |project, _| Ok(project.move_to_bin(&[item], target))) {
+        Ok(Some(0)) | Ok(None) => app.status = "The item is already in that bin".to_string(),
+        Ok(Some(moved)) => app.status = format!("Moved {moved} item to the bin"),
+        Err(error) => app.status = error.to_string(),
+    }
+}
+
+/// Replace an item's tags. An empty list removes the tag field entirely, so an
+/// untagged item does not carry an empty string around.
+fn set_tags(app: &mut App, item: ItemId, text: &str) {
+    let tags = parse_tags(text);
+    let empty = tags.is_empty();
+    let joined = tags.join(", ");
+    let result = app.edit_project("Edit Tags", move |project, _| {
+        let Some(entry) = project.items.get_mut(&item) else { return Ok(false) };
+        if tags.is_empty() {
+            entry.metadata.remove("Tags");
+        } else {
+            entry.metadata.insert("Tags".to_string(), tags.join(", "));
+        }
+        Ok(true)
+    });
+    match result {
+        Ok(true) if empty => app.status = "Cleared the tags".to_string(),
+        Ok(true) => app.status = format!("Tags: {joined}"),
+        Ok(false) => app.status = "That item no longer exists".to_string(),
+        Err(error) => app.status = error.to_string(),
+    }
+}
+
+/// Comma-separated, trimmed, empty-free, case-insensitively unique.
+fn parse_tags(text: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for part in text.split(',') {
+        let tag = part.trim();
+        if !tag.is_empty() && !tags.iter().any(|existing| existing.eq_ignore_ascii_case(tag)) {
+            tags.push(tag.to_string());
+        }
+    }
+    tags
+}
+
+fn tags_of(item: &ProjectItem) -> Vec<String> {
+    item.metadata.get("Tags").map(|value| parse_tags(value)).unwrap_or_default()
+}
+
+/// Every distinct tag in the project, sorted case-insensitively.
+fn collect_tags(project: &Project) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for item in project.items.values() {
+        for tag in tags_of(item) {
+            if !tags.iter().any(|existing| existing.eq_ignore_ascii_case(&tag)) {
+                tags.push(tag);
+            }
+        }
+    }
+    tags.sort_by_key(|tag| tag.to_lowercase());
+    tags
+}
+
+/// A row is shown when the tag filter (if any) matches and the search text is in
+/// the name, a tag or any other metadata value. An empty search matches all.
+fn item_matches(item: &ProjectItem, needle: &str, tag: Option<&str>) -> bool {
+    let tags = tags_of(item);
+    if let Some(tag) = tag
+        && !tags.iter().any(|existing| existing.eq_ignore_ascii_case(tag))
+    {
+        return false;
+    }
+    if needle.is_empty() {
+        return true;
+    }
+    item.name.to_lowercase().contains(needle)
+        || tags.iter().any(|tag| tag.to_lowercase().contains(needle))
+        || item.metadata.values().any(|value| value.to_lowercase().contains(needle))
+}
+
+/// The bins reachable from `bin`, as `(id, path)` in tree order.
+fn all_bins(root: &Bin) -> Vec<(BinId, String)> {
+    fn walk(bin: &Bin, prefix: &str, out: &mut Vec<(BinId, String)>) {
+        for entry in &bin.children {
+            if let BinEntry::Bin(child) = entry {
+                let path = if prefix.is_empty() { child.name.clone() } else { format!("{prefix} / {}", child.name) };
+                out.push((child.id, path.clone()));
+                walk(child, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, "", &mut out);
+    out
+}
+
+/// The path from the root to `target`, excluding the root itself.
+fn bin_trail(root: &Bin, target: BinId) -> Option<Vec<(BinId, String)>> {
+    fn walk(bin: &Bin, target: BinId, trail: &mut Vec<(BinId, String)>) -> bool {
+        for entry in &bin.children {
+            if let BinEntry::Bin(child) = entry {
+                trail.push((child.id, child.name.clone()));
+                if child.id == target || walk(child, target, trail) {
+                    return true;
+                }
+                trail.pop();
+            }
+        }
+        false
+    }
+    let mut trail = Vec::new();
+    walk(root, target, &mut trail).then_some(trail)
+}
+
+fn bin_parent(root: &Bin, target: BinId) -> Option<BinId> {
+    fn walk(bin: &Bin, target: BinId, root_id: BinId) -> Option<Option<BinId>> {
+        for entry in &bin.children {
+            if let BinEntry::Bin(child) = entry {
+                if child.id == target {
+                    return Some((bin.id != root_id).then_some(bin.id));
+                }
+                if let Some(found) = walk(child, target, root_id) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+    walk(root, target, root.id).flatten()
+}
+
+fn child_bins(bin: &Bin) -> Vec<(BinId, String, usize)> {
+    bin.children
+        .iter()
+        .filter_map(|entry| match entry {
+            BinEntry::Bin(child) => {
+                let mut ids = Vec::new();
+                child.all_items(&mut ids);
+                Some((child.id, child.name.clone(), ids.len()))
+            }
+            BinEntry::Item(_) => None,
+        })
+        .collect()
+}
+
+/// The bin an item lives in, as a readable path ("Project / Footage").
+fn item_location(root: &Bin, item: ItemId) -> String {
+    fn walk(bin: &Bin, item: ItemId, label: &str, trail: &mut Vec<String>) -> Option<String> {
+        trail.push(label.to_string());
+        for entry in &bin.children {
+            match entry {
+                BinEntry::Item(id) if *id == item => return Some(trail.join(" / ")),
+                BinEntry::Bin(child) => {
+                    if let Some(found) = walk(child, item, &child.name, trail) {
+                        return Some(found);
+                    }
+                }
+                BinEntry::Item(_) => {}
+            }
+        }
+        trail.pop();
+        None
+    }
+    let mut trail = Vec::new();
+    walk(root, item, "Project", &mut trail).unwrap_or_else(|| "Project".to_string())
 }
 
 fn markers_browser(app: &mut App, panel: &mut egui::Ui) {
@@ -2103,11 +2449,13 @@ mod tests {
     //! snap maths and the Source monitor (marks, range edits, marker ripple,
     //! persistence): no UI, but the exact commands the panels use.
 
-    use super::{placement_params, plan_placement};
+    use super::{
+        all_bins, bin_parent, bin_trail, item_location, item_matches, move_item_to_bin, new_bin, parse_tags, placement_params, plan_placement, set_tags,
+    };
     use filmcraft_engine::Session;
     use filmcraft_media::generators::GeneratorSource;
     use filmcraft_media::{Generator, MediaSource};
-    use filmcraft_project::{ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef, TransitionAlign};
+    use filmcraft_project::{BinEntry, ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef, Project, TransitionAlign};
     use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
     use serde_json::json;
 
@@ -2182,6 +2530,75 @@ mod tests {
             ))
         })
         .unwrap()
+    }
+
+    /// A fresh app over a project with one tone item, at the root bin.
+    fn tone_app() -> (crate::app::App, ItemId) {
+        let mut s = Session::default();
+        let item = add_tone_item(&mut s);
+        let app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+        (app, item)
+    }
+
+    #[test]
+    fn tags_are_parsed_deduped_searchable_and_undoable() {
+        assert_eq!(parse_tags(" b-roll, Hero, b-roll, , HERO "), vec!["b-roll".to_string(), "Hero".to_string()]);
+
+        let (mut app, item) = tone_app();
+        set_tags(&mut app, item, "Hero, B-Roll");
+        assert_eq!(app.session.project.items[&item].metadata["Tags"], "Hero, B-Roll", "the list is normalised and saved");
+        {
+            let saved = &app.session.project.items[&item];
+            assert!(item_matches(saved, "hero", None), "a tag is searchable by its text");
+            assert!(item_matches(saved, "roll", None), "part of a tag matches too");
+            assert!(item_matches(saved, "", Some("b-roll")), "the tag filter is case-insensitive");
+            assert!(!item_matches(saved, "", Some("drone")));
+            assert!(!item_matches(saved, "drone", None));
+            assert!(item_matches(saved, "", None), "no search and no filter match everything");
+        }
+        app.undo();
+        assert!(!app.session.project.items[&item].metadata.contains_key("Tags"), "undo removes the tags as one step");
+    }
+
+    #[test]
+    fn search_also_covers_other_metadata_values() {
+        let (mut app, item) = tone_app();
+        app.edit_project("Scene", |project, _| {
+            project.items.get_mut(&item).unwrap().metadata.insert("Scene".to_string(), "Rooftop".to_string());
+            Ok(())
+        })
+        .unwrap();
+        let saved = &app.session.project.items[&item];
+        assert!(item_matches(saved, "rooftop", None), "the Scene field is searched");
+        assert!(!item_matches(saved, "basement", None));
+    }
+
+    #[test]
+    fn bins_nest_and_moving_an_item_is_one_undo_step() {
+        let mut project = Project::new("Test");
+        let outer = project.add_bin("Footage", None);
+        let inner = project.add_bin("B-Roll", Some(outer));
+        assert_eq!(all_bins(&project.root), vec![(outer, "Footage".to_string()), (inner, "Footage / B-Roll".to_string())]);
+        let trail: Vec<String> = bin_trail(&project.root, inner).unwrap().into_iter().map(|(_, name)| name).collect();
+        assert_eq!(trail, vec!["Footage".to_string(), "B-Roll".to_string()]);
+        assert_eq!(bin_parent(&project.root, inner), Some(outer));
+        assert_eq!(bin_parent(&project.root, outer), None, "the root is the parent of a top-level bin");
+
+        let (mut app, item) = tone_app();
+        assert_eq!(item_location(&app.session.project.root, item), "Project");
+        app.new_bin_name = "Footage".to_string();
+        new_bin(&mut app);
+        let bin = app.media_bin.expect("the browser follows the bin it just made");
+        assert_eq!(item_location(&app.session.project.root, item), "Project", "creating a bin moves nothing");
+
+        move_item_to_bin(&mut app, item, Some(bin));
+        assert_eq!(item_location(&app.session.project.root, item), "Project / Footage");
+        assert!(
+            app.session.project.root.find_bin(bin).unwrap().children.iter().any(|entry| matches!(entry, BinEntry::Item(id) if *id == item)),
+            "the item is inside the bin"
+        );
+        app.undo();
+        assert_eq!(item_location(&app.session.project.root, item), "Project", "undo returns the item to the root");
     }
 
     #[test]
