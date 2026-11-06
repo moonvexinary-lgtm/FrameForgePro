@@ -757,6 +757,11 @@ R2 builds the boundary the real XMem worker will use, and proves it without pret
   20 s deadline. The fixtures now start under a lock (one interpreter at a time) with a 60 s
   failure bound (run `6bcbf9b`/`41149355637` is green), so the tests bound failure without racing each
   other's process start.
+- **A second straggler and its fix** (run `42235380722`): one interpreter still took longer than the
+  60 s bound while the fixtures queued behind the same lock passed, so a slow start was reported as
+  `Timeout("no event within 60.0s")`. `spawn_ready` now attempts the start once more after killing
+  the first worker (`ready_or_retry`); the deadline still bounds a fixture that is genuinely broken,
+  and the product's own timeout behaviour is covered separately by the silent-worker test.
 - **Measured limits**: the runner exists and is tested, but nothing yet starts a worker from the app
   (no runtime discovery/consent flow, which is R5) and `request_shutdown` still sends a request
   (teardown kills the child). No Python runtime or weights ship in the app; `tools/` holds the local
