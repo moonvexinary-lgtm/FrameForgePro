@@ -177,6 +177,14 @@ clip's first frame* exports that one frame at the working size, writes the
 request, clears any stale reply, spawns the worker on a thread with a timeout and
 a cancel flag, drains its stderr, requires a zero exit, checks the reply against
 the request it sent, and loads the mask only if it is exactly the requested size.
+
+Selections are **cached**: the mask is kept under a name carrying the model, the
+request digest and the first eight hex digits of the verified checkpoint digest,
+so identical prompts with an identical checkpoint reuse the mask and start no
+worker. An **unpinned checkpoint is never cached** — a mask that cannot be
+attributed to a checkpoint is not reused silently — and a cache file of the wrong
+size is ignored rather than trusted, so the cache can never turn a bad file into a
+result.
 The failure paths (no reply, an error reply, a reply for another frame or size, a
 mask of the wrong size, a program that cannot start, a dormant plan) are covered
 by tests; the mask handling is exercised with PNGs the tests write themselves.

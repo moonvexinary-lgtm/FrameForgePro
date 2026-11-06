@@ -232,7 +232,11 @@ impl RotoEngineState {
         }
         let plan = plan_segment(&request, &worker, Path::new(&python), model, &weights, &self.models_root_path().join("selection"), true)
             .map_err(|error| error.to_string())?;
-        self.selection_run = Some(crate::roto_segment::SegmentRun::spawn(plan, crate::roto_segment::SEGMENT_TIMEOUT)?);
+        // The verified checkpoint digest names the cache entry. An unpinned
+        // checkpoint is not attributed, so it is not cached at all.
+        let digest = self.pinned_digest(&self.selection_model).unwrap_or_default().to_string();
+        let run = crate::roto_segment::SegmentRun::spawn(plan, &digest, crate::roto_segment::SEGMENT_TIMEOUT)?;
+        self.selection_run = Some(run);
         self.selection_message = Some(format!("running {} on media frame {first}", model.id));
         self.selection_error = None;
         Ok(())

@@ -949,7 +949,11 @@ impl eframe::App for App {
                 Ok(outcome) => {
                     let (width, height) = (outcome.width, outcome.height);
                     if self.roto.set_canvas(&outcome.coverage) {
-                        self.status = format!("Selection mask adopted into the canvas ({width}x{height})");
+                        self.status = if outcome.cached {
+                            format!("Selection mask reused from the cache ({width}x{height})")
+                        } else {
+                            format!("Selection mask adopted into the canvas ({width}x{height})")
+                        };
                         self.roto.job_error = None;
                     } else {
                         self.roto.job_error =

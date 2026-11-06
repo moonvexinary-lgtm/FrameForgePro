@@ -36,6 +36,8 @@ pub struct SegmentOutcome {
     pub width: u32,
     pub height: u32,
     pub summary: String,
+    /// True when the mask came from the cache and no worker ran.
+    pub cached: bool,
 }
 
 /// A segmentation running on its own thread.
@@ -47,11 +49,14 @@ pub struct SegmentRun {
 
 impl SegmentRun {
     /// Start the worker thread. The plan must already be non-dormant: the caller
-    /// is the user's click.
-    pub fn spawn(plan: SegmentPlan, timeout: Duration) -> Result<Self, String> {
+    /// is the user's click. `weights_sha256` is the verified checkpoint digest
+    /// when there is one; it names the cache entry and an unpinned digest simply
+    /// does not cache.
+    pub fn spawn(plan: SegmentPlan, weights_sha256: &str, timeout: Duration) -> Result<Self, String> {
         if plan.dormant {
             return Err("this plan is dormant; a run needs the user's action".to_string());
         }
+        let digest = weights_sha256.to_string();
         let cancel = Arc::new(AtomicBool::new(false));
         let done: Arc<Mutex<Option<Result<SegmentOutcome, String>>>> = Arc::new(Mutex::new(None));
         let thread_cancel = Arc::clone(&cancel);
@@ -59,7 +64,7 @@ impl SegmentRun {
         let handle = std::thread::Builder::new()
             .name("frameforge-roto-segment".to_string())
             .spawn(move || {
-                let result = execute(&plan, timeout, &thread_cancel);
+                let result = execute(&plan, &digest, timeout, &thread_cancel);
                 if let Ok(mut slot) = thread_done.lock() {
                     *slot = Some(result);
                 }
@@ -118,22 +123,74 @@ pub fn read_reply(plan: &SegmentPlan) -> Result<SegmentReply, String> {
     Ok(reply)
 }
 
-/// Load the mask the worker wrote as 8-bit coverage, at exactly the size the
-/// request named. A different size is an error: resizing a mask silently would
-/// move every edge.
-pub fn adopt_mask(reply: &SegmentReply, expected: (u32, u32)) -> Result<Vec<u8>, String> {
-    let path = reply.mask_path();
-    let image = image::open(&path).map_err(|error| format!("the worker's mask {} could not be read: {error}", path.display()))?;
+/// Load a mask as 8-bit coverage, at exactly the size the request named. A
+/// different size is an error: resizing a mask silently would move every edge.
+pub fn load_coverage(path: &std::path::Path, expected: (u32, u32)) -> Result<Vec<u8>, String> {
+    let image = image::open(path).map_err(|error| format!("the mask {} could not be read: {error}", path.display()))?;
     let gray = image.to_luma8();
     if gray.dimensions() != expected {
-        return Err(format!("the worker's mask is {}x{}, but the request was {}x{}", gray.width(), gray.height(), expected.0, expected.1));
+        return Err(format!("the mask is {}x{}, but the request was {}x{}", gray.width(), gray.height(), expected.0, expected.1));
     }
     Ok(gray.into_raw())
 }
 
-/// The thread's whole body: write, spawn, wait, read back.
-pub fn execute(plan: &SegmentPlan, timeout: Duration, cancel: &AtomicBool) -> Result<SegmentOutcome, String> {
+/// Load the mask the worker wrote.
+pub fn adopt_mask(reply: &SegmentReply, expected: (u32, u32)) -> Result<Vec<u8>, String> {
+    load_coverage(&reply.mask_path(), expected)
+}
+
+/// Where the cached mask for this plan lives, when the checkpoint is pinned.
+///
+/// The name carries the model, the request digest and the first eight hex digits
+/// of the weights digest, so a different model, a different prompt or a different
+/// checkpoint is a different file. An **unpinned digest is not cached at all**: a
+/// mask that cannot be attributed to a checkpoint is not one to reuse silently.
+/// This matches the provenance rule the run report already follows.
+pub fn cache_path(plan: &SegmentPlan, weights_sha256: &str) -> Option<std::path::PathBuf> {
+    if weights_sha256.len() != 64 || weights_sha256.trim_matches('0').is_empty() || !weights_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let workspace = plan.request_path.parent()?;
+    let stem = plan.request_path.file_stem()?.to_str()?;
+    Some(workspace.join(format!("{stem}-{}-{}.mask.png", plan.model, &weights_sha256[..8])))
+}
+
+/// Keep the worker's mask under the cache name, atomically. A failure here is not
+/// a failure of the run: the mask the user asked for is already in hand.
+fn store_cache(plan: &SegmentPlan, weights_sha256: &str, source: &std::path::Path) {
+    let Some(cache) = cache_path(plan, weights_sha256) else { return };
+    let Some(parent) = cache.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let temporary = cache.with_extension("png.tmp");
+    if std::fs::copy(source, &temporary).is_ok() {
+        let _ = std::fs::rename(&temporary, &cache);
+    }
+}
+
+/// The thread's whole body: reuse a cached mask, or write, spawn, wait and read
+/// back.
+pub fn execute(plan: &SegmentPlan, weights_sha256: &str, timeout: Duration, cancel: &AtomicBool) -> Result<SegmentOutcome, String> {
     let request = SegmentRequest::from_json(&plan.request_json).map_err(|error| error.to_string())?;
+    let expected = (request.width, request.height);
+
+    // A cached answer for the same model, prompts, frame and checkpoint is the
+    // same mask; a corrupt or wrong-sized cache file is ignored rather than
+    // trusted, so the cache can never turn a bad file into a result.
+    if let Some(cache) = cache_path(plan, weights_sha256)
+        && cache.is_file()
+        && let Ok(coverage) = load_coverage(&cache, expected)
+    {
+        return Ok(SegmentOutcome {
+            coverage,
+            width: expected.0,
+            height: expected.1,
+            summary: format!("{}x{} · cached, no worker started", expected.0, expected.1),
+            cached: true,
+        });
+    }
+
     write_request(plan)?;
     // A reply from a previous attempt must never be read as this run's answer.
     if plan.reply_path.exists() {
@@ -188,8 +245,11 @@ pub fn execute(plan: &SegmentPlan, timeout: Duration, cancel: &AtomicBool) -> Re
     }
 
     let reply = read_reply(plan)?;
-    let coverage = adopt_mask(&reply, (request.width, request.height))?;
-    Ok(SegmentOutcome { coverage, width: request.width, height: request.height, summary: reply.summary() })
+    let coverage = adopt_mask(&reply, expected)?;
+    // Keep the worker's own bytes under a name that names the checkpoint. This
+    // failing is not a failure of the run.
+    store_cache(plan, weights_sha256, &reply.mask_path());
+    Ok(SegmentOutcome { coverage, width: expected.0, height: expected.1, summary: reply.summary(), cached: false })
 }
 
 #[cfg(test)]
@@ -250,7 +310,8 @@ mod tests {
         std::fs::write(&plan.reply_path, r#"{"version":1,"frame":3,"width":8,"height":4,"mask":"m.png"}"#).expect("reply");
         assert!(read_reply(&plan).expect_err("wrong frame").contains("frame"));
         std::fs::write(&plan.reply_path, r#"{"version":1,"frame":0,"width":9,"height":4,"mask":"m.png"}"#).expect("reply");
-        assert!(read_reply(&plan).expect_err("wrong size").contains("9x4"));
+        let error = read_reply(&plan).expect_err("wrong size");
+        assert!(error.contains("9") && error.contains("4"), "the sizes are named: {error}");
     }
 
     #[test]
@@ -294,7 +355,7 @@ mod tests {
         let directory = root("nospawn");
         let plan = plan(&directory, "this-program-does-not-exist-9f2a");
         let cancel = AtomicBool::new(false);
-        let error = execute(&plan, Duration::from_secs(5), &cancel).expect_err("no such program");
+        let error = execute(&plan, "", Duration::from_secs(5), &cancel).expect_err("no such program");
         assert!(error.contains("this-program-does-not-exist-9f2a"), "{error}");
         assert!(plan.request_path.is_file(), "the request was still written, so a rerun is reproducible");
     }
@@ -304,6 +365,63 @@ mod tests {
         let directory = root("dormant");
         let mut plan = plan(&directory, "python.exe");
         plan.dormant = true;
-        assert!(SegmentRun::spawn(plan, Duration::from_secs(5)).is_err());
+        assert!(SegmentRun::spawn(plan, "", Duration::from_secs(5)).is_err());
+    }
+
+    fn pinned_digest() -> String {
+        "ab".repeat(32)
+    }
+
+    #[test]
+    fn a_cached_mask_is_reused_without_starting_the_unspawnable_worker() {
+        let directory = root("cache-hit");
+        let plan = plan(&directory, "this-program-does-not-exist-9f2a");
+        let cache = cache_path(&plan, &pinned_digest()).expect("pinned digests cache");
+        let mut image = image::GrayImage::new(8, 4);
+        image.put_pixel(3, 1, image::Luma([255]));
+        image.save(&cache).expect("seed the cache");
+
+        let cancel = AtomicBool::new(false);
+        let outcome = execute(&plan, &pinned_digest(), Duration::from_secs(5), &cancel).expect("cache hit");
+        assert!(outcome.cached, "the cache answered");
+        assert_eq!(outcome.coverage[1 * 8 + 3], 255);
+        assert!(!plan.reply_path.exists(), "no worker ran, so no reply was written");
+    }
+
+    #[test]
+    fn an_unpinned_checkpoint_is_never_cached_and_a_bad_cache_file_is_ignored() {
+        let directory = root("cache-miss");
+        let plan = plan(&directory, "this-program-does-not-exist-9f2a");
+        assert!(cache_path(&plan, "").is_none(), "no digest, no cache");
+        assert!(cache_path(&plan, &"0".repeat(64)).is_none(), "an all-zero digest is unpinned");
+        assert!(cache_path(&plan, "not-a-digest").is_none());
+
+        // A wrong-sized file at the cache name is not a hit: the runner falls
+        // through to the worker (which cannot start here) instead of trusting it.
+        let cache = cache_path(&plan, &pinned_digest()).expect("pinned digests cache");
+        image::GrayImage::new(4, 4).save(&cache).expect("seed a bad cache");
+        let cancel = AtomicBool::new(false);
+        let error = execute(&plan, &pinned_digest(), Duration::from_secs(5), &cancel).expect_err("the cache is not a hit");
+        assert!(error.contains("this-program-does-not-exist-9f2a"), "{error}");
+    }
+
+    #[test]
+    fn the_cache_name_separates_the_model_the_prompts_and_the_checkpoint() {
+        let directory = root("cache-name");
+        let plan = plan(&directory, "python.exe");
+        let one = cache_path(&plan, &pinned_digest()).expect("cache");
+        assert!(one.starts_with(&directory));
+        assert!(one.to_string_lossy().contains("sam2.1-tiny"));
+
+        let mut other_model = plan.clone();
+        other_model.model = "sam2.1-small".to_string();
+        assert_ne!(cache_path(&other_model, &pinned_digest()), Some(one.clone()), "a different model is a different mask");
+
+        let mut other_prompts = plan.clone();
+        other_prompts.request_json =
+            SegmentRequest::new(0, 8, 4, vec![Prompt::Point { x: 6.0, y: 1.0, positive: true, frame: 0 }], 480).expect("request").to_json().expect("json");
+        assert_ne!(cache_path(&other_prompts, &pinned_digest()), Some(one.clone()), "different prompts are a different mask");
+
+        assert_ne!(cache_path(&plan, &"cd".repeat(32)), Some(one), "a different checkpoint is a different mask");
     }
 }
