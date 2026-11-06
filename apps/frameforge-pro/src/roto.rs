@@ -809,7 +809,7 @@ fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
         Some(label) => panel.label(ui::hint(&format!("Backdrop: {label}"))),
         None => panel
             .label(ui::hint("No backdrop yet: load a frame or run a selection, and the prompts are then drawn over the picture instead of a blank rectangle.")),
-    }
+    };
     panel.label(ui::hint("The prompts are planned in Roto AI → Selection prompts. Planning starts nothing."));
 
     panel.label(ui::hint(&format!("{}x{} · {:.1}% foreground", w, h, app.roto.coverage_percent())));
