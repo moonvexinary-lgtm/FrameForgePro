@@ -89,8 +89,8 @@ and the comp/text path, not for all 307.
 
 | Area | What exists | What is missing |
 |---|---|---|
-| Media bin | Import generators/files (into the current bin), list, place, remove, nested bins with breadcrumb navigation, move-to-bin, tags in metadata with a filter, search over names/tags/metadata | drag/drop between bins, rename dialog, saved search bins, thumbnails, waveforms, relink UI, proxy generation |
-| Timeline | 2 video + 2 audio tracks, select, drag-move, trim, razor, delete, scrub, per-track target/source-patch and visibility/mute/solo/lock headers, placement on the patched tracks, ruler markers with add/rename/comment/prev/next/clear, move/trim snapping, insert/overwrite at the playhead | ripple/roll/slip/slide, marker drag, transition browser, speed/freeze/reverse, waveforms, thumbnails |
+| Media bin | Import generators/files (into the current bin), list, place, remove, nested bins with breadcrumb navigation, move-to-bin, tags in metadata with a filter, search over names/tags/metadata, thumbnails in the browser, audio waveforms on timeline clips (both made on background threads, cached and bounded) | drag/drop between bins, rename dialog, saved search bins, relink UI, proxy generation |
+| Timeline | 2 video + 2 audio tracks, select, drag-move, trim, razor, delete, scrub, per-track target/source-patch and visibility/mute/solo/lock headers, placement on the patched tracks, ruler markers with add/rename/comment/prev/next/clear, move/trim snapping, insert/overwrite at the playhead, audio envelopes | ripple/roll/slip/slide, marker drag, transition browser, speed/freeze/reverse, filmstrip thumbnails |
 | Effect stack | add/remove/toggle, typed params, scalar keyframes, comp layers, undo through the combined history | reorder, duplicate, reset, presets, full keyframe types (bool/color/choice), graph editor |
 | Color | FilmCraft video-effect stack on the selected clip | scopes, curves UI, wheels, before/after, LUT management |
 | Audio | faders, pan, mute, solo | meters, audio-effect inserts UI, automation lanes, per-clip volume |

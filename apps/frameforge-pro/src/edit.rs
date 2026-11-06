@@ -3,6 +3,8 @@
 //! playhead, real engine commands). Laid out by rect — this egui generation
 //! has no panel helpers.
 
+use std::collections::HashMap;
+
 use filmcraft_engine::Targeting;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_media::{Generator, MediaSource};
@@ -490,7 +492,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
 /// validation and defaults).
 fn add_generator(app: &mut App, command: &str) {
     match app.execute(command, serde_json::json!({"seconds": GENERATOR_SECONDS})) {
-        Ok(_) => app.status = "Media added".to_string(),
+        Ok(_) => {
+            // A new item can take an id an undo put back; drop previews keyed by id.
+            app.previews.clear();
+            app.status = "Media added".to_string();
+        }
         Err(e) => app.status = e,
     }
 }
@@ -526,6 +532,7 @@ fn add_tone(app: &mut App) {
     });
     match result {
         Ok(_) => {
+            app.previews.clear();
             app.status = "Media added".to_string();
         }
         Err(e) => app.status = e.to_string(),
@@ -538,7 +545,10 @@ fn add_file(app: &mut App, path: std::path::PathBuf) {
         params["bin"] = serde_json::json!(bin.0);
     }
     match app.execute("file.import", params) {
-        Ok(_) => app.status = "Imported".to_string(),
+        Ok(_) => {
+            app.previews.clear();
+            app.status = "Imported".to_string();
+        }
         Err(e) => app.status = e,
     }
 }
@@ -955,6 +965,36 @@ fn duration_text(seconds: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
+/// Draw an audio clip's envelope: the peak columns of the whole file, walked
+/// across the media span this clip shows (`source_in` for `duration * speed`
+/// seconds). Symmetric around the middle, faint enough that the clip name on
+/// top stays readable, and never outside the clip rect.
+fn draw_waveform(painter: &egui::Painter, rect: egui::Rect, peaks: &[f32], media_seconds: f64, source_in: Tick, duration: Tick, speed: f64) {
+    if peaks.is_empty() || media_seconds <= 0.0 || rect.width() < 4.0 || rect.height() < 8.0 {
+        return;
+    }
+    let span = (duration.seconds() * speed.abs()).max(0.0).min(media_seconds);
+    let from = source_in.seconds().clamp(0.0, media_seconds);
+    let to = (from + span).min(media_seconds);
+    if to <= from {
+        return;
+    }
+    let mid = rect.center().y;
+    let half = (rect.height() / 2.0 - 3.0).max(1.0);
+    let colour = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 140);
+    let step = 2.0_f32;
+    let mut x = rect.left() + 2.0;
+    while x < rect.right() - 2.0 {
+        let fraction = f64::from((x - rect.left()) / rect.width());
+        if let Some(index) = crate::previews::peak_index(fraction, from, to, media_seconds, peaks.len()) {
+            let amplitude = peaks[index].clamp(0.0, 1.0);
+            let height = (amplitude * half).max(0.5);
+            painter.line_segment([egui::pos2(x, mid - height), egui::pos2(x, mid + height)], egui::Stroke::new(1.0, colour));
+        }
+        x += step;
+    }
+}
+
 fn project_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     ui.painter().rect_filled(rect, 0.0, ui::BG_PANEL);
     ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui::LINE_DARK));
@@ -1161,6 +1201,9 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
         ));
     }
     let empty = rows.is_empty() && children.is_empty();
+    // Pictures are made for the rows on screen only; each one is requested once.
+    let listed: Vec<ItemId> = rows.iter().map(|row| row.0).collect();
+    app.request_previews(&listed);
     let mut chosen = None;
     let mut append = None;
     let mut remove = None;
@@ -1195,10 +1238,22 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
             if selected {
                 ui::selected_bar(ui.painter(), card);
             }
-            let icon = egui::Rect::from_min_size(card.min + egui::vec2(8.0, 7.0), egui::vec2(22.0, 22.0));
-            let fill = if video { ui::CLIP_VIDEO } else { ui::CLIP_AUDIO };
-            ui.painter().rect_filled(icon, 2.0, fill);
-            ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, kind, egui::FontId::proportional(10.0), ui::TEXT_HI);
+            let icon = egui::Rect::from_min_size(card.min + egui::vec2(8.0, 7.0), egui::vec2(32.0, 22.0));
+            let texture = if video { app.previews.thumbnail_texture(ui.ctx(), id) } else { None };
+            match texture {
+                Some(texture) => {
+                    let size = egui::vec2(texture.size()[0] as f32, texture.size()[1] as f32);
+                    let scale = (icon.width() / size.x.max(1.0)).min(icon.height() / size.y.max(1.0));
+                    let draw = egui::Rect::from_center_size(icon.center(), size * scale);
+                    ui.painter().image(texture.id(), draw, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                    ui.painter().rect_stroke(icon, 2.0, egui::Stroke::new(1.0, ui::LINE_DARK), egui::StrokeKind::Inside);
+                }
+                None => {
+                    let fill = if video { ui::CLIP_VIDEO } else { ui::CLIP_AUDIO };
+                    ui.painter().rect_filled(icon, 2.0, fill);
+                    ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, kind, egui::FontId::proportional(10.0), ui::TEXT_HI);
+                }
+            }
             let text_at = egui::pos2(icon.right() + 8.0, card.center().y);
             let clipped =
                 ui.painter_at(egui::Rect::from_min_max(egui::pos2(text_at.x, card.top() + 4.0), egui::pos2(card.right() - 54.0, card.bottom() - 4.0)));
@@ -1212,7 +1267,9 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
             ui.painter().text(egui::pos2(card.right() - 8.0, card.center().y), egui::Align2::RIGHT_CENTER, duration, egui::FontId::monospace(9.5), ui::TEXT_LO);
             let tags_text = if item_tags.is_empty() { String::new() } else { format!("\nTags: {}", item_tags.join(", ")) };
             let location_text = if location.is_empty() { String::new() } else { format!("\n{location}") };
-            let response = response.on_hover_text(format!("Click to select, double-click to append, right-click to remove{tags_text}{location_text}"));
+            let failure_text = app.previews.failure(id).map(|error| format!("\nPreview: {error}")).unwrap_or_default();
+            let response =
+                response.on_hover_text(format!("Click to select, double-click to append, right-click to remove{tags_text}{location_text}{failure_text}"));
             if response.double_clicked() {
                 append = Some(id);
             } else if response.secondary_clicked() {
@@ -1700,6 +1757,15 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         );
     });
 
+    // Envelopes are read from the bounded preview cache before the sequence is
+    // borrowed for drawing: one peak column list per audio item, cloned so the
+    // painter stays independent of the app.
+    let audio_items: Vec<ItemId> =
+        app.sequence().map(|seq| seq.audio_tracks.iter().flat_map(|track| track.items.iter().map(|item| item.item)).collect()).unwrap_or_default();
+    app.request_previews(&audio_items);
+    let waves: HashMap<ItemId, (Vec<f32>, f64)> =
+        audio_items.iter().filter_map(|id| app.previews.waveform(*id).map(|wave| (*id, (wave.peaks.clone(), wave.media_seconds)))).collect();
+
     let Some(s) = app.sequence() else {
         let mut body = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(rect.min + egui::vec2(0.0, TIMELINE_HEADER_H), rect.max)));
         body.label("No sequence");
@@ -1846,6 +1912,9 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             let selected = app.selection == Some(item.id);
             let fill = if item.name.to_lowercase().contains("title") { ui::CLIP_TITLE } else { ui::clip_color(is_video, selected) };
             painter.rect_filled(clip_rect, 3.0, fill);
+            if !is_video && let Some((peaks, media_seconds)) = waves.get(&item.item) {
+                draw_waveform(&painter, clip_rect, peaks, *media_seconds, item.source_in, item.duration, item.speed);
+            }
             painter.rect_stroke(clip_rect, 3.0, egui::Stroke::new(1.0, if selected { ui::ACCENT_HI } else { ui::LINE_DARK }), egui::StrokeKind::Inside);
             let label_painter = painter.with_clip_rect(clip_rect.shrink(3.0));
             label_painter.text(

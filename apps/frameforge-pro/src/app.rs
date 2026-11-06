@@ -9,13 +9,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use filmcraft_engine::{EditorState, Session};
-use filmcraft_project::{BinId, ClipId, ItemId, Project};
+use filmcraft_project::{BinId, ClipId, ItemId, ItemKind, Project};
+use filmcraft_render::SourceProvider;
 use filmcraft_time::{FrameRate, Tick, TimeRange};
 use frameforge_bridge::{Composition, FFPROJ_SCHEMA, FrameForgeProject, ProjectSources};
 
 use crate::audio::Player;
 use crate::export::ExportState;
 use crate::history::{CompositionStep, EditHistory, undo_top};
+use crate::previews::MediaPreviews;
 use crate::ui;
 
 /// The workspaces, in the order the design's tab strip uses. Editing, Effects,
@@ -144,6 +146,8 @@ pub struct App {
     /// The selected item's tags as typed, and which item the draft belongs to.
     pub media_tags_draft: String,
     pub media_tags_for: Option<ItemId>,
+    /// Thumbnails and audio waveforms, made on background threads and bounded.
+    pub previews: MediaPreviews,
     /// The graphic clip selected in the Text & Graphics workspace.
     pub graphics_clip: Option<ClipId>,
     /// The layer index selected inside that graphic clip.
@@ -253,6 +257,7 @@ impl App {
             media_tag_filter: None,
             media_tags_draft: String::new(),
             media_tags_for: None,
+            previews: MediaPreviews::new(),
             graphics_clip: None,
             graphics_layer: 0,
             text_draft: String::new(),
@@ -348,6 +353,40 @@ impl App {
             self.sources = ProjectSources::build_from(&self.session.project, &self.compositions).ok();
         }
         self.sources.clone()
+    }
+
+    /// Ask the preview workers for the pictures and envelopes a panel is about
+    /// to draw. Only the named items are read, only the previews the item can
+    /// have, and each one at most once; the answers arrive through
+    /// [`MediaPreviews::poll`] on a later frame.
+    pub fn request_previews(&mut self, items: &[ItemId]) {
+        let wanted: Vec<(ItemId, bool, bool)> = items
+            .iter()
+            .filter_map(|id| {
+                let item = self.session.project.items.get(id)?;
+                let ItemKind::Media(clip) = &item.kind else { return None };
+                let video = clip.info.video.is_some();
+                let audio = clip.info.has_audio();
+                self.previews.needs(*id, video, audio).then_some((*id, video, audio))
+            })
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let Some(sources) = self.built_sources() else { return };
+        for (id, video, audio) in wanted {
+            let duration = match self.session.project.items.get(&id).map(|item| &item.kind) {
+                Some(ItemKind::Media(clip)) => clip.info.duration,
+                _ => continue,
+            };
+            let Some(source) = sources.source(id) else { continue };
+            if video {
+                self.previews.request_thumbnail(id, Arc::clone(&source), duration);
+            }
+            if audio {
+                self.previews.request_waveform(id, source, duration);
+            }
+        }
     }
 
     pub fn new_project(&mut self) {
@@ -756,6 +795,13 @@ impl eframe::App for App {
         let close_requested = ui.ctx().input(|i| i.viewport().close_requested());
         if self.close_guard(close_requested, App::confirm_close) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+
+        // Thumbnails and waveforms are read on background threads; collect what
+        // finished and keep repainting while anything is still in flight.
+        self.previews.poll();
+        if self.previews.is_busy() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
 
         // Playback: the audio clock drives the playhead when a stream runs;
