@@ -312,8 +312,7 @@ impl RotoState {
             && let Some(rgba) = &self.frame_rgba
             && rgba.len() == (self.canvas_w * self.canvas_h * 4) as usize
         {
-            let pixels: Vec<egui::Color32> =
-                rgba.chunks(4).map(|pixel| egui::Color32::from_rgba_unmultiplied(pixel[0], pixel[1], pixel[2], 255)).collect();
+            let pixels: Vec<egui::Color32> = rgba.chunks(4).map(|pixel| egui::Color32::from_rgba_unmultiplied(pixel[0], pixel[1], pixel[2], 255)).collect();
             let image = egui::ColorImage::new([self.canvas_w as usize, self.canvas_h as usize], pixels);
             self.frame_texture = Some(context.load_texture("roto-frame", image, egui::TextureOptions::LINEAR));
         }
