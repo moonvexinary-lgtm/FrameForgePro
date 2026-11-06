@@ -948,6 +948,11 @@ impl eframe::App for App {
             match result {
                 Ok(outcome) => {
                     let (width, height) = (outcome.width, outcome.height);
+                    // Best effort: the frame is a backdrop for the prompts, and a
+                    // frame that will not load must not cost the mask.
+                    if let Some(frame) = &outcome.frame {
+                        let _ = self.roto.set_frame_image(frame);
+                    }
                     if self.roto.set_canvas(&outcome.coverage) {
                         self.status = if outcome.cached {
                             format!("Selection mask reused from the cache ({width}x{height})")

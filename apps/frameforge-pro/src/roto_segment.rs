@@ -38,6 +38,9 @@ pub struct SegmentOutcome {
     pub summary: String,
     /// True when the mask came from the cache and no worker ran.
     pub cached: bool,
+    /// The frame the request named, so the panel can show the mask over the
+    /// picture it was produced from.
+    pub frame: Option<std::path::PathBuf>,
 }
 
 /// A segmentation running on its own thread.
@@ -150,9 +153,13 @@ pub fn cache_path(plan: &SegmentPlan, weights_sha256: &str) -> Option<std::path:
     if weights_sha256.len() != 64 || weights_sha256.trim_matches('0').is_empty() || !weights_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
+    // The request digest is taken from the JSON itself rather than from the file
+    // name, so two different requests can never share a name even when the caller
+    // reuses one path.
+    let digest = SegmentRequest::from_json(&plan.request_json).ok()?.digest().ok()?;
     let workspace = plan.request_path.parent()?;
     let stem = plan.request_path.file_stem()?.to_str()?;
-    Some(workspace.join(format!("{stem}-{}-{}.mask.png", plan.model, &weights_sha256[..8])))
+    Some(workspace.join(format!("{stem}-{}-{}-{}.mask.png", plan.model, &digest[..8], &weights_sha256[..8])))
 }
 
 /// Keep the worker's mask under the cache name, atomically. A failure here is not
@@ -188,6 +195,7 @@ pub fn execute(plan: &SegmentPlan, weights_sha256: &str, timeout: Duration, canc
             height: expected.1,
             summary: format!("{}x{} · cached, no worker started", expected.0, expected.1),
             cached: true,
+            frame: request.image.as_deref().map(std::path::PathBuf::from),
         });
     }
 
@@ -249,7 +257,14 @@ pub fn execute(plan: &SegmentPlan, weights_sha256: &str, timeout: Duration, canc
     // Keep the worker's own bytes under a name that names the checkpoint. This
     // failing is not a failure of the run.
     store_cache(plan, weights_sha256, &reply.mask_path());
-    Ok(SegmentOutcome { coverage, width: expected.0, height: expected.1, summary: reply.summary(), cached: false })
+    Ok(SegmentOutcome {
+        coverage,
+        width: expected.0,
+        height: expected.1,
+        summary: reply.summary(),
+        cached: false,
+        frame: request.image.as_deref().map(std::path::PathBuf::from),
+    })
 }
 
 #[cfg(test)]
@@ -384,7 +399,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let outcome = execute(&plan, &pinned_digest(), Duration::from_secs(5), &cancel).expect("cache hit");
         assert!(outcome.cached, "the cache answered");
-        assert_eq!(outcome.coverage[1 * 8 + 3], 255);
+        assert_eq!(outcome.coverage[8 + 3], 255);
         assert!(!plan.reply_path.exists(), "no worker ran, so no reply was written");
     }
 

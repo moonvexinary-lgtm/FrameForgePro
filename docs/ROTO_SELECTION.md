@@ -166,6 +166,9 @@ Shipped in the workspace: the Brush / Add point / Remove point / Box tools on th
 mask canvas with visible, undoable prompts; the compatibility route and the
 no-load runtime scan in Roto AI; the speed/quality controls; and a *Plan
 selection* button that builds the dormant plan and prints the exact command line.
+A selection paints its mask over the frame it was produced from, and a frame can
+also be loaded by hand (*Load a frame…*), so a click prompt lands on the picture
+instead of a blank rectangle.
 
 Shipped as a script (written, never executed): `tools/segment_worker.py`, the
 SAM 2.1 CPU adapter over the protocol, with an EdgeTAM refusal and a

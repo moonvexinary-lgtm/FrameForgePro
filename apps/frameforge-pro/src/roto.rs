@@ -123,6 +123,11 @@ pub struct RotoState {
     pub prompt_tool: PromptTool,
     /// The prompts drawn for the frame-0 selection.
     pub prompts: SelectionSession,
+    /// The frame behind the mask, if the user loaded one (or a run exported it),
+    /// as RGBA at the canvas size.
+    frame_rgba: Option<Vec<u8>>,
+    frame_texture: Option<egui::TextureHandle>,
+    frame_label: Option<String>,
     rect_start: Option<(f32, f32)>,
     last_point: Option<(f32, f32)>,
 }
@@ -158,6 +163,9 @@ impl Default for RotoState {
             brush_rect: false,
             prompt_tool: PromptTool::Brush,
             prompts: SelectionSession::new(),
+            frame_rgba: None,
+            frame_texture: None,
+            frame_label: None,
             rect_start: None,
             last_point: None,
         }
@@ -261,6 +269,10 @@ impl RotoState {
         self.canvas_h = height;
         self.canvas_dirty = true;
         self.texture = None;
+        // The backdrop is RGBA at the old size; it cannot describe the new one.
+        self.frame_rgba = None;
+        self.frame_texture = None;
+        self.frame_label = None;
         self.rect_start = None;
         self.last_point = None;
     }
@@ -292,6 +304,20 @@ impl RotoState {
         self.canvas.copy_from_slice(coverage);
         self.canvas_dirty = true;
         true
+    }
+
+    /// The frame behind the mask as an egui texture, built once per load.
+    fn ensure_frame_texture(&mut self, context: &egui::Context) -> Option<&egui::TextureHandle> {
+        if self.frame_texture.is_none()
+            && let Some(rgba) = &self.frame_rgba
+            && rgba.len() == (self.canvas_w * self.canvas_h * 4) as usize
+        {
+            let pixels: Vec<egui::Color32> =
+                rgba.chunks_exact(4).map(|pixel| egui::Color32::from_rgba_unmultiplied(pixel[0], pixel[1], pixel[2], 255)).collect();
+            let image = egui::ColorImage::new([self.canvas_w as usize, self.canvas_h as usize], pixels);
+            self.frame_texture = Some(context.load_texture("roto-frame", image, egui::TextureOptions::LINEAR));
+        }
+        self.frame_texture.as_ref()
     }
 
     pub fn invert_canvas(&mut self) {
@@ -389,11 +415,52 @@ impl RotoState {
         image.save(path).map_err(|error| format!("{}: {error}", path.display()))
     }
 
-    /// The canvas as an RGBA texture: the painted area is white, the rest dark,
-    /// so the mask reads against the panel's background.
-    fn canvas_image(&mut self) -> egui::ColorImage {
-        let pixels: Vec<egui::Color32> = self.canvas.iter().map(|value| egui::Color32::from_rgb(*value, *value, *value)).collect();
+    /// The canvas as an RGBA overlay: painted pixels are warm with proportional
+    /// alpha, everything else is transparent, so the frame behind stays visible
+    /// and the mask still reads.
+    fn overlay_image(&mut self) -> egui::ColorImage {
+        let pixels: Vec<egui::Color32> = self
+            .canvas
+            .iter()
+            .map(|value| {
+                if *value == 0 {
+                    egui::Color32::TRANSPARENT
+                } else {
+                    let alpha = (40 + (*value as u32 * 200 / 255)) as u8;
+                    egui::Color32::from_rgba_unmultiplied(255, 90, 60, alpha)
+                }
+            })
+            .collect();
         egui::ColorImage::new([self.canvas_w as usize, self.canvas_h as usize], pixels)
+    }
+
+    /// Load a frame to paint against. It is resized to the canvas and kept for
+    /// the session only, like every other path here.
+    pub fn set_frame_image(&mut self, path: &Path) -> Result<(), String> {
+        if self.canvas_w == 0 || self.canvas_h == 0 {
+            return Err("the canvas has no size yet".to_string());
+        }
+        let image = image::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let source = image.to_rgba8();
+        let resized = if source.dimensions() == (self.canvas_w, self.canvas_h) {
+            source
+        } else {
+            image::imageops::resize(&source, self.canvas_w, self.canvas_h, image::imageops::FilterType::Triangle)
+        };
+        self.frame_rgba = Some(resized.into_raw());
+        self.frame_label = Some(path.display().to_string());
+        self.frame_texture = None;
+        Ok(())
+    }
+
+    pub fn frame_label(&self) -> Option<&str> {
+        self.frame_label.as_deref()
+    }
+
+    pub fn clear_frame_image(&mut self) {
+        self.frame_rgba = None;
+        self.frame_label = None;
+        self.frame_texture = None;
     }
 }
 
@@ -600,18 +667,25 @@ fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
         let response = response.on_hover_text("Drag to paint the initial mask");
 
         if app.roto.canvas_dirty || app.roto.texture.is_none() {
-            let image = app.roto.canvas_image();
+            let image = app.roto.overlay_image();
             match &mut app.roto.texture {
                 Some(texture) => texture.set(image, egui::TextureOptions::NEAREST),
                 None => app.roto.texture = Some(panel.ctx().load_texture("roto-mask", image, egui::TextureOptions::NEAREST)),
             }
             app.roto.canvas_dirty = false;
         }
-        if let Some(texture) = &app.roto.texture {
-            panel.painter().rect_filled(rect, 0.0, ui::BG_INSET);
-            panel.painter().image(texture.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-            panel.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, ui::LINE_LIGHT), egui::StrokeKind::Inside);
+        panel.painter().rect_filled(rect, 0.0, ui::BG_INSET);
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        if let Some(frame) = app.roto.ensure_frame_texture(panel.ctx()) {
+            // The frame the prompts are drawn against, so a click is a click on
+            // the picture rather than on a blank rectangle.
+            let id = frame.id();
+            panel.painter().image(id, rect, uv, egui::Color32::WHITE);
         }
+        if let Some(texture) = &app.roto.texture {
+            panel.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
+        }
+        panel.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, ui::LINE_LIGHT), egui::StrokeKind::Inside);
 
         // Pointer → canvas coordinates. The canvas is laid out top-left first,
         // exactly as the PNG is written.
@@ -719,7 +793,23 @@ fn mask_editor(app: &mut App, panel: &mut egui::Ui) {
             app.roto.prompts.set_mask_prompt(0);
             app.status = "The painted mask is a mask prompt; save it as a PNG before planning the selection".to_string();
         }
+        if ui.small_button("Load a frame…").clicked()
+            && let Some(path) = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"]).pick_file()
+        {
+            match app.roto.set_frame_image(&path) {
+                Ok(()) => app.status = format!("Backdrop set from {}", path.display()),
+                Err(error) => app.roto.job_error = Some(error),
+            }
+        }
+        if app.roto.frame_label().is_some() && ui.small_button("Clear backdrop").clicked() {
+            app.roto.clear_frame_image();
+        }
     });
+    match app.roto.frame_label() {
+        Some(label) => panel.label(ui::hint(&format!("Backdrop: {label}"))),
+        None => panel
+            .label(ui::hint("No backdrop yet: load a frame or run a selection, and the prompts are then drawn over the picture instead of a blank rectangle.")),
+    }
     panel.label(ui::hint("The prompts are planned in Roto AI → Selection prompts. Planning starts nothing."));
 
     panel.label(ui::hint(&format!("{}x{} · {:.1}% foreground", w, h, app.roto.coverage_percent())));
