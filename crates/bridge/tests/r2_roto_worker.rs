@@ -48,15 +48,32 @@ fn spawn_fixture(name: &str) -> XmemWorker {
 }
 
 /// Spawn a fixture and complete its `hello`/`ready` handshake while holding the
-/// spawn lock, so a slow start is never mistaken for a protocol timeout.
+/// spawn lock, so a slow start is never mistaken for a protocol timeout. One
+/// start is retried: a single straggling PowerShell interpreter on a loaded
+/// runner is not a protocol failure, and the deadline still bounds a broken one.
 fn spawn_ready(name: &str) -> (XmemWorker, WorkerInfo) {
     let guard = SPAWN_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
-    let mut worker = spawn_fixture(name);
-    let info = worker.handshake_timeout(READY_DEADLINE).expect("ready handshake");
+    let (worker, info) = ready_or_retry(name).expect("ready handshake");
     assert_eq!(info.protocol, WORKER_PROTOCOL, "the fixture speaks this build's protocol");
     assert!(!info.backend.is_empty(), "a ready worker names its backend");
     drop(guard);
     (worker, info)
+}
+
+/// A fixture start and handshake, retried once after a kill if the deadline is
+/// missed (see [`spawn_ready`]).
+fn ready_or_retry(name: &str) -> Result<(XmemWorker, WorkerInfo), WorkerError> {
+    let mut worker = spawn_fixture(name);
+    match worker.handshake_timeout(READY_DEADLINE) {
+        Ok(info) => return Ok((worker, info)),
+        Err(error) => {
+            eprintln!("the first fixture handshake missed the deadline ({error}); retrying once");
+            let _ = worker.kill();
+        }
+    }
+    let mut worker = spawn_fixture(name);
+    let info = worker.handshake_timeout(READY_DEADLINE)?;
+    Ok((worker, info))
 }
 
 fn spec(first_frame: i64, last_frame: i64) -> RotoJobSpec {
