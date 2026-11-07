@@ -3,6 +3,7 @@
 //! and a saved-file report. Only formats with built-in encoders are offered;
 //! hardware-only formats are not faked.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -73,11 +74,58 @@ fn apply_preset(state: &mut ExportState, index: usize) -> bool {
     true
 }
 
+fn range_label(choice: ExportRange) -> &'static str {
+    match choice {
+        ExportRange::EntireSequence => "whole sequence",
+        ExportRange::InOut => "In/Out",
+    }
+}
+
+/// Turn the current settings into a queued job. `None` means the path is empty
+/// or the format index is stale; the caller reports that to the user.
+fn job_from(state: &ExportState, duration: Tick) -> Option<QueuedExport> {
+    let (format, label, extension) = FORMATS.get(state.format_index)?;
+    let path = output_path(&state.path_text, extension)?;
+    Some(QueuedExport {
+        label: format!("{label} · {}", range_label(state.range)),
+        path,
+        format: *format,
+        range: range_setting(state.range, duration),
+        include_audio: state.include_audio,
+        bitrate_kbps: if state.bitrate_kbps == 0 { 20_000 } else { state.bitrate_kbps },
+    })
+}
+
+/// Add a job behind the running one. The same output path twice in the queue is
+/// a mistake (the second would silently overwrite the first), so it is refused.
+fn enqueue(state: &mut ExportState, job: QueuedExport) -> Result<(), String> {
+    let wanted = Path::new(&job.path);
+    let running_same = state.running.as_ref().is_some_and(|running| running.path.as_path() == wanted);
+    if running_same || state.queue.iter().any(|queued| Path::new(&queued.path) == wanted) {
+        return Err(format!("{} is already in the export queue", job.path));
+    }
+    state.queue.push_back(job);
+    Ok(())
+}
+
 pub struct RunningExport {
     pub progress: Arc<Progress>,
     pub done: Arc<Mutex<Option<Result<String, String>>>>,
     /// The final path, so a cancelled render can remove its partial file.
     pub path: PathBuf,
+    /// What this job is, for the progress line and the queue list.
+    pub label: String,
+}
+
+/// One export waiting behind the foreground job.
+#[derive(Clone)]
+pub struct QueuedExport {
+    pub label: String,
+    pub path: String,
+    pub format: Format,
+    pub range: Option<TimeRange>,
+    pub include_audio: bool,
+    pub bitrate_kbps: u32,
 }
 
 #[derive(Default)]
@@ -92,8 +140,20 @@ pub struct ExportState {
     pub path: Option<PathBuf>,
     pub path_text: String,
     pub running: Option<RunningExport>,
+    /// Jobs waiting behind the running one, oldest first.
+    pub queue: VecDeque<QueuedExport>,
+    /// One line per finished queued job (newest last, capped at five).
+    pub finished: Vec<String>,
     pub result: Option<String>,
     pub error: Option<String>,
+}
+
+impl ExportState {
+    /// True while a render is running or jobs are waiting: the frame loop keeps
+    /// repainting and `poll` keeps the queue moving.
+    pub fn is_busy(&self) -> bool {
+        self.running.is_some() || !self.queue.is_empty()
+    }
 }
 
 /// Resolve the typed output path: trim it, add the selected format's
@@ -215,26 +275,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
             });
 
             crate::ui::big_gap(ui);
-            let can_export = !app.export.path_text.is_empty() && app.export.running.is_none() && app.sequence_id().is_some();
+            let can_export = !app.export.path_text.trim().is_empty() && app.sequence_id().is_some();
             if can_export {
-                if crate::ui::accent_button(ui, "Start Export").clicked() {
+                if crate::ui::accent_button(ui, "Start Export").on_hover_text("Runs now, or queues behind the export in progress").clicked() {
                     start(app);
                 }
             } else {
                 ui.add_enabled(false, egui::Button::new(egui::RichText::new("Start Export").size(12.0)).min_size(egui::vec2(ui.available_width(), 24.0)));
             }
 
-            // Poll the running export (draw first, then take the finished result).
-            let mut finished = None;
-            let mut finished_path = None;
-            let mut cancel_clicked = false;
+            // `poll` (called from the frame loop) owns the state transitions;
+            // this panel only draws the current job and the waiting list.
             if let Some(running) = &app.export.running {
                 crate::ui::section(ui, "RENDER");
+                ui.label(crate::ui::hint(&running.label));
                 let fraction = running.progress.fraction();
                 let (track, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
                 ui.painter().rect_filled(track, 2.0, crate::ui::BG_INSET);
                 let filled = egui::Rect::from_min_size(track.min, egui::vec2(track.width() * fraction, track.height()));
                 ui.painter().rect_filled(filled, 2.0, crate::ui::ACCENT);
+                let mut cancel_clicked = false;
                 ui.horizontal(|ui| {
                     ui.label(crate::ui::hint(&format!("Rendering… {:.0}%", fraction * 100.0)));
                     if running.progress.cancel.load(Ordering::Relaxed) {
@@ -244,37 +304,37 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
                         cancel_clicked = true;
                     }
                 });
-                ui.ctx().request_repaint();
-                finished_path = Some(running.path.clone());
-                finished = running.done.lock().unwrap_or_else(|e| e.into_inner()).take();
-            }
-            if cancel_clicked {
-                app.status = "Cancelling export…".to_string();
-            }
-            if let Some(result) = finished {
-                match result {
-                    Ok(report) => {
-                        app.export.result = Some(report);
-                        app.export.error = None;
-                        app.status = "Export finished".to_string();
-                    }
-                    Err(e) if e == CANCELLED_BY_USER => {
-                        // FilmCraft writes straight to the target; a cancelled render
-                        // leaves a truncated file, so remove it (overwrite was already
-                        // confirmed before the render started).
-                        if let Some(path) = &finished_path {
-                            let _ = std::fs::remove_file(path);
-                        }
-                        app.export.result = None;
-                        app.export.error = None;
-                        app.status = "Export cancelled; the partial file was removed".to_string();
-                    }
-                    Err(e) => {
-                        app.export.error = Some(e);
-                        app.status = "Export failed".to_string();
-                    }
+                if cancel_clicked {
+                    app.status = "Cancelling export…".to_string();
                 }
-                app.export.running = None;
+                ui.ctx().request_repaint();
+            }
+
+            crate::ui::section(ui, "QUEUE");
+            if app.export.queue.is_empty() && app.export.finished.is_empty() {
+                ui.label(crate::ui::hint("Empty. Start Export runs at once, or queues behind the current job."));
+            } else {
+                let mut remove = None;
+                for (index, job) in app.export.queue.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✕").on_hover_text("Remove this job from the queue").clicked() {
+                            remove = Some(index);
+                        }
+                        ui.label(egui::RichText::new(&job.label).size(10.5).color(crate::ui::TEXT_MID));
+                        ui.label(crate::ui::hint(&job.path));
+                    });
+                }
+                if let Some(index) = remove {
+                    app.export.queue.remove(index);
+                    app.status = "Removed a queued export".to_string();
+                }
+                if !app.export.queue.is_empty() && ui.button("Clear Queue").clicked() {
+                    app.export.queue.clear();
+                    app.status = "Export queue cleared".to_string();
+                }
+                for line in &app.export.finished {
+                    ui.label(egui::RichText::new(line).size(10.0).color(crate::ui::TEXT_LO));
+                }
             }
 
             if let Some(result) = &app.export.result {
@@ -292,29 +352,53 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     });
 }
 
+/// Queue the current settings. If nothing is running this starts at once; the
+/// path is resolved and confirmed for overwrite here, at the click, because a
+/// background queue must never open a dialog.
 fn start(app: &mut App) {
-    let Some(seq) = app.sequence_id() else { return };
-    let Some(entry) = FORMATS.get(app.export.format_index) else { return };
-    let extension = entry.2;
-    let format = entry.0;
-    let Some(path) = output_path(&app.export.path_text, extension) else {
+    if app.sequence_id().is_none() {
+        return;
+    }
+    let duration = app.sequence().map(|seq| seq.duration()).unwrap_or_default();
+    let Some(job) = job_from(&app.export, duration) else {
         app.status = "Choose an output file first".to_string();
         return;
     };
-    app.export.path_text = path.clone();
-    if Path::new(path.as_str()).exists() && !confirm_overwrite(&path) {
+    app.export.path_text = job.path.clone();
+    if Path::new(&job.path).exists() && !confirm_overwrite(&job.path) {
         app.status = "Export cancelled: the existing file was kept".to_string();
         return;
     }
+    let path = job.path.clone();
+    if let Err(e) = enqueue(&mut app.export, job) {
+        app.status = e;
+        return;
+    }
+    if app.export.running.is_some() {
+        app.status = format!("Added to the queue: {path}");
+    }
+    begin_next(app);
+}
 
+/// Start the oldest queued job if no render is running. Called from the frame
+/// loop, so the queue advances even while another workspace is open.
+fn begin_next(app: &mut App) {
+    if app.export.running.is_some() {
+        return;
+    }
+    let Some(job) = app.export.queue.pop_front() else { return };
+    let Some(seq) = app.sequence_id() else {
+        app.export.queue.clear();
+        app.status = "Export queue cleared: there is no sequence".to_string();
+        return;
+    };
     let doc: FrameForgeProject = app.document();
-    let range = range_setting(app.export.range, app.sequence().map(|seq| seq.duration()).unwrap_or_default());
     let settings = ExportSettings {
-        format,
-        path: path.clone(),
-        range,
-        include_audio: app.export.include_audio,
-        bitrate_kbps: if app.export.bitrate_kbps == 0 { 20_000 } else { app.export.bitrate_kbps },
+        format: job.format,
+        path: job.path.clone(),
+        range: job.range,
+        include_audio: job.include_audio,
+        bitrate_kbps: job.bitrate_kbps,
         ..ExportSettings::default()
     };
     let progress = Arc::<Progress>::default();
@@ -332,19 +416,60 @@ fn start(app: &mut App) {
         *worker_done.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
     });
 
-    let running_path = PathBuf::from(path.clone());
-    app.export.running = Some(RunningExport { progress, done, path: running_path });
+    app.export.running = Some(RunningExport { progress, done, path: PathBuf::from(&job.path), label: job.label.clone() });
     app.export.result = None;
     app.export.error = None;
-    app.status = format!("Exporting to {path}…");
+    app.status = format!("Exporting {} to {}…", job.label, job.path);
+}
+
+/// Take a finished render's result, then start the next queued job. Runs every
+/// frame from `App::ui_frame`, so switching workspaces does not stall the queue.
+pub fn poll(app: &mut App) {
+    let finished =
+        app.export.running.as_ref().and_then(|running| {
+            running.done.lock().unwrap_or_else(|e| e.into_inner()).take().map(|result| (result, running.path.clone(), running.label.clone()))
+        });
+    if let Some((result, path, label)) = finished {
+        match result {
+            Ok(report) => {
+                app.export.result = Some(report);
+                app.export.error = None;
+                app.export.finished.push(format!("✓ {label}"));
+                app.status = "Export finished".to_string();
+            }
+            Err(e) if e == CANCELLED_BY_USER => {
+                // FilmCraft writes straight to the target; a cancelled render
+                // leaves a truncated file, so remove it (overwrite was already
+                // confirmed before the render started).
+                let _ = std::fs::remove_file(&path);
+                app.export.result = None;
+                app.export.error = None;
+                app.export.finished.push(format!("Cancelled: {label}"));
+                app.status = "Export cancelled; the partial file was removed".to_string();
+            }
+            Err(e) => {
+                app.export.finished.push(format!("Failed: {label}"));
+                app.export.error = Some(e);
+                app.status = "Export failed".to_string();
+            }
+        }
+        if app.export.finished.len() > 5 {
+            app.export.finished.remove(0);
+        }
+        app.export.running = None;
+    }
+    begin_next(app);
 }
 
 #[cfg(test)]
 mod tests {
-    use filmcraft_export::ExportError;
-    use filmcraft_time::Tick;
+    use filmcraft_export::{ExportError, Format};
+    use filmcraft_time::{Tick, TimeRange};
 
-    use super::{CANCELLED_BY_USER, ExportRange, ExportState, FORMATS, PRESETS, apply_preset, export_error_message, output_path, range_setting};
+    use super::{
+        CANCELLED_BY_USER, ExportRange, ExportState, FORMATS, PRESETS, QueuedExport, apply_preset, enqueue, export_error_message, job_from, output_path,
+        range_setting,
+    };
 
     #[test]
     fn output_path_adds_the_selected_extension_once() {
@@ -391,5 +516,59 @@ mod tests {
         assert_eq!(whole.end(), duration);
 
         assert_eq!(range_setting(ExportRange::InOut, duration), None, "In/Out is the engine's own resolution");
+    }
+
+    fn queue_job(path: &str) -> QueuedExport {
+        QueuedExport { label: "test job".to_string(), path: path.to_string(), format: Format::H264, range: None, include_audio: true, bitrate_kbps: 20_000 }
+    }
+
+    #[test]
+    fn a_job_takes_the_selected_format_extension_range_and_bitrate() {
+        let state = ExportState {
+            format_index: 0,
+            path_text: "C:\\out\\shot".to_string(),
+            range: ExportRange::EntireSequence,
+            bitrate_kbps: 8_000,
+            include_audio: false,
+            ..ExportState::default()
+        };
+
+        let job = job_from(&state, Tick(48_000)).expect("a usable path makes a job");
+
+        assert_eq!(job.path, "C:\\out\\shot.mp4");
+        assert_eq!(job.format, Format::H264);
+        assert_eq!(job.range, Some(TimeRange::new(Tick::ZERO, Tick(48_000))));
+        assert_eq!(job.bitrate_kbps, 8_000);
+        assert!(!job.include_audio);
+        assert!(job.label.contains("whole sequence"), "label: {}", job.label);
+    }
+
+    #[test]
+    fn an_in_out_job_defers_the_range_to_the_engine() {
+        let state = ExportState { format_index: 4, path_text: "C:\\out\\mix".to_string(), range: ExportRange::InOut, ..ExportState::default() };
+
+        let job = job_from(&state, Tick(48_000)).expect("a usable path makes a job");
+
+        assert_eq!(job.path, "C:\\out\\mix.wav");
+        assert_eq!(job.range, None, "the engine resolves In/Out (or the whole sequence when unmarked)");
+        assert!(job.label.contains("In/Out"), "label: {}", job.label);
+        assert_eq!(job.bitrate_kbps, 20_000, "the zero default becomes the encoder's 20 Mbps");
+    }
+
+    #[test]
+    fn the_queue_keeps_arrival_order_and_refuses_a_second_job_for_the_same_path() {
+        let mut state = ExportState::default();
+        assert!(!state.is_busy(), "an empty queue is idle");
+
+        assert!(enqueue(&mut state, queue_job("a.mp4")).is_ok());
+        assert!(enqueue(&mut state, queue_job("b.mp4")).is_ok());
+        assert!(state.is_busy(), "queued work keeps the frame loop running");
+        assert_eq!(state.queue.len(), 2);
+        assert_eq!(state.queue[0].path, "a.mp4", "first in, first out");
+        assert_eq!(state.queue[1].path, "b.mp4");
+
+        let error = enqueue(&mut state, queue_job("a.mp4")).expect_err("the same path is refused");
+        assert!(error.contains("already in the export queue"), "error: {error}");
+        assert_eq!(state.queue.len(), 2, "the refused job did not join the queue");
     }
 }

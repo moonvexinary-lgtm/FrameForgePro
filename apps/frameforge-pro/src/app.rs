@@ -813,6 +813,13 @@ impl App {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
 
+        // Exports render on a worker thread; the queue advances here so a job
+        // finishes and the next starts even while another workspace is open.
+        crate::export::poll(self);
+        if self.export.is_busy() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
         // Playback: the audio clock drives the playhead when a stream runs;
         // otherwise the wall clock does.
         if self.playing {
