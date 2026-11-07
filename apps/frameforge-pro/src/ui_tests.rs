@@ -1,10 +1,11 @@
 //! Headless UI interaction tests.
 //!
 //! These drive the application the way a person does: real `RawInput` events
-//! (key down, key up) into the same [`App::ui_frame`] a window calls, run by an
-//! `egui::Context` at a fixed size. Every assertion is made against the engine
-//! document or the editor state, never against pixels, so a restyled control
-//! does not break a test that is really about what the command did.
+//! (key presses, pointer clicks and drags) into the same [`App::ui_frame`] a
+//! window calls, run by an `egui::Context` at a fixed size. Every assertion is
+//! made against the engine document or the editor state, never against pixels,
+//! so a restyled control does not break a test that is really about what the
+//! command did.
 //!
 //! The harness is deliberately small: the UI is almost entirely custom-painted
 //! rectangles, so an accessibility-tree driver would be testing a tree that the
@@ -91,13 +92,34 @@ impl Harness {
         self.context.read_response(id).map(|response| response.rect)
     }
 
-    /// A whole click at the centre of a registered control: hover, press,
-    /// release. egui reports the click on the release frame.
-    fn click(&mut self, id: egui::Id) {
-        let pos = self.rect_of(id).unwrap_or_else(|| panic!("no widget registered for {id:?}")).center();
+    /// A whole click at an arbitrary point: hover, press, release. egui
+    /// reports the click on the release frame.
+    fn click_at(&mut self, pos: Pos2) {
         self.frame(vec![Event::PointerMoved(pos)]);
         self.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: self.held }]);
         self.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: self.held }]);
+    }
+
+    /// A whole click at the centre of a registered control: hover, press,
+    /// release.
+    fn click(&mut self, id: egui::Id) {
+        let pos = self.rect_of(id).unwrap_or_else(|| panic!("no widget registered for {id:?}")).center();
+        self.click_at(pos);
+    }
+
+    /// A drag: hover, press at `from`, move through each waypoint, release at
+    /// the last one. The timeline decides the gesture on the frame egui first
+    /// calls it a drag, which is the first waypoint past egui's 6 px click
+    /// tolerance — so a trim test keeps that waypoint inside the 8 px edge
+    /// band, exactly as a careful person would.
+    fn drag(&mut self, from: Pos2, path: &[Pos2]) {
+        let end = *path.last().expect("a drag needs at least one waypoint");
+        self.frame(vec![Event::PointerMoved(from)]);
+        self.frame(vec![Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: self.held }]);
+        for point in path {
+            self.frame(vec![Event::PointerMoved(*point)]);
+        }
+        self.frame(vec![Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: self.held }]);
     }
 }
 
@@ -220,4 +242,114 @@ fn clicking_the_a1_mute_button_is_one_undoable_track_edit() {
 
     h.press(Key::Z, command(false));
     assert!(!h.app.sequence().expect("sequence").audio_tracks[0].muted, "the header click is one undo step");
+}
+
+/// The fixture's one video clip: its row on the timeline (video tracks are
+/// drawn first) and the start and duration the engine document has for it.
+fn v1_clip(app: &App) -> (usize, Tick, Tick) {
+    let sequence = app.sequence().expect("the fixture has a sequence");
+    let (row, item) = sequence
+        .video_tracks
+        .iter()
+        .enumerate()
+        .find_map(|(row, track)| track.items.first().map(|item| (row, item)))
+        .expect("the fixture placed one video clip");
+    (row, item.start, item.duration)
+}
+
+/// The fixture's V1 clip as the engine document has it: start and duration.
+fn v1_span(app: &App) -> (Tick, Tick) {
+    let (_, start, duration) = v1_clip(app);
+    (start, duration)
+}
+
+/// Lay the timeline out at a known zoom and return the body rect and the V1
+/// clip's painted rect, both in screen points. `zoom` is set directly and one
+/// frame is rendered, so the rects egui stores belong to that layout; the clip
+/// rect comes from the same function the draw loop uses, so a scripted drag
+/// grabs exactly what a person sees.
+fn timeline_at(h: &mut Harness, zoom: f32) -> (Rect, Rect) {
+    h.app.zoom = zoom;
+    h.frame(Vec::new());
+    let body = h.rect_of(egui::Id::new("ff-timeline-body")).expect("the timeline body registers `ff-timeline-body`");
+    let (row, start, duration) = v1_clip(&h.app);
+    (body, edit::timeline_clip_rect(body, row, start, duration, zoom))
+}
+
+#[test]
+fn clicking_the_ruler_puts_the_playhead_where_the_pointer_is() {
+    let (mut h, _) = seeded();
+    let (body, _) = timeline_at(&mut h, 40.0);
+
+    // Two seconds in at 40 px/s, inside the ruler strip above every clip row.
+    h.click_at(Pos2::new(body.left() + 2.0 * 40.0, body.top() + edit::RULER_H / 2.0));
+
+    assert!((h.app.playhead.seconds() - 2.0).abs() < 0.01, "the ruler click scrubbed to {}s", h.app.playhead.seconds());
+    assert!(h.app.selection.is_none(), "scrubbing empty space clears the clip selection");
+}
+
+#[test]
+fn dragging_a_clip_moves_it_and_ctrl_z_undoes_the_move() {
+    let (mut h, _) = seeded();
+    let (_, clip) = timeline_at(&mut h, 40.0);
+    let (start_before, duration_before) = v1_span(&h.app);
+    assert_eq!(start_before, Tick::ZERO);
+
+    // Press in the middle of the clip, then move 70 px right. egui calls it a
+    // drag on the first waypoint past its 6 px click tolerance and the timeline
+    // measures from there, so the second waypoint is the 60 px (1.5 s at
+    // 40 px/s) that count.
+    let grab = clip.center();
+    h.drag(grab, &[grab + Vec2::new(10.0, 0.0), grab + Vec2::new(70.0, 0.0)]);
+
+    let (start, duration) = v1_span(&h.app);
+    assert!((start.seconds() - 1.5).abs() < 0.02, "V1 moved by the dragged distance: {}s", start.seconds());
+    assert_eq!(duration, duration_before, "a move keeps the clip's length");
+    assert_eq!(h.app.status, "Moved clip");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(v1_span(&h.app).0, Tick::ZERO, "the drag is one undo step");
+}
+
+#[test]
+fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
+    let (mut h, _) = seeded();
+    let (_, clip) = timeline_at(&mut h, 40.0);
+    let (_, duration_before) = v1_span(&h.app);
+    let y = clip.center().y;
+
+    // Press inside the 8 px edge band, and keep the drag-start waypoint inside
+    // it too: the timeline reads the gesture from that first waypoint, so a
+    // waypoint that escaped the band would become a move instead of a trim.
+    let press = Pos2::new(clip.right() - 1.0, y);
+    let grab = Pos2::new(clip.right() - 7.9, y);
+    let end = Pos2::new(clip.right() - 47.9, y);
+    h.drag(press, &[grab, end]);
+
+    let (start, duration) = v1_span(&h.app);
+    assert_eq!(start, Tick::ZERO, "trimming the out edge leaves the start alone");
+    assert!((duration.seconds() - 9.0).abs() < 0.02, "the tail lost 1 s: {}s", duration.seconds());
+    assert_eq!(h.app.status, "Trimmed out edge");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(v1_span(&h.app).1, duration_before, "the trim is one undo step");
+}
+
+#[test]
+fn dragging_the_in_edge_trims_the_head_and_leaves_the_tail_in_place() {
+    let (mut h, _) = seeded();
+    let (_, clip) = timeline_at(&mut h, 40.0);
+    let (start_before, duration_before) = v1_span(&h.app);
+    let y = clip.center().y;
+
+    let press = Pos2::new(clip.left() + 1.0, y);
+    let grab = Pos2::new(clip.left() + 7.9, y);
+    let end = Pos2::new(clip.left() + 27.9, y);
+    h.drag(press, &[grab, end]);
+
+    let (start, duration) = v1_span(&h.app);
+    assert!((start.seconds() - 0.5).abs() < 0.02, "the head moved in by 0.5 s: {}s", start.seconds());
+    assert!((duration.seconds() - 9.5).abs() < 0.02, "the clip is 0.5 s shorter: {}s", duration.seconds());
+    assert_eq!(start + duration, start_before + duration_before, "a regular trim moves the head, not the tail");
+    assert_eq!(h.app.status, "Trimmed in edge");
 }

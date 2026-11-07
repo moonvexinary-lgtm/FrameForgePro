@@ -17,7 +17,7 @@ use crate::pixels;
 use crate::ui;
 
 const ROW_H: f32 = 34.0;
-const RULER_H: f32 = 18.0;
+pub(crate) const RULER_H: f32 = 18.0;
 const TIMELINE_HEADER_H: f32 = 50.0;
 const GENERATOR_SECONDS: f64 = 10.0;
 /// The fixed track-header column: target, source-patch, visibility/mute/solo,
@@ -1780,7 +1780,12 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let desired = egui::vec2(width, RULER_H + rows as f32 * ROW_H);
     let (alloc, response) = {
         let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("timeline-body"));
-        body_ui.allocate_exact_size(desired, egui::Sense::click_and_drag())
+        // Allocate the scroll extent, then register the same rect under a
+        // stable id with the drag sense. Tests need to know where the timeline
+        // body is, and egui's auto ids are not addressable from outside.
+        let (alloc, _) = body_ui.allocate_exact_size(desired, egui::Sense::hover());
+        let response = body_ui.interact(alloc, egui::Id::new("ff-timeline-body"), egui::Sense::click_and_drag());
+        (alloc, response)
     };
     let painter = ui.painter_at(alloc);
     let header_painter = ui.painter_at(strip);
@@ -1908,7 +1913,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             ui::TEXT_MID,
         );
         for item in &track.items {
-            let clip_rect = egui::Rect::from_min_max(egui::pos2(to_x(item.start), y + 3.0), egui::pos2(to_x(item.start + item.duration), y + ROW_H - 3.0));
+            let clip_rect = timeline_clip_rect(alloc, row, item.start, item.duration, zoom);
             let selected = app.selection == Some(item.id);
             let fill = if item.name.to_lowercase().contains("title") { ui::CLIP_TITLE } else { ui::clip_color(is_video, selected) };
             painter.rect_filled(clip_rect, 3.0, fill);
@@ -2085,6 +2090,15 @@ fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
         TimelineDrag::Move { clip, .. } => Some(*clip),
         TimelineDrag::Trim { clip, .. } => Some(*clip),
     }
+}
+
+/// The painted rectangle of a clip on one timeline row. The draw loop and the
+/// UI tests both call this, so a scripted drag grabs exactly the rectangle a
+/// person sees instead of a second, drifting copy of the geometry.
+pub(crate) fn timeline_clip_rect(alloc: egui::Rect, row: usize, start: Tick, duration: Tick, zoom: f32) -> egui::Rect {
+    let y = alloc.top() + RULER_H + row as f32 * ROW_H;
+    let x = |t: Tick| alloc.left() + t.seconds() as f32 * zoom;
+    egui::Rect::from_min_max(egui::pos2(x(start), y + 3.0), egui::pos2(x(start + duration), y + ROW_H - 3.0))
 }
 
 /// The Source monitor: a real `render_item` preview of the open media at the
