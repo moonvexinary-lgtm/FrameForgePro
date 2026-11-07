@@ -750,11 +750,21 @@ geometry.
   "Trimmed out edge", shortens the tail to 9 s and an undo restores 10 s; an
   in-edge drag reports "Trimmed in edge", moves the head to 0.5 s, shortens the
   clip to 9.5 s and leaves `start + duration` exactly where it was.
-- **Limits**: select and delete still have no scripted gesture; screenshot
-  regression is not automated. The mouse wheel, shift-click ranges and
-  multi-clip marquee are not covered.
+- **Select and delete** (follow-up, run `42406648700`):
+  `clicking_a_clip_selects_it_and_clicking_empty_space_deselects` clicks the V1
+  clip's centre and asserts the engine clip id in `app.selection`, then clicks
+  the same row past its right edge and asserts the selection cleared and the
+  playhead scrubbed. `delete_removes_the_selected_clip_and_ctrl_z_restores_it`
+  selects with a click, presses Delete and asserts `edit.clear` removed V1 and
+  its linked A1 ("Clip removed", selection empty), with Ctrl+Z restoring both.
+  No production change was needed: a raw `Ui::interact` click does not take
+  keyboard focus, so `egui_wants_keyboard_input` stays false and the Delete
+  shortcut still fires.
+- **Limits**: screenshot regression is not automated. The mouse wheel,
+  shift-click ranges and multi-clip marquee are not covered.
 - **CI**: run `42401469221` — fmt, clippy `-D warnings`, check, **83 tests**
-  (79 + the 4 pointer tests), release build and the binary self-test.
+  (79 + the 4 pointer tests), release build and the binary self-test. The
+  select/delete follow-up is run `42406648700`, **85 tests**.
 
 ## E1 - export presets and an explicit range (CI-verified, run 42391495128)
 
@@ -1079,7 +1089,7 @@ with a real, user-installed runtime.
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
-| U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, run 42401469221 |
+| U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
 | E1 | Export presets and range selection: four named presets that apply format/bitrate/audio together, and an explicit whole-sequence vs In/Out range choice | CI-verified, run 42391495128 |
 | E2 | Export queue: snapshot jobs behind the foreground render, driven from the frame loop, with duplicate-path refusal, per-row removal and a finished report | CI-verified, run 42395055258 |
 | R7 | Multi-model rotoscoping engine: `crates/roto` (selection, tracking backends with Cutie preferred and XMem legacy, temporal QC, matting, refinement, cache, scheduler, export), model catalogue/manager and the workspace panel | 🟡 Partial: everything deterministic is tested, no model is wired to a real runtime yet. See `ROTO_ENGINE.md` |
