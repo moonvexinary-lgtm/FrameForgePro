@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use filmcraft_export::{ExportError, ExportSettings, Format, Progress, export};
+use filmcraft_time::{Tick, TimeRange};
 use frameforge_bridge::{FrameForgeProject, ProjectSources};
 
 use crate::app::App;
@@ -22,6 +23,56 @@ const FORMATS: &[(Format, &str, &str)] = &[
     (Format::Wav, "Audio only (WAV)", "wav"),
 ];
 
+/// A named combination of format and quality settings applied in one click.
+/// After the user edits format, bitrate or audio by hand the row shows
+/// "Custom" again, so it never claims settings it is not using.
+struct Preset {
+    name: &'static str,
+    format: Format,
+    bitrate_kbps: u32,
+    include_audio: bool,
+}
+
+const PRESETS: &[Preset] = &[
+    Preset { name: "H.264 · Web 1080p (20 Mbps)", format: Format::H264, bitrate_kbps: 20_000, include_audio: true },
+    Preset { name: "H.264 · Small file (8 Mbps)", format: Format::H264, bitrate_kbps: 8_000, include_audio: true },
+    Preset { name: "ProRes · Mastering", format: Format::ProRes, bitrate_kbps: 20_000, include_audio: true },
+    Preset { name: "WAV · Audio only", format: Format::Wav, bitrate_kbps: 20_000, include_audio: true },
+];
+
+/// What the user asked to export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExportRange {
+    /// The whole sequence, whether or not In/Out marks exist.
+    #[default]
+    EntireSequence,
+    /// The sequence's In/Out marks. The engine resolves "no marks" to the whole
+    /// sequence, so this is never an empty export.
+    InOut,
+}
+
+/// The engine's `ExportSettings.range`: an explicit whole-sequence range, or
+/// `None` for "In/Out if set, else the whole sequence" (the engine's own
+/// documented default).
+fn range_setting(choice: ExportRange, duration: Tick) -> Option<TimeRange> {
+    match choice {
+        ExportRange::EntireSequence => Some(TimeRange::new(Tick::ZERO, duration)),
+        ExportRange::InOut => None,
+    }
+}
+
+/// Apply a preset's format, bitrate and audio choice. Returns false for an index
+/// that does not exist so a stale selection cannot half-apply.
+fn apply_preset(state: &mut ExportState, index: usize) -> bool {
+    let Some(preset) = PRESETS.get(index) else { return false };
+    let Some(format_index) = FORMATS.iter().position(|(format, _, _)| *format == preset.format) else { return false };
+    state.format_index = format_index;
+    state.bitrate_kbps = preset.bitrate_kbps;
+    state.include_audio = preset.include_audio;
+    state.preset_index = Some(index);
+    true
+}
+
 pub struct RunningExport {
     pub progress: Arc<Progress>,
     pub done: Arc<Mutex<Option<Result<String, String>>>>,
@@ -34,6 +85,10 @@ pub struct ExportState {
     pub format_index: usize,
     pub bitrate_kbps: u32,
     pub include_audio: bool,
+    /// The preset row shows this index; `None` means the settings were edited
+    /// by hand (or nothing has been applied yet).
+    pub preset_index: Option<usize>,
+    pub range: ExportRange,
     pub path: Option<PathBuf>,
     pub path_text: String,
     pub running: Option<RunningExport>,
@@ -94,21 +149,54 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
         ui.vertical(|ui| {
             ui.set_width(card_w);
 
+            crate::ui::section(ui, "PRESET");
+            let preset_label = app.export.preset_index.and_then(|index| PRESETS.get(index)).map(|preset| preset.name).unwrap_or("Custom");
+            let mut chosen = app.export.preset_index;
+            egui::ComboBox::from_id_salt("preset").selected_text(preset_label).show_ui(ui, |ui| {
+                ui.selectable_value(&mut chosen, None, "Custom");
+                for (index, preset) in PRESETS.iter().enumerate() {
+                    ui.selectable_value(&mut chosen, Some(index), preset.name);
+                }
+            });
+            if chosen != app.export.preset_index {
+                app.export.preset_index = chosen;
+                if let Some(index) = chosen {
+                    apply_preset(&mut app.export, index);
+                }
+            }
+
             crate::ui::section(ui, "FORMAT");
             let selected_label = FORMATS.get(app.export.format_index).map(|(_, label, _)| *label).unwrap_or("H.264 (MP4)");
+            let previous_format = app.export.format_index;
             egui::ComboBox::from_id_salt("format").selected_text(selected_label).show_ui(ui, |ui| {
                 for (index, (_, label, _)) in FORMATS.iter().enumerate() {
                     ui.selectable_value(&mut app.export.format_index, index, *label);
                 }
             });
+            if app.export.format_index != previous_format {
+                app.export.preset_index = None;
+            }
             ui.label(crate::ui::hint("Formats needing a hardware encoder (H.265, AV1) are not offered until one is registered."));
 
             crate::ui::section(ui, "VIDEO");
             ui.horizontal(|ui| {
                 ui.label(crate::ui::meta("Bitrate"));
-                ui.add(egui::DragValue::new(&mut app.export.bitrate_kbps).range(500..=100_000).suffix(" kbps"));
+                if ui.add(egui::DragValue::new(&mut app.export.bitrate_kbps).range(500..=100_000).suffix(" kbps")).changed() {
+                    app.export.preset_index = None;
+                }
             });
-            ui.checkbox(&mut app.export.include_audio, "Include audio");
+            if ui.checkbox(&mut app.export.include_audio, "Include audio").changed() {
+                app.export.preset_index = None;
+            }
+
+            crate::ui::section(ui, "RANGE");
+            let has_marks = app.sequence().is_some_and(|seq| seq.mark_in.is_some() || seq.mark_out.is_some());
+            if !has_marks && app.export.range == ExportRange::InOut {
+                app.export.range = ExportRange::EntireSequence;
+            }
+            ui.radio_value(&mut app.export.range, ExportRange::EntireSequence, "Entire sequence");
+            ui.add_enabled(has_marks, egui::RadioButton::new(app.export.range == ExportRange::InOut, "In / Out marks"))
+                .on_disabled_hover_text("Set an In and an Out on the timeline first");
 
             crate::ui::section(ui, "OUTPUT");
             ui.horizontal(|ui| {
@@ -220,10 +308,11 @@ fn start(app: &mut App) {
     }
 
     let doc: FrameForgeProject = app.document();
+    let range = range_setting(app.export.range, app.sequence().map(|seq| seq.duration()).unwrap_or_default());
     let settings = ExportSettings {
         format,
         path: path.clone(),
-        range: None,
+        range,
         include_audio: app.export.include_audio,
         bitrate_kbps: if app.export.bitrate_kbps == 0 { 20_000 } else { app.export.bitrate_kbps },
         ..ExportSettings::default()
@@ -253,8 +342,9 @@ fn start(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use filmcraft_export::ExportError;
+    use filmcraft_time::Tick;
 
-    use super::{CANCELLED_BY_USER, export_error_message, output_path};
+    use super::{CANCELLED_BY_USER, ExportRange, ExportState, FORMATS, PRESETS, apply_preset, export_error_message, output_path, range_setting};
 
     #[test]
     fn output_path_adds_the_selected_extension_once() {
@@ -268,5 +358,38 @@ mod tests {
     #[test]
     fn a_cancelled_export_is_reported_as_a_cancellation() {
         assert_eq!(export_error_message(ExportError::Cancelled), CANCELLED_BY_USER);
+    }
+
+    #[test]
+    fn every_preset_applies_an_offered_format_and_sets_all_three_fields() {
+        let mut state = ExportState::default();
+        for (index, preset) in PRESETS.iter().enumerate() {
+            assert!(apply_preset(&mut state, index), "preset {index} applies");
+            assert_eq!(FORMATS[state.format_index].0, preset.format, "preset {index} selects its own format");
+            assert_eq!(state.bitrate_kbps, preset.bitrate_kbps);
+            assert_eq!(state.include_audio, preset.include_audio);
+            assert_eq!(state.preset_index, Some(index));
+        }
+    }
+
+    #[test]
+    fn an_unknown_preset_is_refused_without_changing_the_settings() {
+        let mut state = ExportState { format_index: 2, bitrate_kbps: 12_000, preset_index: Some(1), ..ExportState::default() };
+
+        assert!(!apply_preset(&mut state, PRESETS.len()), "an index past the table is refused");
+
+        assert_eq!(state.format_index, 2);
+        assert_eq!(state.bitrate_kbps, 12_000);
+        assert_eq!(state.preset_index, Some(1));
+    }
+
+    #[test]
+    fn a_whole_sequence_range_is_explicit_and_in_out_defers_to_the_marks() {
+        let duration = Tick(48_000);
+        let whole = range_setting(ExportRange::EntireSequence, duration).expect("the whole sequence is an explicit range");
+        assert_eq!(whole.start, Tick::ZERO);
+        assert_eq!(whole.end(), duration);
+
+        assert_eq!(range_setting(ExportRange::InOut, duration), None, "In/Out is the engine's own resolution");
     }
 }
