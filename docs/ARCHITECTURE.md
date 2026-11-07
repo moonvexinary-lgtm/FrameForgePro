@@ -712,7 +712,35 @@ populate. The decision was to drive the real loop by hand, with no new dependenc
   header and ruler clicks) need a shared rect helper that reports where the
   timeline drew each control; until it exists those paths stay code-inspected.
 - **CI**: run `42340371967` — fmt, clippy `-D warnings`, check, **72 tests**
-  (69 + the 3 UI tests), release build and the binary self-test.
+  (69 + the 3 UI tests), release build and the binary self-test. A later
+  pointer test (run `42389027715`) adds the A1 mute click and reaches the
+  control through `Context::read_response`, so no second geometry helper is
+  needed.
+
+## E1 - export presets and an explicit range (CI-verified, run 42391495128)
+
+The Export workspace had one hard-wired settings set and always passed
+`range: None`, which the engine resolves as "In/Out if set, else the whole
+sequence". That is a good engine default but a poor UI: the user could not tell
+what would actually be rendered.
+
+- **Presets** (`export.rs`): `PRESETS` carries four named combinations — H.264
+  Web 1080p (20 Mbps), H.264 small file (8 Mbps), ProRes mastering and WAV audio
+  only. `apply_preset` writes format, bitrate and audio flag together and refuses
+  an index past the table without half-applying. Editing any of the three by
+  hand clears the selection, so the row reads "Custom" again.
+- **Range**: `ExportRange::{EntireSequence, InOut}`. The whole sequence becomes
+  an explicit `TimeRange::new(ZERO, duration)`; In/Out stays `None` and lets the
+  engine apply its documented In/Out-else-whole resolution, so cleared marks
+  never produce an empty file. The In/Out radio is enabled only when both marks
+  exist and falls back to the whole sequence when they are cleared.
+- **Tests**: every preset maps to an offered format and sets all three fields;
+  an unknown index changes nothing; the whole-sequence range spans
+  `[0, duration)` and In/Out defers to the engine.
+- **Limits**: still one foreground job; an export queue is the remaining part of
+  the parity row.
+- **CI**: run `42391495128` — fmt, clippy `-D warnings`, check, **76 tests**,
+  release build and the binary self-test.
 
 ## R1 - cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
@@ -976,6 +1004,7 @@ with a real, user-installed runtime.
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
+| E1 | Export presets and range selection: four named presets that apply format/bitrate/audio together, and an explicit whole-sequence vs In/Out range choice | CI-verified, run 42391495128 |
 | R7 | Multi-model rotoscoping engine: `crates/roto` (selection, tracking backends with Cutie preferred and XMem legacy, temporal QC, matting, refinement, cache, scheduler, export), model catalogue/manager and the workspace panel | 🟡 Partial: everything deterministic is tested, no model is wired to a real runtime yet. See `ROTO_ENGINE.md` |
 
 ## Dependency policy
