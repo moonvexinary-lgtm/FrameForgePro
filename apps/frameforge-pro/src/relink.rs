@@ -232,7 +232,7 @@ fn dialog_ui(dialog: &mut RelinkDialog, app: &mut App, ui: &mut egui::Ui) -> boo
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label(ui::hint(format!("{} file(s) still missing or offline", dialog.rows.len())));
+        ui.label(ui::hint(&format!("{} file(s) still missing or offline", dialog.rows.len())));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if chip(ui, "ff-relink-close", "Close", true) {
                 closed = true;
