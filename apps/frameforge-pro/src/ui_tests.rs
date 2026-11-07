@@ -11,7 +11,7 @@
 //! timeline and transport barely populate. What matters is that the real frame
 //! loop, the real key map and the real engine commands agree.
 
-use egui::{Event, Key, Modifiers, Pos2, RawInput, Rect, Vec2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_media::{Generator, MediaSource};
@@ -82,6 +82,22 @@ impl Harness {
             self.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
             self.held = Modifiers::NONE;
         }
+    }
+
+    /// The rect egui registered for a control on the last frame. Custom-painted
+    /// controls still register an id through `Ui::interact`, so their rect is
+    /// available without a second geometry helper.
+    fn rect_of(&self, id: egui::Id) -> Option<Rect> {
+        self.context.read_response(id).map(|response| response.rect)
+    }
+
+    /// A whole click at the centre of a registered control: hover, press,
+    /// release. egui reports the click on the release frame.
+    fn click(&mut self, id: egui::Id) {
+        let pos = self.rect_of(id).unwrap_or_else(|| panic!("no widget registered for {id:?}")).center();
+        self.frame(vec![Event::PointerMoved(pos)]);
+        self.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: self.held }]);
+        self.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: self.held }]);
     }
 }
 
@@ -186,4 +202,22 @@ fn m_adds_a_marker_and_shift_m_jumps_to_the_next_one() {
     h.press(Key::M, Modifiers::SHIFT);
     assert_eq!(h.app.sequence().map_or(0, |s| s.markers.len()), 1, "Shift+M jumps, it does not add");
     assert_eq!(h.app.playhead, marker, "Shift+M moved the playhead to the marker");
+}
+
+#[test]
+fn clicking_the_a1_mute_button_is_one_undoable_track_edit() {
+    let (mut h, _) = seeded();
+    let a1 = h.app.sequence().expect("the fixture has a sequence").audio_tracks[0].id;
+    assert!(!h.app.sequence().expect("sequence").audio_tracks[0].muted, "A1 starts unmuted");
+
+    // The track header paints its own squares but registers each one with
+    // `Ui::interact`, so egui knows the rect and the click goes through the
+    // same `ff-track-mute` id the editor uses.
+    h.click(egui::Id::new(("ff-track-mute", a1.0)));
+
+    assert!(h.app.sequence().expect("sequence").audio_tracks[0].muted, "the click ran timeline.setTrack");
+    assert_eq!(h.app.status, "Mute updated");
+
+    h.press(Key::Z, command(false));
+    assert!(!h.app.sequence().expect("sequence").audio_tracks[0].muted, "the header click is one undo step");
 }
