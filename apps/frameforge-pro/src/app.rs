@@ -789,6 +789,15 @@ impl Default for App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.ui_frame(ui);
+    }
+}
+
+impl App {
+    /// One real frame of the application, with no `eframe::Frame`: the trait
+    /// method above is a one-line wrapper, so tests can drive this exact path
+    /// through `egui::Context::run_ui`.
+    pub(crate) fn ui_frame(&mut self, ui: &mut egui::Ui) {
         // A close button or Alt+F4 must not discard a dirty document. eframe
         // delivers the request on this frame; CancelClose keeps the window
         // open, and saving first is offered in the dialog.
