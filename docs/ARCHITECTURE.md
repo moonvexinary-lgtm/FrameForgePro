@@ -676,7 +676,45 @@ embedded as a web view, so every control stays wired to the real engines.
   build, binary self-test including `roto-bench 4`; artifact
   `frameforge-pro-windows-dev` is 25,842,805 bytes.
 
-## R1 — cached roto masks in the one render path (✔ CI-verified, run 40056112214)
+## U2 - UI interaction tests through the real frame loop (CI-verified, run 42340371967)
+
+Ten parity rows carried the same note: "UI automation is a separate gap". The UI is
+almost entirely custom-painted rectangles, so an accessibility-tree driver
+(`egui_kittest`) would mostly assert on a tree the timeline and transport never
+populate. The decision was to drive the real loop by hand, with no new dependency.
+
+- **Seam** (`app.rs`): the body of `eframe::App::ui` moved to
+  `App::ui_frame(&mut self, ui: &mut egui::Ui)`; the trait method is a one-line
+  delegate. Tests call the same function with no `eframe::Frame`, so the tested
+  path and the shipped path cannot drift.
+- **Harness** (`ui_tests.rs`): `egui::Context::default()` calling `run_ui` at a
+  fixed 1600x900, with a `RawInput` whose `viewports` map holds
+  `ViewportId::ROOT` and whose `focused` flag is set. One frame per event: a key
+  press is the modifier change plus key-down, then key-up, then the modifiers
+  released.
+- **What egui 0.36 actually takes**: `RawInput` has no `modifiers` field; modifier
+  state reaches `InputState` only through `Event::ModifiersChanged`. The first
+  harness draft failed E0560 in run `42335553468`.
+- **Headless output**: `TexturesDelta` debug-asserts on drop when a backend has not
+  applied its deltas, and the harness drops `run_ui`'s `FullOutput`, so it calls
+  `textures_delta.clear()` first (that was the failure in run `42338768862`).
+- **Fixture**: `App::new()` + `file.newSequence` + an `edit_project` that adds a
+  `Generator::BarsAndTone` item + `edit::place_at_playhead`. `BarsAndTone` has both
+  streams, so V1 and A1 each get a clip; `Generator::Tone` is audio-only and made
+  the first fixture place nothing on V1 (run `42336661855`).
+- **Covered now**: Ctrl+Z / Ctrl+Shift+Z undo and redo the placement (and the media
+  item survives, proving the history reached the placement, not the item edit);
+  Ctrl+K splits V1 and A1 at the playhead and reports "Add Edit (all tracks)"; M
+  adds one marker on the snapped playhead and Shift+M jumps to it without adding.
+- **Assertions**: engine document and editor state only, never pixels, so a
+  restyle cannot break a test that is really about what the command did.
+- **Limits**: keyboard paths only. Pointer gestures (clip drag and trim, track
+  header and ruler clicks) need a shared rect helper that reports where the
+  timeline drew each control; until it exists those paths stay code-inspected.
+- **CI**: run `42340371967` — fmt, clippy `-D warnings`, check, **72 tests**
+  (69 + the 3 UI tests), release build and the binary self-test.
+
+## R1 - cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
 The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
 the clip's alpha, without any model, Python or weights.
@@ -937,6 +975,7 @@ with a real, user-installed runtime.
 | T12 | Marker CSV export with RFC 4180 quoting, exact ticks, padded start timecode and a byte-for-byte file test | CI-verified, run 40260600879 |
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
+| U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | R7 | Multi-model rotoscoping engine: `crates/roto` (selection, tracking backends with Cutie preferred and XMem legacy, temporal QC, matting, refinement, cache, scheduler, export), model catalogue/manager and the workspace panel | 🟡 Partial: everything deterministic is tested, no model is wired to a real runtime yet. See `ROTO_ENGINE.md` |
 
 ## Dependency policy
