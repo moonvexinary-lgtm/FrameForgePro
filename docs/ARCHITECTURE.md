@@ -307,10 +307,11 @@ not stop a render; closing the window also bypassed the M9 unsaved-changes guard
   `app::tests::close_guard_blocks_only_a_dirty_project_when_discard_is_denied`.
   At M12 the suite was 28 tests; R1 and R2 bring it to 36 (run `40059782293`), T1 adds one
   (37 in run `40063686209`), T2 adds one (38 in run `40128137965`), T3 adds two (40 in run
-  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two, T8 adds two, T9 adds one, T10 adds one, T11 adds one and T12 adds one, so the current suite is 54 (run `40260600879`).
+  `40133164791`), T4 adds one, T5 adds four, T6 adds one, T7 adds two, T8 adds two, T9 adds one, T10 adds one, T11 adds one and T12 adds one, so the suite was 54 at T12 (run `40260600879`); the media-bin, preview, UI-interaction and export slices bring it to 79 (E2, run `42395055258`).
 - **Limitations**: native dialogs and the viewport command are code-inspected,
-  not UI-automated; export remains one foreground job (no queue/presets); cancel
-  deletes the partial output rather than resuming.
+  not UI-automated. Presets and range selection arrived in E1 and the queue in
+  E2, so a second deliverable now waits behind the first instead of being
+  blocked; cancel still deletes the partial output rather than resuming.
 
 ## T1 — real track visibility, mute, solo and lock (✔ CI-verified, run 40063686209)
 
@@ -737,9 +738,41 @@ what would actually be rendered.
 - **Tests**: every preset maps to an offered format and sets all three fields;
   an unknown index changes nothing; the whole-sequence range spans
   `[0, duration)` and In/Out defers to the engine.
-- **Limits**: still one foreground job; an export queue is the remaining part of
-  the parity row.
+- **Limits**: one foreground job at a time; E2 adds the waiting queue behind
+  it.
 - **CI**: run `42391495128` — fmt, clippy `-D warnings`, check, **76 tests**,
+  release build and the binary self-test.
+
+## E2 - the export queue (CI-verified, run 42395055258)
+
+Before this slice Start Export was disabled while a render ran, so a second
+deliverable meant waiting and clicking again.
+
+- **Snapshot jobs** (`export.rs`): `job_from` turns the current settings into a
+  `QueuedExport` — label, resolved output path, format, resolved range, audio
+  flag and bitrate. The queue therefore holds snapshots: editing the panel after
+  queuing cannot mutate a job that is already waiting.
+- **Overwrite at the click**: `start` resolves the path and asks once, at the
+  moment of the click, then enqueues. The background queue never opens a dialog.
+  A file that appears between enqueue and start is still replaced without a
+  second prompt; that is the price of never blocking the frame loop on a
+  dialog.
+- **Duplicate paths**: `enqueue` refuses a second job targeting the same output
+  path, whether that path is running or waiting — otherwise the first result
+  would be silently overwritten.
+- **Driven by the frame loop**: `begin_next` pops the oldest job and spawns the
+  same worker thread the single-job path used; `poll` takes the finished
+  result, appends to a five-line report, removes the partial file when the
+  engine reports `Cancelled`, and immediately starts the next job. `poll` is
+  called from `App::ui_frame`, so the queue advances while another workspace is
+  open, and `ExportState::is_busy` keeps the 100 ms repaint timer alive.
+- **UI**: the panel draws the running job's label, a per-row ✕ and Clear
+  Queue, and the finished report. Start Export stays enabled while busy and
+  says it will queue.
+- **Tests**: the job snapshot (extension, explicit whole-sequence range,
+  In/Out deferral, zero-bitrate default), first-in-first-out order, the
+  duplicate-path refusal, and `is_busy` ordering the frame loop.
+- **CI**: run `42395055258` — fmt, clippy `-D warnings`, check, **79 tests**,
   release build and the binary self-test.
 
 ## R1 - cached roto masks in the one render path (✔ CI-verified, run 40056112214)
@@ -1005,6 +1038,7 @@ with a real, user-installed runtime.
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | E1 | Export presets and range selection: four named presets that apply format/bitrate/audio together, and an explicit whole-sequence vs In/Out range choice | CI-verified, run 42391495128 |
+| E2 | Export queue: snapshot jobs behind the foreground render, driven from the frame loop, with duplicate-path refusal, per-row removal and a finished report | CI-verified, run 42395055258 |
 | R7 | Multi-model rotoscoping engine: `crates/roto` (selection, tracking backends with Cutie preferred and XMem legacy, temporal QC, matting, refinement, cache, scheduler, export), model catalogue/manager and the workspace panel | 🟡 Partial: everything deterministic is tested, no model is wired to a real runtime yet. See `ROTO_ENGINE.md` |
 
 ## Dependency policy
