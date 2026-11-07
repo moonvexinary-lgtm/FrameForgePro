@@ -263,6 +263,12 @@ fn v1_span(app: &App) -> (Tick, Tick) {
     (start, duration)
 }
 
+/// The engine's id for the fixture's video clip, which is what a selection holds.
+fn v1_id(app: &App) -> filmcraft_project::ClipId {
+    let (row, _, _) = v1_clip(app);
+    app.sequence().expect("the fixture has a sequence").video_tracks[row].items[0].id
+}
+
 /// Lay the timeline out at a known zoom and return the body rect and the V1
 /// clip's painted rect, both in screen points. `zoom` is set directly and one
 /// frame is rendered, so the rects egui stores belong to that layout; the clip
@@ -352,4 +358,42 @@ fn dragging_the_in_edge_trims_the_head_and_leaves_the_tail_in_place() {
     assert!((duration.seconds() - 9.5).abs() < 0.02, "the clip is 0.5 s shorter: {}s", duration.seconds());
     assert_eq!(start + duration, start_before + duration_before, "a regular trim moves the head, not the tail");
     assert_eq!(h.app.status, "Trimmed in edge");
+}
+
+#[test]
+fn clicking_a_clip_selects_it_and_clicking_empty_space_deselects() {
+    let (mut h, _) = seeded();
+    let (body, clip) = timeline_at(&mut h, 40.0);
+    assert!(h.app.selection.is_none(), "nothing is selected before the click");
+
+    h.click_at(clip.center());
+    assert_eq!(h.app.selection, Some(v1_id(&h.app)), "the click selected the clip under the pointer");
+
+    // Same row, past the clip's right edge: a hit-rect miss, so the timeline
+    // scrubs and clears the selection instead of selecting anything.
+    let empty = Pos2::new(clip.right() + 40.0, clip.center().y);
+    h.click_at(empty);
+    assert!(h.app.selection.is_none(), "empty space on a clip row deselects");
+    let scrubbed = (empty.x - body.left()) as f64 / 40.0;
+    assert!((h.app.playhead.seconds() - scrubbed).abs() < 0.01, "and scrubs to {}s, not {}", h.app.playhead.seconds(), scrubbed);
+}
+
+#[test]
+fn delete_removes_the_selected_clip_and_ctrl_z_restores_it() {
+    let (mut h, _) = seeded();
+    let (_, clip) = timeline_at(&mut h, 40.0);
+
+    h.click_at(clip.center());
+    assert_eq!(h.app.selection, Some(v1_id(&h.app)), "the pointer selected the clip to delete");
+
+    h.press(Key::Delete, Modifiers::NONE);
+
+    assert_eq!(video_clips(&h.app), 0, "Delete removed the selected video clip");
+    assert_eq!(audio_clips(&h.app), 0, "the linked sound went with it");
+    assert_eq!(h.app.status, "Clip removed");
+    assert!(h.app.selection.is_none(), "a deleted clip is no longer selected");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(video_clips(&h.app), 1, "Ctrl+Z brought the clip back");
+    assert_eq!(audio_clips(&h.app), 1, "and its linked sound");
 }
