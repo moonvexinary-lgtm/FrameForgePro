@@ -827,6 +827,49 @@ deliverable meant waiting and clicking again.
 - **CI**: run `42395055258` — fmt, clippy `-D warnings`, check, **79 tests**,
   release build and the binary self-test.
 
+## M13 - relinking missing media from the shell (CI-verified, run 42419874435)
+
+The engine could already find and repair missing media (`media.findMissing`,
+`media.relink`, `media.autoRelink`, `media.search`, `media.offlineAll`), but a
+moved file could only be reconnected through the document API: row 29 had no UI.
+
+- **The dialog carries nothing the engine owns** (`apps/frameforge-pro/src/relink.rs`):
+  `RelinkDialog` holds the rows, the selected index, the path field and the last
+  message; `link` calls `App::execute("media.relink", …)`, so the candidate
+  check (name, extension, fingerprint, duration, metadata), the folder search
+  for the others and the single undo step are the engine's own. `MissingRow`
+  parses the engine's `media.findMissing` result rather than inventing a shape.
+- **One scan per open, not per frame**: `App::refresh_offline` runs
+  `media.findMissing` directly on the session (journal-free, so it neither
+  dirties the document nor enters the undo history) from `App::from_parts`, and
+  again after a link. The badge and the dialog read the cached rows, so they
+  cannot disagree with the document.
+- **Addressable controls**: the badge is a painted rect registered under
+  `ff-relink-open`; the dialog's rows, Link, Browse and Close are painted rects
+  under `ff-relink-row-<n>`, `ff-relink-link`, `ff-relink-browse` and
+  `ff-relink-close`, the same `Ui::interact` trick the track headers already
+  use, so a scripted click reaches them and a restyle does not break a test.
+  The dialog floats over any workspace from `App::ui_frame`.
+- **Force and the others**: the Force checkbox is passed to `link`; the
+  engine's default folder search for the others is named in a hint rather than
+  duplicated.
+- **Tests** (`ui_tests.rs`, four): a generator-only project has no badge; a
+  hand-built item naming a file that is not there is listed with its project
+  id, file name, `missing` status and recorded path; linking it repoints the
+  project, clears the badge and rows and undoes as one step; a mismatched file
+  is refused until Force; and a scripted click on the badge opens the dialog, a
+  row click selects, a Link click repairs. The fixture reads the candidate's
+  properties with `filmcraft_media::open_path` (read whole, handle dropped) and
+  never deletes the missing file, because an imported file is held open by the
+  Windows streaming reader — so the "moved out from under a cached source"
+  crash path is not exercised.
+- **Limits**: `media.autoRelink`, `media.search` and `media.offlineAll` have no
+  dedicated button; the path is typed or pasted (Browse uses `rfd`), not
+  matched with a live candidate list.
+- **CI**: run `42419874435` — fmt, clippy `-D warnings`, check, **89 tests**,
+  release build and the binary self-test (the first attempt, run `42418195009`,
+  failed on `ui::hint` taking `&str`; `9651b86` fixed it).
+
 ## R1 - cached roto masks in the one render path (✔ CI-verified, run 40056112214)
 
 The Roto AI plan's first executable slice: the renderer reads a mask cache and applies the matte to
@@ -1092,6 +1135,7 @@ with a real, user-installed runtime.
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
 | E1 | Export presets and range selection: four named presets that apply format/bitrate/audio together, and an explicit whole-sequence vs In/Out range choice | CI-verified, run 42391495128 |
 | E2 | Export queue: snapshot jobs behind the foreground render, driven from the frame loop, with duplicate-path refusal, per-row removal and a finished report | CI-verified, run 42395055258 |
+| M13 | Relink missing media: a journal-free offline scan per project open, an OFFLINE badge in the media browser, and a floating Link Media dialog over the engine's `media.relink` (path, Force, folder search), with scripted click tests | CI-verified, run 42419874435 |
 | R7 | Multi-model rotoscoping engine: `crates/roto` (selection, tracking backends with Cutie preferred and XMem legacy, temporal QC, matting, refinement, cache, scheduler, export), model catalogue/manager and the workspace panel | 🟡 Partial: everything deterministic is tested, no model is wired to a real runtime yet. See `ROTO_ENGINE.md` |
 
 ## Dependency policy
