@@ -29,27 +29,29 @@ struct Harness {
     context: egui::Context,
     app: App,
     time: f64,
+    /// The modifier state egui currently believes, updated with
+    /// `Event::ModifiersChanged` the way a real backend reports it.
+    held: Modifiers,
 }
 
 impl Harness {
     /// A harness over `app`, positioned so the first asserted frame is not the
     /// layout-only first pass.
     fn new(app: App) -> Self {
-        let mut harness = Self { context: egui::Context::default(), app, time: 0.0 };
-        harness.frame(Vec::new(), Modifiers::NONE);
+        let mut harness = Self { context: egui::Context::default(), app, time: 0.0, held: Modifiers::NONE };
+        harness.frame(Vec::new());
         harness
     }
 
     /// Deliver one frame, exactly as a backend would: a screen rect, a focused
-    /// window, the current modifier state and this frame's events.
-    fn frame(&mut self, events: Vec<Event>, modifiers: Modifiers) {
+    /// window and this frame's events.
+    fn frame(&mut self, events: Vec<Event>) {
         self.time += 1.0 / 60.0;
         let mut viewports = egui::ViewportIdMap::default();
         viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo::default());
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SCREEN)),
             time: Some(self.time),
-            modifiers,
             events,
             focused: true,
             viewports,
@@ -59,12 +61,23 @@ impl Harness {
         let _ = self.context.run_ui(input, |ui| app.ui_frame(ui));
     }
 
-    /// A whole key press: the down event in one frame, the release in the next,
-    /// which is how a keyboard produces them and keeps egui's repeat detection
-    /// honest.
+    /// A whole key press: modifiers change first (as a real backend reports
+    /// them), the down event in one frame, the release in the next, and the
+    /// modifiers released afterwards. One frame per event keeps egui's repeat
+    /// detection honest.
     fn press(&mut self, key: Key, modifiers: Modifiers) {
-        self.frame(vec![key_event(key, true, modifiers)], modifiers);
-        self.frame(vec![key_event(key, false, modifiers)], modifiers);
+        let mut events = Vec::new();
+        if modifiers != self.held {
+            events.push(Event::ModifiersChanged(modifiers));
+            self.held = modifiers;
+        }
+        events.push(key_event(key, true, modifiers));
+        self.frame(events);
+        self.frame(vec![key_event(key, false, modifiers)]);
+        if self.held != Modifiers::NONE {
+            self.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+            self.held = Modifiers::NONE;
+        }
     }
 }
 
