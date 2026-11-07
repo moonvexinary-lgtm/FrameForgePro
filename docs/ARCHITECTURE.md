@@ -772,6 +772,10 @@ deliverable meant waiting and clicking again.
 - **Tests**: the job snapshot (extension, explicit whole-sequence range,
   In/Out deferral, zero-bitrate default), first-in-first-out order, the
   duplicate-path refusal, and `is_busy` ordering the frame loop.
+- **Limits**: the helpers and the duplicate rule are tested; the threaded
+  hand-off (`begin_next` spawning, `poll` taking the result and starting the
+  next job) is code-inspected, not yet driven by a test, because a real render
+  is too slow for the unit suite.
 - **CI**: run `42395055258` — fmt, clippy `-D warnings`, check, **79 tests**,
   release build and the binary self-test.
 
