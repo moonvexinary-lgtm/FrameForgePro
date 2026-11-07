@@ -148,6 +148,11 @@ pub struct App {
     pub media_tags_for: Option<ItemId>,
     /// Thumbnails and audio waveforms, made on background threads and bounded.
     pub previews: MediaPreviews,
+    /// Media files the last offline scan could not find (the badge and the
+    /// relink dialog read this; the engine owns the scan itself).
+    pub offline_rows: Vec<crate::relink::MissingRow>,
+    /// The floating Link Media dialog, when one is open.
+    pub relink: Option<crate::relink::RelinkDialog>,
     /// The graphic clip selected in the Text & Graphics workspace.
     pub graphics_clip: Option<ClipId>,
     /// The layer index selected inside that graphic clip.
@@ -215,7 +220,7 @@ impl App {
         // Premiere-like default: ripple edits move sequence markers too. It is
         // editor state (not saved in the document) and the toolbar can turn it off.
         session.state.ripple_sequence_markers = true;
-        App {
+        let mut app = App {
             session,
             compositions,
             path,
@@ -258,6 +263,8 @@ impl App {
             media_tags_draft: String::new(),
             media_tags_for: None,
             previews: MediaPreviews::new(),
+            offline_rows: Vec::new(),
+            relink: None,
             graphics_clip: None,
             graphics_layer: 0,
             text_draft: String::new(),
@@ -276,7 +283,32 @@ impl App {
             roto_engine: crate::roto_engine::RotoEngineState::default(),
             autosaved_at: None,
             last_autosave: Instant::now(),
-        }
+        };
+        // One scan per project open: opening is where media goes missing, and
+        // the badge and the dialog read what it found. Journal-free, so it
+        // neither dirties the document nor enters the undo history.
+        app.refresh_offline();
+        app
+    }
+
+    /// Run the engine's missing-media scan and cache the rows the dialog and
+    /// the badge read. Called when a project opens and after a relink.
+    pub fn refresh_offline(&mut self) {
+        let rows = match self.session.execute("media.findMissing", serde_json::json!({})) {
+            Ok(value) => value
+                .get("missing")
+                .and_then(serde_json::Value::as_array)
+                .map(|rows| rows.iter().filter_map(crate::relink::MissingRow::from_json).collect())
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        self.offline_rows = rows;
+    }
+
+    /// True when any file the project names is missing or offline: the badge
+    /// and the media browser's Relink button appear while this is true.
+    pub fn has_offline_media(&self) -> bool {
+        !self.offline_rows.is_empty()
     }
 
     /// The whole document (editing project + compositions), for save, export
@@ -1067,6 +1099,9 @@ impl App {
                 Workspace::Export => crate::export::show(self, ui, body),
             }
             self.status_bar(ui, status);
+            // The Link Media dialog floats over whatever workspace is showing,
+            // so a missing file can be reconnected without leaving the edit.
+            crate::relink::show(self, ui);
         }));
         if result.is_err() {
             self.status = "A UI error occurred. The project is intact — save it now.".to_string();

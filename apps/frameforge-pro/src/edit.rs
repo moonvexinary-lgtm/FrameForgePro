@@ -1083,6 +1083,33 @@ fn media_browser(app: &mut App, panel: &mut egui::Ui) {
         move_item_to_bin(app, item, target);
     }
 
+    // The offline badge on its own line: it appears the moment a project opens
+    // with files the scan cannot find, and it is the button that opens the
+    // relink dialog. A painted chip with a stable id, so a scripted click
+    // reaches it and the badge cannot drift from the dialog.
+    if app.has_offline_media() {
+        let count = app.offline_rows.len();
+        panel.horizontal(|ui| {
+            let width = ui.available_width();
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::hover());
+            let response = ui.interact(rect, egui::Id::new("ff-relink-open"), egui::Sense::click());
+            let fill = if response.hovered() { ui::ACCENT } else { ui::ACCENT_DIM };
+            ui.painter().rect_filled(rect, 3.0, fill);
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("⚠ OFFLINE · Relink… ({count})"),
+                egui::FontId::proportional(10.5),
+                ui::TEXT_HI,
+            );
+            if response.on_hover_text("Named media files moved or are offline — reconnect them").clicked() {
+                let dialog = crate::relink::RelinkDialog::open(app);
+                app.relink = Some(dialog);
+                app.status = format!("{count} media file(s) need relinking");
+            }
+        });
+    }
+
     let width = panel.available_width();
     panel.add_sized([width, 22.0], egui::TextEdit::singleline(&mut app.media_search).hint_text("Search names, tags and metadata..."));
     panel.add_space(3.0);

@@ -25,6 +25,7 @@ mod masking;
 mod mixer;
 mod pixels;
 mod previews;
+mod relink;
 mod roto;
 mod roto_bench;
 mod roto_engine;

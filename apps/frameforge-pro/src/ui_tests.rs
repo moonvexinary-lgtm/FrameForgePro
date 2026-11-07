@@ -12,6 +12,8 @@
 //! timeline and transport barely populate. What matters is that the real frame
 //! loop, the real key map and the real engine commands agree.
 
+use std::path::{Path, PathBuf};
+
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
 use filmcraft_media::generators::GeneratorSource;
@@ -21,6 +23,7 @@ use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
 
 use crate::app::App;
 use crate::edit;
+use crate::relink::RelinkDialog;
 
 /// A desktop-sized frame, so the panels lay out as they do in use rather than
 /// collapsing into a degenerate rect.
@@ -396,4 +399,165 @@ fn delete_removes_the_selected_clip_and_ctrl_z_restores_it() {
     h.press(Key::Z, command(false));
     assert_eq!(video_clips(&h.app), 1, "Ctrl+Z brought the clip back");
     assert_eq!(audio_clips(&h.app), 1, "and its linked sound");
+}
+
+// ---- relinking missing media ----------------------------------------------
+
+/// A scratch folder under the OS temp directory, unique per call.
+fn scratch(name: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("ff-relink-{name}-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create the scratch folder");
+    dir
+}
+
+/// Write a real 16-bit PCM WAV the media crate can open. The engine's own
+/// movie helpers are not visible from this crate, and a WAV is one
+/// deterministic write with no encoder.
+fn wav_fixture(dir: &Path, name: &str) -> PathBuf {
+    let samples: Vec<f32> = (0..24_000).map(|i| (i as f32 * 0.05).sin() * 0.2).collect();
+    let path = dir.join(name);
+    std::fs::write(&path, filmcraft_media::wav::write_wav16(&samples, 1, 48_000)).expect("write the WAV");
+    path
+}
+
+/// A real file's properties, read once and dropped. `open_path` reads the file
+/// whole, so no handle is left open on it — the recorded path of a missing item
+/// is never touched on disk, which matters on Windows where an imported file is
+/// held open by the streaming reader.
+fn wav_info(path: &Path) -> filmcraft_media::MediaInfo {
+    let source = filmcraft_media::open_path(path, &[]).expect("open the WAV to read its properties");
+    source.info().clone()
+}
+
+/// Add a project item that names `recorded` (a file that is not there) but
+/// carries a real file's properties, so the offline scan reports it missing.
+fn add_missing_item(app: &mut App, name: &str, recorded: &Path, info: filmcraft_media::MediaInfo) -> ItemId {
+    app.edit_project("Missing media", |project, _| {
+        Ok(project.add_item(
+            name,
+            Label::Iris,
+            ItemKind::Media(MediaClip {
+                media: MediaRef::File { path: recorded.display().to_string() },
+                info,
+                interpret: Default::default(),
+                mark_in: None,
+                mark_out: None,
+                markers: Vec::new(),
+                offline: false,
+                proxy: None,
+                identity: None,
+            }),
+            None,
+        ))
+    })
+    .expect("add the item that names the missing file")
+}
+
+/// The file path the project stores for a media item.
+fn media_path(app: &App, item: ItemId) -> String {
+    match &app.session.project.item(item).and_then(|i| i.as_media()).expect("a media item").media {
+        MediaRef::File { path } => path.clone(),
+        MediaRef::Generator(_) => panic!("the relink fixture is file media"),
+    }
+}
+
+#[test]
+fn a_missing_file_shows_the_badge_and_the_relink_dialog_lists_it() {
+    let (mut h, _) = seeded();
+    h.app.refresh_offline();
+    assert!(!h.app.has_offline_media(), "a project of generators has nothing missing");
+    assert!(RelinkDialog::open(&h.app).rows.is_empty(), "and the dialog has nothing to show");
+
+    let present = wav_fixture(&scratch("present"), "take.wav");
+    let recorded = scratch("missing").join("take.wav");
+    let item = add_missing_item(&mut h.app, "take", &recorded, wav_info(&present));
+    h.app.refresh_offline();
+
+    assert!(h.app.has_offline_media(), "the badge appears once a named file is not there");
+    let dialog = RelinkDialog::open(&h.app);
+    assert_eq!(dialog.rows.len(), 1, "the one missing file is listed");
+    assert_eq!(dialog.rows[0].item, item, "by the item the project holds");
+    assert_eq!(dialog.rows[0].file_name, "take.wav");
+    assert_eq!(dialog.rows[0].status, "missing");
+    assert_eq!(dialog.selected, Some(0), "the first row is ready to link");
+    assert_eq!(dialog.path, recorded.display().to_string(), "the path field starts at the recorded location");
+}
+
+#[test]
+fn linking_a_missing_row_repairs_the_path_and_ctrl_z_restores_it() {
+    let (mut h, _) = seeded();
+    let found = wav_fixture(&scratch("found"), "take.wav");
+    let recorded = scratch("recorded").join("take.wav");
+    let item = add_missing_item(&mut h.app, "take", &recorded, wav_info(&found));
+    let old_path = media_path(&h.app, item);
+    h.app.refresh_offline();
+    assert!(h.app.has_offline_media(), "the project cannot find the recorded file");
+
+    let mut dialog = RelinkDialog::open(&h.app);
+    dialog.select(0);
+    dialog.path = found.display().to_string();
+    dialog.link(&mut h.app, false);
+
+    assert_eq!(media_path(&h.app, item), found.display().to_string(), "the project now points at the real file");
+    assert!(!h.app.has_offline_media(), "the badge clears once the file is linked");
+    assert!(dialog.rows.is_empty(), "the dialog has nothing left to link");
+    assert!(dialog.message.as_deref().unwrap_or_default().starts_with("Linked"), "the dialog reports the link: {:?}", dialog.message);
+
+    h.press(Key::Z, command(false));
+    assert_eq!(media_path(&h.app, item), old_path, "the relink is one undo step");
+}
+
+#[test]
+fn a_mismatched_file_is_refused_until_forced() {
+    let (mut h, _) = seeded();
+    let dir = scratch("candidates");
+    let found = wav_fixture(&dir, "take.wav");
+    let other = wav_fixture(&dir, "different.wav");
+    let recorded = scratch("recorded-2").join("take.wav");
+    let item = add_missing_item(&mut h.app, "take", &recorded, wav_info(&found));
+    h.app.refresh_offline();
+
+    let mut dialog = RelinkDialog::open(&h.app);
+    dialog.select(0);
+    dialog.path = other.display().to_string();
+    dialog.link(&mut h.app, false);
+
+    assert!(dialog.message.as_deref().unwrap_or_default().contains("doesn't match"), "the mismatch is reported: {:?}", dialog.message);
+    assert_eq!(dialog.rows.len(), 1, "the row is still there");
+    assert!(h.app.has_offline_media(), "nothing was linked");
+
+    dialog.link(&mut h.app, true);
+    assert!(dialog.rows.is_empty(), "Force linked the mismatched file anyway");
+    assert_eq!(media_path(&h.app, item), other.display().to_string());
+}
+
+#[test]
+fn the_relink_button_opens_the_dialog_and_its_link_button_repairs_the_project() {
+    let (mut h, _) = seeded();
+    let found = wav_fixture(&scratch("button-found"), "take.wav");
+    let recorded = scratch("button-recorded").join("take.wav");
+    let item = add_missing_item(&mut h.app, "take", &recorded, wav_info(&found));
+    h.app.refresh_offline();
+    h.frame(Vec::new());
+
+    // The badge's button appears in the media browser; a click opens the dialog.
+    h.click(egui::Id::new("ff-relink-open"));
+    assert!(h.app.relink.is_some(), "the media-browser button opened the dialog");
+
+    // One frame lays the floating window out, then its rows are addressable.
+    h.frame(Vec::new());
+    h.click(egui::Id::new(("ff-relink-row", 0usize)));
+    assert_eq!(h.app.relink.as_ref().and_then(|d| d.selected), Some(0), "clicking a row selects it");
+
+    // Typing would need focus and text events; the field is set directly, the
+    // way a pasted path arrives, and the Link button is still a real click.
+    h.app.relink.as_mut().expect("the dialog is open").path = found.display().to_string();
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-relink-link"));
+
+    let dialog = h.app.relink.as_ref().expect("the dialog stays open");
+    assert!(dialog.rows.is_empty(), "the Link button cleared the row");
+    assert_eq!(media_path(&h.app, item), found.display().to_string(), "and repointed the project");
+    assert!(!h.app.has_offline_media(), "the badge is gone");
 }
