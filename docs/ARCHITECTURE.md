@@ -709,14 +709,52 @@ populate. The decision was to drive the real loop by hand, with no new dependenc
   adds one marker on the snapped playhead and Shift+M jumps to it without adding.
 - **Assertions**: engine document and editor state only, never pixels, so a
   restyle cannot break a test that is really about what the command did.
-- **Limits**: keyboard paths only. Pointer gestures (clip drag and trim, track
-  header and ruler clicks) need a shared rect helper that reports where the
-  timeline drew each control; until it exists those paths stay code-inspected.
+- **Limits at U2**: keyboard paths only. Pointer gestures needed a shared rect
+  helper that reports where the timeline drew each control; U3 adds it for the
+  body and the clips, and U2's follow-up (run `42389027715`) already reached the
+  track header squares through `Context::read_response`.
 - **CI**: run `42340371967` — fmt, clippy `-D warnings`, check, **72 tests**
   (69 + the 3 UI tests), release build and the binary self-test. A later
   pointer test (run `42389027715`) adds the A1 mute click and reaches the
   control through `Context::read_response`, so no second geometry helper is
   needed.
+
+## U3 - scripted pointer gestures on the timeline (CI-verified, run 42401469221)
+
+U2 could press keys; the clip move, the two edge trims and the ruler scrub were
+still code-inspected because the custom-painted timeline exposed no addressable
+geometry.
+
+- **Body id** (`edit.rs`): the timeline body is allocated with `Sense::hover`,
+  then re-registered with `body_ui.interact(alloc, Id::new("ff-timeline-body"),
+  Sense::click_and_drag())`. `Context::read_response` now yields the body rect,
+  the same route the track-header squares already took. Painting is unchanged.
+- **One geometry function**: `edit::timeline_clip_rect(alloc, row, start,
+  duration, zoom)` is called by the draw loop and the tests, so a scripted drag
+  grabs exactly the rectangle a person sees instead of a second copy of the
+  maths. `RULER_H` is `pub(crate)` so a test can aim above the clip rows.
+- **Harness** (`ui_tests.rs`): `click_at(pos)` sends hover, press, release;
+  `drag(from, path)` sends hover, press, one frame per waypoint, release. egui
+  starts a drag on the first waypoint past its 6 px click tolerance
+  (`max_click_dist`), and the timeline decides move-vs-trim from the pointer at
+  that instant. A trim test therefore presses inside the 8 px edge band and
+  keeps the drag-start waypoint inside it too, moving just far enough (6.9 px)
+  to be a drag.
+- **Measured, not guessed**: the tests set `zoom = 40.0` and render one frame
+  before reading the rects, so 40 px = 1 s. The move drag is 60 px (1.5 s); the
+  out trim is -40 px (-1 s); the in trim is +20 px (0.5 s). Assertions allow
+  0.02 s for the f32 pixel-to-tick path and the engine's frame grid.
+- **Covered**: a ruler click scrubs the playhead to 2 s and clears the
+  selection; a mid-clip drag moves V1 by 1.5 s, keeps its length and reports
+  "Moved clip", and Ctrl+Z restores the start; an out-edge drag reports
+  "Trimmed out edge", shortens the tail to 9 s and an undo restores 10 s; an
+  in-edge drag reports "Trimmed in edge", moves the head to 0.5 s, shortens the
+  clip to 9.5 s and leaves `start + duration` exactly where it was.
+- **Limits**: select and delete still have no scripted gesture; screenshot
+  regression is not automated. The mouse wheel, shift-click ranges and
+  multi-clip marquee are not covered.
+- **CI**: run `42401469221` — fmt, clippy `-D warnings`, check, **83 tests**
+  (79 + the 4 pointer tests), release build and the binary self-test.
 
 ## E1 - export presets and an explicit range (CI-verified, run 42391495128)
 
@@ -1041,6 +1079,7 @@ with a real, user-installed runtime.
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
+| U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, run 42401469221 |
 | E1 | Export presets and range selection: four named presets that apply format/bitrate/audio together, and an explicit whole-sequence vs In/Out range choice | CI-verified, run 42391495128 |
 | E2 | Export queue: snapshot jobs behind the foreground render, driven from the frame loop, with duplicate-path refusal, per-row removal and a finished report | CI-verified, run 42395055258 |
 | R7 | Multi-model rotoscoping engine: `crates/roto` (selection, tracking backends with Cutie preferred and XMem legacy, temporal QC, matting, refinement, cache, scheduler, export), model catalogue/manager and the workspace panel | 🟡 Partial: everything deterministic is tested, no model is wired to a real runtime yet. See `ROTO_ENGINE.md` |
