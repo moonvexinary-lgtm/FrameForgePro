@@ -98,26 +98,29 @@ fn audio_clips(app: &App) -> usize {
     app.sequence().map(|s| s.audio_tracks.iter().map(|t| t.items.len()).sum()).unwrap_or(0)
 }
 
-/// A fresh app with one sequence and one tone clip placed on the patched tracks.
-/// The placement is a real engine command, so the history has a step for the
-/// undo test to reach; the item id comes back so a test can check that undo
-/// reached the placement and not the edit that created the media.
+/// A fresh app with one sequence and one Bars & Tone clip (picture and sound)
+/// placed on the patched tracks. The placement is a real engine command, so the
+/// history has a step for the undo test to reach; the item id comes back so a
+/// test can check that undo reached the placement and not the edit that created
+/// the media.
 fn seeded() -> (Harness, ItemId) {
     let mut app = App::new();
     app.execute("file.newSequence", serde_json::json!({"name": "Main", "width": 1280, "height": 720, "fps": 24, "video": 2, "audio": 2}))
         .expect("create the sequence");
 
-    let tone = Generator::Tone { hz: 440.0, db: -6.0 };
-    let source = GeneratorSource::new(tone.clone(), 1280, 720, FrameRate::FPS_24, Tick(10 * TICKS_PER_SECOND));
+    // Both streams: `Tone` is audio-only, and the undo/split tests need a clip
+    // on a video track as well as its linked sound.
+    let generator = Generator::BarsAndTone;
+    let source = GeneratorSource::new(generator.clone(), 1280, 720, FrameRate::FPS_24, Tick(10 * TICKS_PER_SECOND));
     let info = source.info().clone();
     let name = info.name.clone();
     let item: ItemId = app
-        .edit_project("New Tone", |project, _| {
+        .edit_project("Bars & Tone", |project, _| {
             Ok(project.add_item(
                 name.as_str(),
                 Label::Iris,
                 ItemKind::Media(MediaClip {
-                    media: MediaRef::Generator(tone),
+                    media: MediaRef::Generator(generator),
                     info,
                     interpret: Default::default(),
                     mark_in: None,
