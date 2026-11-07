@@ -58,7 +58,11 @@ impl Harness {
             ..Default::default()
         };
         let app = &mut self.app;
-        let _ = self.context.run_ui(input, |ui| app.ui_frame(ui));
+        let mut output = self.context.run_ui(input, |ui| app.ui_frame(ui));
+        // There is no painter here. `TexturesDelta` asserts on drop that a
+        // backend consumed its deltas, so discard them explicitly instead of
+        // letting the headless output trip the assertion.
+        output.textures_delta.clear();
     }
 
     /// A whole key press: modifiers change first (as a real backend reports
