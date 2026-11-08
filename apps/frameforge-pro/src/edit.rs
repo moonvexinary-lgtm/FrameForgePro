@@ -204,6 +204,13 @@ pub(crate) fn markers_csv(q: &Sequence) -> String {
     out
 }
 
+/// Import sequence markers from the exported CSV format (RFC 4180 text).
+/// Returns how many markers were added; one undoable project edit adds them all,
+/// and a bad row aborts the whole import.
+pub(crate) fn import_markers_csv_text(_app: &mut App, _text: &str) -> Result<usize, String> {
+    Err("marker CSV import is not implemented yet".to_string())
+}
+
 /// Write the sequence markers to `path`; returns the number of markers written.
 /// Kept separate from the file dialog so the bytes can be tested.
 pub(crate) fn write_markers_csv(app: &mut App, path: &std::path::Path) -> std::io::Result<usize> {
@@ -4013,6 +4020,46 @@ mod tests {
         app.marker_name = "Elsewhere".to_string();
         super::update_marker_at_playhead(&mut app);
         assert!(app.status.contains("No marker"), "status says why: {}", app.status);
+    }
+
+    #[test]
+    fn marker_csv_import_parses_quoted_text_and_is_one_undo() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "MarkerCsvImport"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+
+        // The export's own header, a quoted name/comment with commas, quotes and
+        // a newline, and a second row that carries only a timecode.
+        let text = format!(
+            "name,comment,start_ticks,duration_ticks,start_timecode,label\n\"Intro, \"\"wide\"\"\",\"line1\nline2\",{},{},00:00:01:00,Blue\n\"Cue B\",\"\",,0,00:00:04:00,Red\n",
+            TICKS_PER_SECOND,
+            TICKS_PER_SECOND / 2
+        );
+        let count = super::import_markers_csv_text(&mut app, &text).expect("the exported format imports");
+        assert_eq!(count, 2, "both rows imported");
+
+        {
+            let q = app.session.active_sequence().unwrap();
+            assert_eq!(q.markers.len(), 2);
+            let first = &q.markers[0];
+            assert_eq!(first.name, "Intro, \"wide\"", "a quoted name keeps its comma and quotes");
+            assert_eq!(first.comment, "line1\nline2", "a quoted comment keeps its newline");
+            assert_eq!(first.start, Tick(TICKS_PER_SECOND), "start_ticks wins when both columns are present");
+            assert_eq!(first.duration, Tick(TICKS_PER_SECOND / 2), "duration_ticks is read");
+            assert_eq!(first.color, Label::Blue, "the label column names the colour");
+            let second = &q.markers[1];
+            assert_eq!(second.start, Tick(4 * TICKS_PER_SECOND), "a blank start_ticks falls back to the timecode");
+            assert_eq!(second.color, Label::Red);
+        }
+
+        app.undo();
+        assert!(app.session.active_sequence().unwrap().markers.is_empty(), "one import is one undo step");
+
+        let bad = "name,comment,start_ticks,duration_ticks,start_timecode,label\n\"Bad\",\"\",oops,0,,Green\n";
+        let err = super::import_markers_csv_text(&mut app, bad).expect_err("a bad tick count is an error");
+        assert!(err.contains("row 2"), "the error names the offending row: {err}");
+        assert_eq!(app.session.active_sequence().unwrap().markers.len(), 0, "a bad row imports nothing");
     }
 
     #[test]

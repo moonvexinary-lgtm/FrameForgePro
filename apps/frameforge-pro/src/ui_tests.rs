@@ -775,6 +775,33 @@ fn dragging_the_split_audio_out_before_its_in_clamps_at_the_channel_in() {
 }
 
 #[test]
+fn dragging_the_source_marker_handle_moves_only_that_marker_and_one_undo_restores_it() {
+    let (mut h, item) = seeded();
+    edit::open_source(&mut h.app, item);
+    h.app.execute("markers.add", serde_json::json!({"target": "source", "time": 2 * TICKS_PER_SECOND, "name": "A"})).unwrap();
+    h.app.execute("markers.add", serde_json::json!({"target": "source", "time": 6 * TICKS_PER_SECOND, "name": "B"})).unwrap();
+    h.frame(Vec::new());
+    let before = source_marker_starts(&h.app);
+    assert_eq!(before, vec![Tick(2 * TICKS_PER_SECOND), Tick(6 * TICKS_PER_SECOND)], "two source markers");
+
+    let marker_id = h.app.session.project.item(item).and_then(|i| i.as_media()).and_then(|m| m.markers.first()).map(|m| m.id.0).expect("the 2 s marker id");
+    let bar = h.rect_of(egui::Id::new("ff-source-range")).expect("the range bar registers `ff-source-range`");
+    let handle = h.rect_of(egui::Id::new(("ff-source-marker-handle", marker_id))).expect("the marker has a bar handle");
+    let at_two = bar.left() + 0.2 * bar.width();
+    assert!((handle.center().x - at_two).abs() < 1.5, "the marker handle sits on the 2 s mark");
+
+    // One second of the 10 s source is a tenth of the bar.
+    let step = egui::vec2(bar.width() / 10.0, 0.0);
+    h.drag(handle.center(), &[handle.center() + step]);
+
+    let after = source_marker_starts(&h.app);
+    assert_eq!(after, vec![Tick(3 * TICKS_PER_SECOND), Tick(6 * TICKS_PER_SECOND)], "only the dragged marker moved, by one second");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(source_marker_starts(&h.app), before, "the whole drag is one undo step");
+}
+
+#[test]
 fn the_source_marker_strip_adds_seeks_and_deletes() {
     let (mut h, item) = seeded();
     edit::open_source(&mut h.app, item);
