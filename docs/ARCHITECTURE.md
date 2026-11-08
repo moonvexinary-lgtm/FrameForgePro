@@ -507,6 +507,40 @@ editable bar and the source's markers as rows.
 - **CI**: run `42499750102` — fmt, clippy `-D warnings`, check, **100 tests**,
   release build and the binary self-test.
 
+## T16 - the sequence In/Out ruler drag (CI-verified, run 42506032070)
+
+T9 could set the Program marks only from the I/O keys, and the ruler painted
+neither mark. The timeline now shows the marked span and lets a person drag
+either end.
+
+- **Geometry** (`edit.rs`): `sequence_mark_rects` maps the sequence marks onto
+  the ruler with the ruler's own linear time-to-pixels mapping, so the handles,
+  the playhead and `timeline_clip_rect` share one geometry. Each handle is
+  `SEQUENCE_MARK_HANDLE_W` wide and the ruler tall, which is the rect the UI
+  tests grab.
+- **Paint**: a faint accent band spans the ruler between In and Out; the two
+  handles are painted after the marker stems, so a marker at the same frame
+  cannot hide one. In uses the accent colour and Out amber, distinct from the
+  red playhead.
+- **Gestures**: dragging a handle asks `drag_sequence_mark` for the frame-snapped
+  mark; In is clamped at Out and Out at In (a drag stops rather than clearing
+  the other end, unlike `markers.markIn`/`markOut`), and both are clamped to the
+  sequence. Moving a mark clears its split points exactly as those commands do
+  (code-inspected; the UI tests assert the marks, the clamp and the undo). The
+  write is `App::edit_project_merged("Mark", "sequence-range-drag", ...)`,
+  so every frame of one drag joins the same undo step.
+- **Tests** (three `ui_tests`): the handles appear on 2 s and 6 s only once the
+  marks exist; dragging In by one second moves In and leaves Out, and one
+  Ctrl+Z restores it; dragging Out by one second mirrors that; and an Out
+  dragged five seconds left stops on In instead of clearing it.
+- **Limitations**: split (video/audio) In/Out are still key-only; the split-point
+  clearing the drag performs has no UI test; the ruler band is painted but not
+  draggable, so scrubbing inside the marked range keeps working; and a second
+  handle drag with no other edit between reuses the engine's merge key, so two
+  such drags share an undo step.
+- **CI**: run `42506032070` - fmt, clippy `-D warnings`, check, **103 tests**,
+  release build and the binary self-test.
+
 ## T6 - Ripple delete with linked A/V and marker ripple (CI-verified, run 40163011141)
 
 `Shift+Delete` and the timeline **Ripple Delete** button call the engine's real
@@ -1204,6 +1238,7 @@ with a real, user-installed runtime.
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
 | T14 | Source-monitor audio: the open clip's own sound through a `play_item` mix that shares the Program stream, clock and silent fallback, with the render loop, item-audio fold and advance boundary tested without a device | CI-verified, run 42429090124 |
 | T15 | Source range bar and marker strip: click-to-seek, drag either In/Out handle or the whole band through the engine's `adjust_range` with one undo step per gesture, plus a marker list that adds, seeks and undoably deletes through the Source-targeted commands | CI-verified, run 42499750102 |
+| T16 | Sequence In/Out ruler drag: the Program range paints as a band with an In and an Out handle, each drag frame-snaps and clamps at the other mark through a merged project edit with one undo per gesture | CI-verified, run 42506032070 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
