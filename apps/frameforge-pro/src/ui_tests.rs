@@ -561,3 +561,91 @@ fn the_relink_button_opens_the_dialog_and_its_link_button_repairs_the_project() 
     assert_eq!(media_path(&h.app, item), found.display().to_string(), "and repointed the project");
     assert!(!h.app.has_offline_media(), "the badge is gone");
 }
+
+// ---- source range drag and source markers ---------------------------------
+
+/// The marks the project holds for a media item.
+fn source_marks(app: &App, item: ItemId) -> (Option<Tick>, Option<Tick>) {
+    let media = app.session.project.item(item).and_then(|i| i.as_media()).expect("a media item");
+    (media.mark_in, media.mark_out)
+}
+
+/// The open source's marker starts, in project order.
+fn source_marker_starts(app: &App) -> Vec<Tick> {
+    let Some(item) = app.session.state.source_item else { return Vec::new() };
+    app.session.project.item(item).and_then(|i| i.as_media()).map(|m| m.markers.iter().map(|k| k.start).collect()).unwrap_or_default()
+}
+
+/// Open the seeded clip in the Source monitor and mark In at 2 s and Out at
+/// 6 s through the real commands, so the range bar has two interior handles.
+fn source_with_marks(h: &mut Harness, item: ItemId) {
+    edit::open_source(&mut h.app, item);
+    h.app.session.execute("source.setPlayhead", serde_json::json!({"frame": 48})).unwrap();
+    edit::source_mark(&mut h.app, true);
+    h.app.session.execute("source.setPlayhead", serde_json::json!({"frame": 144})).unwrap();
+    edit::source_mark(&mut h.app, false);
+    h.frame(Vec::new());
+}
+
+#[test]
+fn dragging_the_source_in_handle_sets_the_mark_and_one_undo_restores_it() {
+    let (mut h, item) = seeded();
+    source_with_marks(&mut h, item);
+    let before = source_marks(&h.app, item);
+    assert_eq!(before, (Some(Tick(2 * TICKS_PER_SECOND)), Some(Tick(6 * TICKS_PER_SECOND))), "the fixture marked 2 s to 6 s");
+
+    let bar = h.rect_of(egui::Id::new("ff-source-range")).expect("the range bar is laid out");
+    let handle = h.rect_of(egui::Id::new("ff-source-range-in")).expect("the In handle is laid out");
+    // A tenth of the bar is exactly one second of this ten-second clip.
+    let step = egui::vec2(bar.width() / 10.0, 0.0);
+
+    h.drag(handle.center(), &[handle.center() + step]);
+
+    assert_eq!(source_marks(&h.app, item).0, Some(Tick(3 * TICKS_PER_SECOND)), "dragging the In handle by one second moved the mark");
+    assert_eq!(source_marks(&h.app, item).1, before.1, "the Out mark stayed put");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(source_marks(&h.app, item), before, "the whole drag is one undo step");
+}
+
+#[test]
+fn dragging_the_source_range_body_moves_both_marks() {
+    let (mut h, item) = seeded();
+    source_with_marks(&mut h, item);
+
+    let bar = h.rect_of(egui::Id::new("ff-source-range")).expect("the range bar is laid out");
+    let body = h.rect_of(egui::Id::new("ff-source-range-body")).expect("the range body is laid out");
+    let step = egui::vec2(bar.width() / 10.0, 0.0);
+
+    h.drag(body.center(), &[body.center() + step]);
+
+    assert_eq!(
+        source_marks(&h.app, item),
+        (Some(Tick(3 * TICKS_PER_SECOND)), Some(Tick(7 * TICKS_PER_SECOND))),
+        "the body drag slid both marks forward by one second"
+    );
+}
+
+#[test]
+fn the_source_marker_strip_adds_seeks_and_deletes() {
+    let (mut h, item) = seeded();
+    edit::open_source(&mut h.app, item);
+    h.app.session.execute("source.setPlayhead", serde_json::json!({"frame": 48})).unwrap();
+    h.frame(Vec::new());
+
+    h.click(egui::Id::new("ff-source-marker-add"));
+    assert_eq!(source_marker_starts(&h.app), vec![Tick(2 * TICKS_PER_SECOND)], "the button added a marker on the playhead");
+
+    // Moving away and clicking the row brings the playhead back to the marker.
+    h.app.session.execute("source.setPlayhead", serde_json::json!({"frame": 0})).unwrap();
+    h.frame(Vec::new());
+    h.click(egui::Id::new(("ff-source-marker", 0usize)));
+    assert_eq!(h.app.session.state.source_playhead, Tick(2 * TICKS_PER_SECOND), "the row seeks to its marker");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new(("ff-source-marker-del", 0usize)));
+    assert!(source_marker_starts(&h.app).is_empty(), "the row's delete removed the marker");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(source_marker_starts(&h.app), vec![Tick(2 * TICKS_PER_SECOND)], "deleting a source marker is undoable");
+}

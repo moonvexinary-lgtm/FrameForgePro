@@ -628,16 +628,127 @@ fn source_rate(view: &serde_json::Value) -> filmcraft_time::FrameRate {
     filmcraft_time::FrameRate::from_f64(view["fps"].as_f64().unwrap_or(24.0))
 }
 
+/// The marked span of a source, Out inclusive, clamped to the source. One rule
+/// shared by the panel, the range drag and the transport, so they cannot drift.
+pub(crate) fn selected_range(start: Tick, end: Tick, mark_in: Option<Tick>, mark_out: Option<Tick>, fd: Tick) -> filmcraft_time::TimeRange {
+    let a = mark_in.unwrap_or(start).clamp(start, end);
+    let b = mark_out.map(|o| o + fd).unwrap_or(end).clamp(a, end);
+    filmcraft_time::TimeRange::from_bounds(a, b.max(a))
+}
+
 /// The effective selected range with the marks applied (Out is inclusive).
 fn source_selected(app: &mut App) -> Option<filmcraft_time::TimeRange> {
     let view = source_inspect(app)?;
     let rate = source_rate(&view);
     let start = Tick(view["start"].as_i64()?);
     let end = Tick(view["end"].as_i64()?);
-    let a = view["markIn"].as_i64().map(Tick).unwrap_or(start).clamp(start, end);
-    let fd = rate.frame_duration();
-    let b = view["markOut"].as_i64().map(|o| Tick(o) + fd).unwrap_or(end).clamp(a, end);
-    Some(filmcraft_time::TimeRange::from_bounds(a, b.max(a)))
+    Some(selected_range(start, end, view["markIn"].as_i64().map(Tick), view["markOut"].as_i64().map(Tick), rate.frame_duration()))
+}
+
+/// The width of a Source range handle, in points.
+pub(crate) const SOURCE_RANGE_HANDLE_W: f32 = 9.0;
+
+/// The Source range bar's three grab targets, in screen coordinates. Time maps
+/// linearly from `bounds` onto `bar`, so the draw loop, the drag conversion and
+/// the tests all share one geometry.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SourceRangeRects {
+    pub in_handle: egui::Rect,
+    pub out_handle: egui::Rect,
+    /// The selected span between the handles: dragging it slides both marks.
+    pub body: egui::Rect,
+}
+
+pub(crate) fn source_range_rects(bar: egui::Rect, bounds: filmcraft_time::TimeRange, range: filmcraft_time::TimeRange) -> SourceRangeRects {
+    let span = bounds.duration.0.max(1) as f32;
+    let x = |t: Tick| (bar.left() + ((t.0 - bounds.start.0) as f32 / span) * bar.width()).clamp(bar.left(), bar.right());
+    let (a, b) = (x(range.start), x(range.end()));
+    let half = SOURCE_RANGE_HANDLE_W / 2.0;
+    SourceRangeRects {
+        in_handle: egui::Rect::from_min_max(egui::pos2(a - half, bar.top()), egui::pos2(a + half, bar.bottom())),
+        out_handle: egui::Rect::from_min_max(egui::pos2(b - half, bar.top()), egui::pos2(b + half, bar.bottom())),
+        body: egui::Rect::from_min_max(egui::pos2(a + half, bar.top()), egui::pos2((b - half).max(a + half), bar.bottom())),
+    }
+}
+
+/// Drag one edge (or the body) of the Source range by `dx` points on `bar`.
+/// The engine's `adjust_range` owns the clamping, the frame grid and the
+/// "Out is inclusive" convention; the document write is a merged project edit,
+/// so a whole drag is one undo step rather than one per frame.
+pub(crate) fn drag_source_range(app: &mut App, edge: filmcraft_engine::source_monitor::RangeEdge, dx: f32, bar: egui::Rect) {
+    let Some(view) = source_inspect(app) else { return };
+    if !view["subclip"].is_null() {
+        // A subclip's range is its definition; dragging the parent's marks
+        // would silently change what the subclip is.
+        return;
+    }
+    let item = ItemId(view["item"].as_u64().unwrap_or(0));
+    let rate = source_rate(&view);
+    let (start, end) = (Tick(view["start"].as_i64().unwrap_or(0)), Tick(view["end"].as_i64().unwrap_or(0)));
+    let bounds = filmcraft_time::TimeRange::from_bounds(start, end);
+    let current = selected_range(start, end, view["markIn"].as_i64().map(Tick), view["markOut"].as_i64().map(Tick), rate.frame_duration());
+    let span = bounds.duration.0.max(1) as f32;
+    let delta = Tick((dx / bar.width().max(1.0) * span).round() as i64);
+    if delta.0 == 0 {
+        return;
+    }
+    let Ok(next) = filmcraft_engine::source_monitor::adjust_range(bounds, current, rate, edge, delta) else { return };
+    let out = Tick(next.end().0 - rate.frame_duration().0);
+    let result = app.edit_project_merged("Mark", "source-range-drag", |project, _| {
+        let it = project.item_mut(item).ok_or_else(|| filmcraft_engine::EngineError::Other("the Source item is gone".into()))?;
+        // The marks move as `project.setMarks` would move them: the side being
+        // dragged loses its split point, and a body drag moves both sides.
+        match edge {
+            filmcraft_engine::source_monitor::RangeEdge::In => {
+                it.split.video_in = None;
+                it.split.audio_in = None;
+            }
+            filmcraft_engine::source_monitor::RangeEdge::Out => {
+                it.split.video_out = None;
+                it.split.audio_out = None;
+            }
+            filmcraft_engine::source_monitor::RangeEdge::Move => it.split = Default::default(),
+        }
+        match &mut it.kind {
+            ItemKind::Media(m) => {
+                m.mark_in = Some(next.start);
+                m.mark_out = Some(out);
+            }
+            ItemKind::Sequence(q) => {
+                let q = std::sync::Arc::make_mut(q);
+                q.mark_in = Some(next.start);
+                q.mark_out = Some(out);
+            }
+            _ => return Err(filmcraft_engine::EngineError::Other("this source cannot hold marks".into())),
+        }
+        Ok(())
+    });
+    if let Err(error) = result {
+        app.status = error.to_string();
+    }
+}
+
+/// Map a click on the Source range bar to a source tick and park the playhead
+/// there. The bar, the drag and the paint loop share this one linear mapping.
+fn seek_source(app: &mut App, bar: egui::Rect, bounds: filmcraft_time::TimeRange, pos: egui::Pos2) {
+    let span = bounds.duration.0.max(1) as f32;
+    let offset = (pos.x - bar.left()) / bar.width().max(1.0) * span;
+    let t = Tick(bounds.start.0 + offset.round() as i64).clamp(bounds.start, bounds.end());
+    source_set_playhead(app, t);
+}
+
+/// A small painted chip with an explicit id, so a scripted click reaches the
+/// Source panel's custom-painted controls by name.
+fn source_chip(ui: &mut egui::Ui, id: egui::Id, label: &str) -> egui::Response {
+    let font = egui::FontId::proportional(10.0);
+    let width = ui.painter().layout_no_wrap(label.to_string(), font.clone(), ui::TEXT_LO).size().x + 12.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let (fill, color) = if response.hovered() { (ui::BG_HOVER, ui::TEXT_HI) } else { (ui::BG_INSET, ui::TEXT_LO) };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3.0, fill);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, font, color);
+    response
 }
 
 /// Open `item` in the Source monitor. Editor state: not undoable, not dirtying.
@@ -704,6 +815,33 @@ pub(crate) fn source_mark(app: &mut App, is_in: bool) {
 pub(crate) fn source_clear(app: &mut App, command: &str) {
     let _ = app.session.execute(command, serde_json::json!({"target": "source"}));
     app.status = "Source marks cleared".to_string();
+}
+
+/// Add a Source marker on the Source playhead, named after its position in the
+/// list so an untouched marker is still identifiable. Undoable through the
+/// engine's own `markers.add`.
+pub(crate) fn source_add_marker(app: &mut App) {
+    let count = source_inspect(app).and_then(|v| v["markers"].as_array().map(Vec::len)).unwrap_or(0);
+    match app.execute("markers.add", serde_json::json!({"target": "source", "name": format!("Marker {}", count + 1)})) {
+        Ok(_) => app.status = "Source marker added".to_string(),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Step the Source playhead to the next/previous Source marker.
+pub(crate) fn source_go_marker(app: &mut App, next: bool) {
+    let command = if next { "markers.goNext" } else { "markers.goPrev" };
+    let _ = app.session.execute(command, serde_json::json!({"target": "source"}));
+}
+
+/// Remove the marker at `at`: park the Source playhead on it (the engine's
+/// `clearCurrent` deletes at the cursor) and clear it. One undo step.
+pub(crate) fn source_delete_marker(app: &mut App, at: Tick) {
+    source_set_playhead(app, at);
+    match app.execute("markers.clearCurrent", serde_json::json!({"target": "source"})) {
+        Ok(_) => app.status = "Source marker removed".to_string(),
+        Err(e) => app.status = e,
+    }
 }
 
 /// Play / pause the Source monitor. When the open media has sound the shared
@@ -2230,8 +2368,10 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
     let playing = app.source_playing;
     let source_name = app.session.project.items.get(&item).map(|i| i.name.clone()).unwrap_or_else(|| "Source".to_string());
 
-    // The picture, through the engine's own Source-monitor renderer.
-    let pic_h = (area.available_rect_before_wrap().height() - 82.0).max(60.0);
+    // The picture, through the engine's own Source-monitor renderer. The
+    // transport, the range bar, the marker strip and the range caption below it
+    // are fixed-height rows.
+    let pic_h = (area.available_rect_before_wrap().height() - 152.0).max(60.0);
     let (pic_rect, _) = area.allocate_exact_size(egui::vec2(area.available_width(), pic_h), egui::Sense::hover());
     let needs = app.source_monitor.as_ref().is_none_or(|m| m.item != item || m.time != t);
     if needs {
@@ -2287,9 +2427,56 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
             ui.label(egui::RichText::new(format!("{frames} / {total}  {:.2}s", (t - start).seconds())).size(9.5).monospace().color(ui::TEXT_LO));
         });
     });
-    let mut seek = t.0 as f64;
-    if area.add(egui::Slider::new(&mut seek, start.0 as f64..=end.0 as f64).show_value(false)).changed() {
-        source_set_playhead(app, Tick(seek.round() as i64));
+    area.add_space(2.0);
+    // The range bar: clicking the track seeks, dragging either handle sets that
+    // mark, and dragging the band between them slides both. The engine's
+    // `adjust_range` owns the clamping and the frame snapping.
+    let bounds = filmcraft_time::TimeRange::from_bounds(start, end);
+    let range = selected_range(start, end, mark_in.map(Tick), mark_out.map(Tick), rate.frame_duration());
+    let bar_width = area.available_width();
+    let (bar, _) = area.allocate_exact_size(egui::vec2(bar_width, 20.0), egui::Sense::hover());
+    let painter = area.painter().with_clip_rect(bar);
+    painter.rect_filled(bar, 2.0, ui::BG_INSET);
+    let rects = source_range_rects(bar, bounds, range);
+    let band = egui::Rect::from_min_max(egui::pos2(rects.in_handle.center().x, bar.top() + 3.0), egui::pos2(rects.out_handle.center().x, bar.bottom() - 3.0));
+    painter.rect_filled(band, 2.0, ui::ACCENT_DIM);
+    let span = bounds.duration.0.max(1) as f32;
+    let at_x = |t: Tick| (bar.left() + ((t.0 - bounds.start.0) as f32 / span) * bar.width()).clamp(bar.left(), bar.right());
+    let play_x = at_x(t);
+    painter.line_segment([egui::pos2(play_x, bar.top()), egui::pos2(play_x, bar.bottom())], egui::Stroke::new(1.0, ui::ACCENT_HI));
+    let subclip = !view["subclip"].is_null();
+    if !subclip {
+        for handle in [rects.in_handle, rects.out_handle] {
+            let grip = egui::Rect::from_center_size(handle.center(), egui::vec2(3.0, bar.height() - 2.0));
+            painter.rect_filled(grip, 1.0, ui::ACCENT);
+        }
+    }
+    // The track first, then the grab targets on top of it, so a drag on a
+    // handle wins over the seek click underneath.
+    let seek = area.interact(bar, egui::Id::new("ff-source-range"), egui::Sense::click());
+    if let Some(pos) = seek.interact_pointer_pos().filter(|_| seek.clicked()) {
+        seek_source(app, bar, bounds, pos);
+    }
+    if !subclip {
+        let in_resp = area.interact(rects.in_handle, egui::Id::new("ff-source-range-in"), egui::Sense::drag());
+        if in_resp.dragged() {
+            drag_source_range(app, filmcraft_engine::source_monitor::RangeEdge::In, in_resp.drag_delta().x, bar);
+        }
+        let out_resp = area.interact(rects.out_handle, egui::Id::new("ff-source-range-out"), egui::Sense::drag());
+        if out_resp.dragged() {
+            drag_source_range(app, filmcraft_engine::source_monitor::RangeEdge::Out, out_resp.drag_delta().x, bar);
+        }
+        let body_resp = area.interact(rects.body, egui::Id::new("ff-source-range-body"), egui::Sense::click_and_drag());
+        if body_resp.dragged() {
+            drag_source_range(app, filmcraft_engine::source_monitor::RangeEdge::Move, body_resp.drag_delta().x, bar);
+        } else if let Some(pos) = body_resp.interact_pointer_pos().filter(|_| body_resp.clicked()) {
+            seek_source(app, bar, bounds, pos);
+        }
+        if in_resp.hovered() || out_resp.hovered() {
+            area.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        } else if body_resp.hovered() {
+            area.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
     }
     area.horizontal(|ui| {
         ui.menu_button("Marks", |ui| {
@@ -2340,12 +2527,49 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
         if ui.small_button("Overwrite").on_hover_text("Overwrite with the source range at the sequence playhead").clicked() {
             source_edit(app, false);
         }
+        if source_chip(ui, egui::Id::new("ff-source-marker-add"), "+ Marker").on_hover_text("Add a Source marker on the Source playhead").clicked() {
+            source_add_marker(app);
+        }
         let range = if mark_in.is_none() && mark_out.is_none() {
             "full source".to_string()
         } else {
             source_selected(app).map(|r| format!("{:.2}s selected", r.duration.seconds())).unwrap_or_else(|| "range".to_string())
         };
         ui.label(egui::RichText::new(range).size(9.5).color(ui::TEXT_OFF));
+    });
+    // The Source marker strip: one row per marker, each seekable, each with its
+    // own delete. Both are the engine's Source-targeted commands, so undo is the
+    // engine's own history.
+    let markers = view["markers"].as_array().cloned().unwrap_or_default();
+    area.add_space(2.0);
+    egui::ScrollArea::vertical().id_salt("source-markers").max_height(40.0).auto_shrink([false, false]).show(&mut area, |ui| {
+        if markers.is_empty() {
+            ui.label(ui::hint("No source markers").size(9.0));
+        }
+        for (index, marker) in markers.iter().enumerate() {
+            let at = Tick(marker["start"].as_i64().unwrap_or(0));
+            let name = marker["name"].as_str().unwrap_or("Marker");
+            let width = ui.available_width();
+            let (row, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
+            let seek = ui.interact(row, egui::Id::new(("ff-source-marker", index)), egui::Sense::click());
+            let del_rect = egui::Rect::from_min_max(egui::pos2(row.right() - 16.0, row.top()), row.max);
+            let del = ui.interact(del_rect, egui::Id::new(("ff-source-marker-del", index)), egui::Sense::click());
+            let fill = if seek.hovered() || del.hovered() { ui::BG_HOVER } else { ui::BG_INSET };
+            ui.painter().rect_filled(row, 2.0, fill);
+            ui.painter().text(
+                egui::pos2(row.left() + 5.0, row.center().y),
+                egui::Align2::LEFT_CENTER,
+                format!("{}  {name}", marker_timecode(rate, at)),
+                egui::FontId::monospace(9.0),
+                ui::TEXT_MID,
+            );
+            ui.painter().text(del_rect.center(), egui::Align2::CENTER_CENTER, "x", egui::FontId::proportional(9.0), ui::TEXT_LO);
+            if del.clicked() {
+                source_delete_marker(app, at);
+            } else if seek.clicked() {
+                source_set_playhead(app, at);
+            }
+        }
     });
     if let Some(selected) = source_selected(app) {
         area.label(egui::RichText::new(format!("{}  -  {}", source_name, duration_text(selected.duration.seconds()))).size(9.5).color(ui::TEXT_LO));
@@ -3532,5 +3756,44 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), expected, "the file has the tested bytes");
         let _ = std::fs::remove_file(&path);
         assert!(app.status.contains("Exported 1 markers"));
+    }
+
+    #[test]
+    fn source_range_rects_place_the_handles_on_the_marks() {
+        let bar = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(400.0, 18.0));
+        let bounds = filmcraft_time::TimeRange::from_bounds(Tick::ZERO, Tick(10 * TICKS_PER_SECOND));
+        let range = filmcraft_time::TimeRange::from_bounds(Tick(2 * TICKS_PER_SECOND), Tick(6 * TICKS_PER_SECOND));
+
+        let rects = super::source_range_rects(bar, bounds, range);
+
+        // 2 s of 10 s is a fifth across a 400 px bar: x = 100 + 80.
+        assert!((rects.in_handle.center().x - 180.0).abs() < 0.5, "the In handle sits on its mark: {}", rects.in_handle.center().x);
+        // 6 s is three fifths across: x = 100 + 240.
+        assert!((rects.out_handle.center().x - 340.0).abs() < 0.5, "the Out handle sits on its mark: {}", rects.out_handle.center().x);
+        assert!(rects.body.left() >= rects.in_handle.right() - 0.01, "the body starts after the In handle");
+        assert!(rects.body.right() <= rects.out_handle.left() + 0.01, "the body ends before the Out handle");
+        assert_eq!((rects.in_handle.top(), rects.in_handle.bottom()), (bar.top(), bar.bottom()), "the handles use the full bar height");
+    }
+
+    #[test]
+    fn the_selected_range_treats_out_as_inclusive_and_clamps_to_the_source() {
+        let (start, end) = (Tick::ZERO, Tick(10 * TICKS_PER_SECOND));
+        let fd = Tick(TICKS_PER_SECOND / 24);
+
+        // No marks: the whole source, exactly as the engine's `SourceView` says.
+        let full = super::selected_range(start, end, None, None, fd);
+        assert_eq!((full.start, full.end()), (start, end));
+
+        // Out is inclusive: marking frame 47 selects through frame 47, so the
+        // exclusive end is one frame later.
+        let some = super::selected_range(start, end, Some(Tick(2 * TICKS_PER_SECOND)), Some(Tick(6 * TICKS_PER_SECOND)), fd);
+        assert_eq!((some.start, some.end()), (Tick(2 * TICKS_PER_SECOND), Tick(6 * TICKS_PER_SECOND) + fd));
+
+        // A mark past the source clamps; an inverted pair cannot produce a
+        // negative range (Out before In collapses to a zero-length span at In).
+        let clamped = super::selected_range(start, end, Some(Tick::ZERO), Some(Tick(20 * TICKS_PER_SECOND)), fd);
+        assert_eq!((clamped.start, clamped.end()), (start, end));
+        let inverted = super::selected_range(start, end, Some(Tick(8 * TICKS_PER_SECOND)), Some(Tick(TICKS_PER_SECOND)), fd);
+        assert_eq!((inverted.start, inverted.end()), (Tick(8 * TICKS_PER_SECOND), Tick(8 * TICKS_PER_SECOND)));
     }
 }

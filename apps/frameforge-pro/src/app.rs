@@ -348,6 +348,22 @@ impl App {
         Ok(result)
     }
 
+    /// Like [`App::edit_project`], but consecutive calls with the same `key`
+    /// share one undo step. A drag applies one edit per frame while the pointer
+    /// moves; this is what makes the whole gesture one Ctrl+Z.
+    pub fn edit_project_merged<R>(
+        &mut self,
+        label: &str,
+        key: &str,
+        f: impl FnOnce(&mut Project, &mut EditorState) -> filmcraft_engine::Result<R>,
+    ) -> filmcraft_engine::Result<R> {
+        let top = undo_top(&self.session);
+        let result = self.session.edit_merged(label, key, f)?;
+        self.history.note_project_step(&self.session, top);
+        self.mark_dirty();
+        Ok(result)
+    }
+
     /// Record a composition edit that has already been applied to
     /// `self.compositions`. On failure the previous state is put back, so the
     /// document and the history can never disagree.
@@ -1010,11 +1026,22 @@ impl App {
         if add_edit {
             self.add_edit_all_tracks();
         }
+        // `M`/`Shift+M` follow the open monitor: Source markers while a source
+        // is open in the Source monitor, otherwise the sequence's Program
+        // markers. (`I`/`O` already work the same way.)
         if add_marker_key {
-            crate::edit::add_marker(self);
+            if self.session.state.source_item.is_some() {
+                crate::edit::source_add_marker(self);
+            } else {
+                crate::edit::add_marker(self);
+            }
         }
         if next_marker_key {
-            crate::edit::go_marker(self, true);
+            if self.session.state.source_item.is_some() {
+                crate::edit::source_go_marker(self, true);
+            } else {
+                crate::edit::go_marker(self, true);
+            }
         }
         // `I`/`O` mark the open source clip when there is one; with no source
         // clip they mark the sequence's Program In/Out instead, so the keys
