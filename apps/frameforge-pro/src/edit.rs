@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use filmcraft_engine::Targeting;
 use filmcraft_media::generators::GeneratorSource;
 use filmcraft_media::{Generator, MediaSource};
-use filmcraft_project::{Bin, BinEntry, BinId, ClipId, ItemId, ItemKind, Label, MediaClip, MediaRef, Project, ProjectItem, Sequence, TrackId};
+use filmcraft_project::{
+    Bin, BinEntry, BinId, ClipId, ItemId, ItemKind, Label, Marker, MarkerId, MarkerKind, MediaClip, MediaRef, Project, ProjectItem, Sequence, TrackId,
+};
 use filmcraft_time::TICKS_PER_SECOND;
 use filmcraft_time::Tick;
 
@@ -204,11 +206,177 @@ pub(crate) fn markers_csv(q: &Sequence) -> String {
     out
 }
 
+/// One marker row read from CSV, before it lands in the sequence.
+struct CsvMarker {
+    name: String,
+    comment: String,
+    start: Tick,
+    duration: Tick,
+    color: Label,
+}
+
+/// Split RFC 4180 text into records. Quoted fields may hold commas, doubled
+/// quotes and line breaks; blank lines are dropped. Kept separate from the
+/// marker rules so the parser can be read on its own.
+fn csv_records(text: &str) -> Vec<Vec<String>> {
+    // A char vector rather than a peekable iterator: quotes and CRLF both need
+    // one-character lookahead, and an index keeps the state machine flat.
+    let chars: Vec<char> = text.chars().collect();
+    let mut records: Vec<Vec<String>> = Vec::new();
+    let mut record: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut touched = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
+        if in_quotes {
+            if c == '"' {
+                if chars.get(i) == Some(&'"') {
+                    field.push('"');
+                    i += 1;
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+            continue;
+        }
+        match c {
+            '"' if field.is_empty() => {
+                in_quotes = true;
+                touched = true;
+            }
+            ',' => {
+                record.push(std::mem::take(&mut field));
+                touched = true;
+            }
+            '\r' | '\n' => {
+                if c == '\r' && chars.get(i) == Some(&'\n') {
+                    i += 1;
+                }
+                if touched || !field.is_empty() {
+                    record.push(std::mem::take(&mut field));
+                    records.push(std::mem::take(&mut record));
+                }
+                touched = false;
+            }
+            _ => {
+                field.push(c);
+                touched = true;
+            }
+        }
+    }
+    if touched || !field.is_empty() {
+        record.push(field);
+        records.push(record);
+    }
+    records
+}
+
+/// Read marker rows from the exported CSV format: `name, comment,
+/// start_ticks, duration_ticks, start_timecode, label`, with the header
+/// optional. `start_ticks` wins when both start columns are filled; the
+/// timecode is parsed at the sequence rate otherwise. Texts are kept verbatim
+/// (quotes are not trimmed); numbers and labels are strict, and an error names
+/// the spreadsheet row so a bad file can be fixed.
+fn parse_markers_csv(text: &str, rate: filmcraft_time::FrameRate) -> Result<Vec<CsvMarker>, String> {
+    let records = csv_records(text);
+    let has_header = records.first().and_then(|r| r.first()).is_some_and(|f| f.trim().eq_ignore_ascii_case("name"));
+    let offset = usize::from(has_header);
+    let rows = if has_header { &records[1..] } else { &records[..] };
+    let mut out = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let row_no = index + offset + 1;
+        let field = |n: usize| row.get(n).map(|s| s.trim()).unwrap_or("");
+        let name = row.first().cloned().unwrap_or_default();
+        let comment = row.get(1).cloned().unwrap_or_default();
+        let start = if field(2).is_empty() {
+            let timecode = field(4);
+            if timecode.is_empty() {
+                return Err(format!("row {row_no}: no start_ticks or start_timecode"));
+            }
+            let frames = filmcraft_time::parse_timecode(timecode, rate, false, 0).map_err(|e| format!("row {row_no}: bad timecode `{timecode}`: {e}"))?;
+            rate.tick_of(frames)
+        } else {
+            let ticks: i64 = field(2).parse().map_err(|_| format!("row {row_no}: bad start_ticks `{}`", field(2)))?;
+            if ticks < 0 {
+                return Err(format!("row {row_no}: start_ticks is negative"));
+            }
+            Tick(ticks)
+        };
+        let duration = if field(3).is_empty() {
+            Tick::ZERO
+        } else {
+            let ticks: i64 = field(3).parse().map_err(|_| format!("row {row_no}: bad duration_ticks `{}`", field(3)))?;
+            if ticks < 0 {
+                return Err(format!("row {row_no}: duration_ticks is negative"));
+            }
+            Tick(ticks)
+        };
+        let color =
+            if field(5).is_empty() { Label::Green } else { Label::from_name(field(5)).ok_or_else(|| format!("row {row_no}: unknown label `{}`", field(5)))? };
+        out.push(CsvMarker { name, comment, start, duration, color });
+    }
+    Ok(out)
+}
+
 /// Import sequence markers from the exported CSV format (RFC 4180 text).
 /// Returns how many markers were added; one undoable project edit adds them all,
 /// and a bad row aborts the whole import.
-pub(crate) fn import_markers_csv_text(_app: &mut App, _text: &str) -> Result<usize, String> {
-    Err("marker CSV import is not implemented yet".to_string())
+pub(crate) fn import_markers_csv_text(app: &mut App, text: &str) -> Result<usize, String> {
+    let Some(seq_id) = app.sequence_id() else { return Err("No sequence".to_string()) };
+    let rate = app.session.sequence_rate();
+    let parsed = parse_markers_csv(text, rate)?;
+    if parsed.is_empty() {
+        return Err("The CSV has no marker rows".to_string());
+    }
+    let count = parsed.len();
+    let result = app.edit_project("Import Markers", move |project, _| {
+        let ids: Vec<MarkerId> = (0..parsed.len()).map(|_| MarkerId(project.alloc_id())).collect();
+        let item = project.items.get_mut(&seq_id).ok_or_else(|| filmcraft_engine::EngineError::Other("the sequence is gone".into()))?;
+        let ItemKind::Sequence(seq) = &mut item.kind else {
+            return Err(filmcraft_engine::EngineError::Other("the active item is not a sequence".into()));
+        };
+        let q = std::sync::Arc::make_mut(seq);
+        for (id, m) in ids.into_iter().zip(parsed) {
+            q.markers.push(Marker { id, start: m.start, duration: m.duration, name: m.name, comment: m.comment, kind: MarkerKind::Comment, color: m.color });
+        }
+        q.markers.sort_by_key(|m| m.start);
+        Ok(())
+    });
+    match result {
+        Ok(()) => {
+            app.status = format!("Imported {count} markers");
+            Ok(count)
+        }
+        Err(error) => {
+            let message = error.to_string();
+            app.status = message.clone();
+            Err(message)
+        }
+    }
+}
+
+/// Import the sequence markers from a CSV chosen by the user. The parse runs
+/// before the project edit, so a bad file leaves the sequence untouched.
+pub(crate) fn import_markers_csv(app: &mut App) {
+    let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).pick_file() else {
+        return;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => {
+            app.status = format!("Marker CSV import failed: {e}");
+            return;
+        }
+    };
+    match import_markers_csv_text(app, &text) {
+        Ok(count) => app.status = format!("Imported {count} markers from {}", path.display()),
+        Err(e) => app.status = format!("Marker CSV import failed: {e}"),
+    }
 }
 
 /// Write the sequence markers to `path`; returns the number of markers written.
@@ -954,6 +1122,66 @@ pub(crate) fn drag_source_range(app: &mut App, edge: filmcraft_engine::source_mo
     });
     if let Err(error) = result {
         app.status = error.to_string();
+    }
+}
+
+/// The width of a Source marker tab on the range bar, in points.
+pub(crate) const SOURCE_MARKER_HANDLE_W: f32 = 7.0;
+
+/// The bar grab targets for the Source markers. The mapping matches
+/// `source_range_rects`; the targets own just the bar's top 8 points, so the
+/// range's In/Out grips keep the rest of the bar.
+pub(crate) fn source_marker_rects(bar: egui::Rect, bounds: filmcraft_time::TimeRange, starts: &[Tick]) -> Vec<egui::Rect> {
+    let span = bounds.duration.0.max(1) as f32;
+    let half = SOURCE_MARKER_HANDLE_W / 2.0;
+    starts
+        .iter()
+        .map(|t| {
+            let x = (bar.left() + ((t.0 - bounds.start.0) as f32 / span) * bar.width()).clamp(bar.left(), bar.right());
+            egui::Rect::from_min_max(egui::pos2(x - half, bar.top()), egui::pos2(x + half, bar.top() + 8.0))
+        })
+        .collect()
+}
+
+/// Move one Source marker by `dx` points on the range bar. The start lands on
+/// the source frame grid and is clamped to the source bounds; the marker keeps
+/// its id, name, comment, length and colour, and the write is a merged project
+/// edit, so a whole drag is one undo step.
+pub(crate) fn drag_source_marker(app: &mut App, marker_id: u64, dx: f32, bar: egui::Rect) {
+    let Some(view) = source_inspect(app) else { return };
+    let media = ItemId(view["media"].as_u64().unwrap_or(0));
+    let rate = source_rate(&view);
+    let (start, end) = (Tick(view["start"].as_i64().unwrap_or(0)), Tick(view["end"].as_i64().unwrap_or(0)));
+    let Some(current) =
+        view["markers"].as_array().and_then(|markers| markers.iter().find(|m| m["id"].as_u64() == Some(marker_id)).and_then(|m| m["start"].as_i64())).map(Tick)
+    else {
+        return;
+    };
+    let span = (end.0 - start.0).max(1) as f32;
+    let delta = Tick((dx / bar.width().max(1.0) * span).round() as i64);
+    if delta.0 == 0 {
+        return;
+    }
+    let next = rate.snap_nearest(current + delta).clamp(start, end);
+    if next == current {
+        return;
+    }
+    let result = app.edit_project_merged("Move Source Marker", "source-marker-drag", |project, _| {
+        let item = project.item_mut(media).ok_or_else(|| filmcraft_engine::EngineError::Other("the Source item is gone".into()))?;
+        let list = match &mut item.kind {
+            ItemKind::Media(m) => &mut m.markers,
+            ItemKind::Sequence(q) => &mut std::sync::Arc::make_mut(q).markers,
+            _ => return Err(filmcraft_engine::EngineError::Other("the Source item has no markers".into())),
+        };
+        let marker =
+            list.iter_mut().find(|m| m.id == MarkerId(marker_id)).ok_or_else(|| filmcraft_engine::EngineError::Other("the Source marker is gone".into()))?;
+        marker.start = next;
+        list.sort_by_key(|m| m.start);
+        Ok(())
+    });
+    match result {
+        Ok(()) => app.status = "Source marker moved".to_string(),
+        Err(error) => app.status = error.to_string(),
     }
 }
 
@@ -2102,6 +2330,10 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 update_marker_at_playhead(app);
                 ui.close();
             }
+            if ui.add_enabled(app.sequence().is_some(), egui::Button::new("Import Markers CSV...")).clicked() {
+                import_markers_csv(app);
+                ui.close();
+            }
             if ui.add_enabled(app.sequence().is_some_and(|q| !q.markers.is_empty()), egui::Button::new("Export Markers as CSV...")).clicked() {
                 export_markers_csv(app);
                 ui.close();
@@ -2669,6 +2901,7 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
     let mark_out = view["markOut"].as_i64();
     let playing = app.source_playing;
     let source_name = app.session.project.items.get(&item).map(|i| i.name.clone()).unwrap_or_else(|| "Source".to_string());
+    let source_markers = view["markers"].as_array().cloned().unwrap_or_default();
 
     // The picture, through the engine's own Source-monitor renderer. The
     // transport, the range bar, the marker strip and the range caption below it
@@ -2747,6 +2980,15 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
     let play_x = at_x(t);
     painter.line_segment([egui::pos2(play_x, bar.top()), egui::pos2(play_x, bar.bottom())], egui::Stroke::new(1.0, ui::ACCENT_HI));
     let subclip = !view["subclip"].is_null();
+    // Source markers: a warm stem with a small tab in the bar's top band, so
+    // they read over the accent band and the playhead without hiding either.
+    let marker_starts: Vec<Tick> = source_markers.iter().map(|m| Tick(m["start"].as_i64().unwrap_or(0))).collect();
+    let marker_rects = source_marker_rects(bar, bounds, &marker_starts);
+    for (_, rect) in source_markers.iter().zip(&marker_rects) {
+        let x = rect.center().x;
+        painter.line_segment([egui::pos2(x, bar.top()), egui::pos2(x, bar.bottom())], egui::Stroke::new(1.0, ui::WARN));
+        painter.rect_filled(egui::Rect::from_center_size(egui::pos2(x, bar.top() + 4.0), egui::vec2(SOURCE_MARKER_HANDLE_W, 5.0)), 1.0, ui::WARN);
+    }
     if !subclip {
         for handle in [rects.in_handle, rects.out_handle] {
             let grip = egui::Rect::from_center_size(handle.center(), egui::vec2(3.0, bar.height() - 2.0));
@@ -2778,6 +3020,18 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
             area.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         } else if body_resp.hovered() {
             area.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+    }
+    // Marker handles last: their top-band grab targets sit over the bar's seek
+    // click and the range body, so pressing a marker is a marker drag.
+    for (marker, rect) in source_markers.iter().zip(&marker_rects) {
+        let Some(marker_id) = marker["id"].as_u64() else { continue };
+        let resp = area.interact(*rect, egui::Id::new(("ff-source-marker-handle", marker_id)), egui::Sense::drag());
+        if resp.dragged() {
+            drag_source_marker(app, marker_id, resp.drag_delta().x, bar);
+        }
+        if resp.hovered() {
+            area.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
     }
     area.horizontal(|ui| {
