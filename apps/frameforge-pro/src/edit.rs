@@ -264,6 +264,63 @@ pub(crate) fn program_clear_in_out(app: &mut App) {
     }
 }
 
+/// The width of a Program In/Out handle on the ruler, in points.
+pub(crate) const SEQUENCE_MARK_HANDLE_W: f32 = 9.0;
+
+/// The ruler grab targets for the sequence (Program) In and Out marks. Time
+/// maps linearly from the timeline's left edge at `zoom` points per second, the
+/// same mapping the ruler, the playhead and `timeline_clip_rect` use.
+pub(crate) fn sequence_mark_rects(alloc: egui::Rect, mark_in: Option<Tick>, mark_out: Option<Tick>, zoom: f32) -> (Option<egui::Rect>, Option<egui::Rect>) {
+    let handle = |t: Tick| {
+        let x = alloc.left() + t.seconds() as f32 * zoom;
+        let half = SEQUENCE_MARK_HANDLE_W / 2.0;
+        egui::Rect::from_min_max(egui::pos2(x - half, alloc.top()), egui::pos2(x + half, alloc.top() + RULER_H))
+    };
+    (mark_in.map(handle), mark_out.map(handle))
+}
+
+/// Drag the sequence (Program) In or Out mark by `dx` points on the ruler. The
+/// mark lands on the sequence frame grid and is clamped so In never passes Out
+/// (and Out never passes In, instead of the engine's `markers.markIn`/`markOut`
+/// clearing the other end). The write is a merged project edit, so a whole drag
+/// is one undo step; moving a mark clears its split points exactly as those
+/// commands do.
+pub(crate) fn drag_sequence_mark(app: &mut App, is_in: bool, dx: f32, zoom: f32) {
+    let Some(seq_id) = app.sequence_id() else { return };
+    let Some(sequence) = app.session.active_sequence() else { return };
+    let current = if is_in { sequence.mark_in } else { sequence.mark_out };
+    let Some(current) = current else { return };
+    let other = if is_in { sequence.mark_out } else { sequence.mark_in };
+    let end = app.sequence_end();
+    let rate = app.session.sequence_rate();
+    let delta = Tick((dx as f64 / zoom.max(0.01) as f64 * TICKS_PER_SECOND as f64).round() as i64);
+    if delta.0 == 0 {
+        return;
+    }
+    let snapped = rate.snap_nearest(current + delta);
+    let next = if is_in { snapped.clamp(Tick::ZERO, other.unwrap_or(end)) } else { snapped.clamp(other.unwrap_or(Tick::ZERO), end) };
+    if next == current {
+        return;
+    }
+    let result = app.edit_project_merged("Mark", "sequence-range-drag", |project, _| {
+        let q = project.sequence_mut(seq_id).ok_or_else(|| filmcraft_engine::EngineError::Other("the sequence is gone".into()))?;
+        if is_in {
+            q.mark_in = Some(next);
+            q.split.video_in = None;
+            q.split.audio_in = None;
+        } else {
+            q.mark_out = Some(next);
+            q.split.video_out = None;
+            q.split.audio_out = None;
+        }
+        Ok(())
+    });
+    match result {
+        Ok(()) => app.status = if is_in { "Sequence In moved".to_string() } else { "Sequence Out moved".to_string() },
+        Err(error) => app.status = error.to_string(),
+    }
+}
+
 /// Lift the sequence In/Out range through `sequence.lift`: the targeted tracks
 /// lose the range and keep a gap. The marks stay set.
 pub(crate) fn lift_in_out(app: &mut App) {
@@ -2037,6 +2094,20 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
     }
 
+    // The Program In/Out range: a faint band across the ruler between the
+    // marks, then the two grab handles painted over the markers below.
+    let (in_rect, out_rect) = sequence_mark_rects(alloc, s.mark_in, s.mark_out, zoom);
+    if let (Some(a), Some(b)) = (s.mark_in, s.mark_out) {
+        let (x1, x2) = (to_x(a), to_x(b));
+        if x2 > x1 {
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(x1, alloc.top() + 1.0), egui::pos2(x2, alloc.top() + RULER_H - 1.0)),
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(53, 194, 181, 40),
+            );
+        }
+    }
+
     // Sequence markers live in the ruler: a coloured stem with a round head.
     let mut marker_hits: Vec<(f32, Tick, String)> = Vec::new();
     for m in &s.markers {
@@ -2048,6 +2119,15 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         painter.line_segment([egui::pos2(x, alloc.top() + 3.0), egui::pos2(x, alloc.top() + RULER_H)], egui::Stroke::new(2.0, color));
         painter.circle_filled(egui::pos2(x, alloc.top() + 3.0), 3.0, color);
         marker_hits.push((x, m.start, if m.name.is_empty() { format!("marker {}", m.id.0) } else { m.name.clone() }));
+    }
+
+    // Handles last, so a marker at the same frame cannot hide one. In is the
+    // accent colour; Out is amber, far enough from the red playhead.
+    for (rect, color) in [(in_rect, ui::ACCENT), (out_rect, egui::Color32::from_rgb(214, 155, 68))] {
+        let Some(rect) = rect else { continue };
+        let x = rect.center().x;
+        painter.line_segment([egui::pos2(x, alloc.top() + 1.0), egui::pos2(x, alloc.top() + RULER_H)], egui::Stroke::new(2.0, color));
+        painter.rect_filled(egui::Rect::from_center_size(egui::pos2(x, alloc.top() + 4.0), egui::vec2(SEQUENCE_MARK_HANDLE_W, 7.0)), 1.0, color);
     }
 
     let mut hit_rects: Vec<(egui::Rect, filmcraft_project::ClipId)> = Vec::new();
@@ -2185,6 +2265,21 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
     let px = to_x(app.playhead);
     painter.line_segment([egui::pos2(px, alloc.top()), egui::pos2(px, alloc.bottom())], egui::Stroke::new(2.0, ui::DANGER));
+
+    // Program In/Out are grabbed on the ruler. Registering them after the body
+    // widget puts them on top, so pressing a handle is a mark drag rather than
+    // a clip drag or a scrub.
+    for (rect, is_in) in [(in_rect, true), (out_rect, false)] {
+        let Some(rect) = rect else { continue };
+        let id = if is_in { egui::Id::new("ff-sequence-mark-in") } else { egui::Id::new("ff-sequence-mark-out") };
+        let handle = ui.interact(rect, id, egui::Sense::drag());
+        if handle.dragged() {
+            drag_sequence_mark(app, is_in, handle.drag_delta().x, zoom);
+        }
+        if handle.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+    }
 
     // Interaction: drag a clip to move it, its edges to trim (engine
     // commands on release — one undo step); click empty space to scrub.
