@@ -471,6 +471,42 @@ clock design.
 - **CI**: run `42429090124` — fmt, clippy `-D warnings`, check, **95 tests**,
   release build and the binary self-test.
 
+## T15 - the Source range bar and Source markers (CI-verified, run 42499750102)
+
+T5's Source range was two marks set only from the I/O keys, and the panel's
+transport had a plain seek slider. The panel now shows the marked span as an
+editable bar and the source's markers as rows.
+
+- **Geometry** (`edit.rs`): `selected_range(start, end, mark_in, mark_out, fd)`
+  is the one "Out is inclusive, clamp to the source" rule shared by the
+  transport, the bar and the drag; `source_range_rects` maps that range onto the
+  bar and returns the two handle rects plus the body between them, so the draw
+  loop, the conversion and the tests share one geometry.
+- **Gestures**: clicking the track (or the band) seeks; dragging a handle sets
+  that mark; dragging the band slides both. `drag_source_range` asks the
+  engine's `source_monitor::adjust_range` for the clamped, frame-snapped range,
+  then writes it with `App::edit_project_merged("Mark", "source-range-drag", …)`
+  so every frame of one drag joins the same undo step. Moving a mark clears the
+  matching split points, exactly as `project.setMarks` does. A subclip's range
+  is its definition, so its handles are neither drawn nor draggable.
+- **Markers**: a `+ Marker` chip calls the engine's `markers.add` with
+  `target: "source"`; the strip below lists the open source's markers, seeks on
+  a row click and seeks then `clearCurrent` on the row's ×. Every command is the
+  engine's Source-targeted one, so the list cannot drift from the document and
+  the delete is undoable. `M`/`Shift+M` now follow the open monitor: source
+  markers while a source is open, program markers otherwise.
+- **Tests** (five): the handles land on 2 s/6 s of a 10 s bar; `selected_range`
+  with no marks, an inclusive Out, a past-the-end Out and an inverted pair; and
+  three headless gestures — an In-handle drag moving the mark one second with
+  one Ctrl+Z restoring it, a body drag moving both marks one second, and the
+  marker strip adding, seeking and deleting with the delete undone.
+- **Limitations**: the Source panel has no marker drag or import; a second drag
+  with no other edit between reuses the engine's merge key, so two such drags
+  share an undo step; and the `M`/`Shift+M` Source routing is code-inspected (the
+  program-marker key test runs with no source open).
+- **CI**: run `42499750102` — fmt, clippy `-D warnings`, check, **100 tests**,
+  release build and the binary self-test.
+
 ## T6 - Ripple delete with linked A/V and marker ripple (CI-verified, run 40163011141)
 
 `Shift+Delete` and the timeline **Ripple Delete** button call the engine's real
@@ -1167,6 +1203,7 @@ with a real, user-installed runtime.
 | T12 | Marker CSV export with RFC 4180 quoting, exact ticks, padded start timecode and a byte-for-byte file test | CI-verified, run 40260600879 |
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
 | T14 | Source-monitor audio: the open clip's own sound through a `play_item` mix that shares the Program stream, clock and silent fallback, with the render loop, item-audio fold and advance boundary tested without a device | CI-verified, run 42429090124 |
+| T15 | Source range bar and marker strip: click-to-seek, drag either In/Out handle or the whole band through the engine's `adjust_range` with one undo step per gesture, plus a marker list that adds, seeks and undoably deletes through the Source-targeted commands | CI-verified, run 42499750102 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
