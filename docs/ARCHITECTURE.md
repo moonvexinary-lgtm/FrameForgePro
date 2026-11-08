@@ -541,6 +541,37 @@ either end.
 - **CI**: run `42506032070` - fmt, clippy `-D warnings`, check, **103 tests**,
   release build and the binary self-test.
 
+## T17 - split video/audio In/Out (CI-verified, run 42527534314)
+
+T16 moved the ordinary Program marks, but the engine's video-only and
+audio-only split points had no UI. Both now have one.
+
+- **Chips** (`edit.rs`): the timeline's second header row carries four painted
+  chips (V In/V Out/A In/A Out). `program_split_mark` snaps the playhead and
+  runs `markers.markSplitVideoIn`/`...VideoOut`/`...AudioIn`/`...AudioOut`, so
+  each is one undo step. `source_chip` is renamed `chip` and reused.
+- **Geometry**: `sequence_split_rects` puts video points in the ruler's top
+  half and audio points in the bottom half, so points at the same frame stay
+  separately grabbable; it shares the ruler's linear time-to-pixels mapping.
+- **Paint**: the tabs are painted last, in channel colours (`CLIP_VIDEO_HI`,
+  `CLIP_AUDIO_HI`), over the Program handles.
+- **Gestures**: `drag_split_mark` frame-snaps a tab and clamps it at the
+  channel's *effective* opposite - its split counterpart, or the ordinary
+  Program mark it inherits - instead of clearing it the way the engine's
+  `Side::set` would. The write is one merged project edit ("Mark Split",
+  "sequence-split-drag"), so a whole drag is one undo step.
+- **Tests** (three `ui_tests`): the chips set a video-only In and an audio-only
+  Out and undo the latter; the video In handle drags one second and leaves the
+  other three points alone, with one-step undo; and the audio Out dragged five
+  seconds left stops on the audio In.
+- **Limitations**: the engine's `sequence.lift`/`extract` and the export
+  `in_out_range` ignore split marks, so they are display/navigation only today;
+  source-side split marks (the engine's `target: "source"`) still have no UI;
+  and at a shared frame a split tab wins the grab over the Program handle
+  beneath it.
+- **CI**: run `42527534314` - fmt, clippy `-D warnings`, check, **106 tests**,
+  release build and the binary self-test.
+
 ## T6 - Ripple delete with linked A/V and marker ripple (CI-verified, run 40163011141)
 
 `Shift+Delete` and the timeline **Ripple Delete** button call the engine's real
@@ -1239,6 +1270,7 @@ with a real, user-installed runtime.
 | T14 | Source-monitor audio: the open clip's own sound through a `play_item` mix that shares the Program stream, clock and silent fallback, with the render loop, item-audio fold and advance boundary tested without a device | CI-verified, run 42429090124 |
 | T15 | Source range bar and marker strip: click-to-seek, drag either In/Out handle or the whole band through the engine's `adjust_range` with one undo step per gesture, plus a marker list that adds, seeks and undoably deletes through the Source-targeted commands | CI-verified, run 42499750102 |
 | T16 | Sequence In/Out ruler drag: the Program range paints as a band with an In and an Out handle, each drag frame-snaps and clamps at the other mark through a merged project edit with one undo per gesture | CI-verified, run 42506032070 |
+| T17 | Split video/audio In/Out: four header chips run the engine's `markers.markSplit*` at the playhead, and channel-coloured ruler tabs drag through one merged edit, clamping at the channel's effective opposite | CI-verified, run 42527534314 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
