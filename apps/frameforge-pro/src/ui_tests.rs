@@ -703,6 +703,77 @@ fn dragging_the_sequence_out_before_the_in_clamps_at_the_in() {
     );
 }
 
+// ---- sequence split (video/audio) In/Out -----------------------------------
+
+/// The sequence's four split points, in the ruler's order: video In, video Out,
+/// audio In, audio Out.
+fn sequence_split(app: &App) -> (Option<Tick>, Option<Tick>, Option<Tick>, Option<Tick>) {
+    app.sequence().map(|q| (q.split.video_in, q.split.video_out, q.split.audio_in, q.split.audio_out)).unwrap_or((None, None, None, None))
+}
+
+#[test]
+fn the_split_chips_set_video_and_audio_marks_and_undo() {
+    let (mut h, _) = seeded();
+    assert_eq!(sequence_split(&h.app), (None, None, None, None), "the fixture starts with no split marks");
+    assert!(h.rect_of(egui::Id::new("ff-sequence-split-handle-video-in")).is_none(), "no split handle is painted without a mark");
+
+    h.app.playhead = Tick(2 * TICKS_PER_SECOND);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-sequence-split-video-in"));
+    assert_eq!(sequence_split(&h.app).0, Some(Tick(2 * TICKS_PER_SECOND)), "the chip set a video-only In at the playhead");
+
+    h.app.playhead = Tick(6 * TICKS_PER_SECOND);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-sequence-split-audio-out"));
+    assert_eq!(sequence_split(&h.app).3, Some(Tick(6 * TICKS_PER_SECOND)), "the audio Out chip set its mark");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(sequence_split(&h.app).3, None, "a split mark is undoable");
+    assert_eq!(sequence_split(&h.app).0, Some(Tick(2 * TICKS_PER_SECOND)), "the undo removed only the last split");
+}
+
+#[test]
+fn dragging_the_split_video_in_handle_moves_only_that_mark_and_one_undo_restores_it() {
+    let (mut h, _) = seeded();
+    // A video-only range plus an audio-only In, through the engine commands.
+    h.app.execute("markers.markSplitVideoIn", serde_json::json!({"time": 2 * TICKS_PER_SECOND})).unwrap();
+    h.app.execute("markers.markSplitVideoOut", serde_json::json!({"time": 6 * TICKS_PER_SECOND})).unwrap();
+    h.app.execute("markers.markSplitAudioIn", serde_json::json!({"time": TICKS_PER_SECOND})).unwrap();
+    h.frame(Vec::new());
+    let before = sequence_split(&h.app);
+
+    let body = h.rect_of(egui::Id::new("ff-timeline-body")).expect("the timeline body registers `ff-timeline-body`");
+    let handle = h.rect_of(egui::Id::new("ff-sequence-split-handle-video-in")).expect("the video In split handle is laid out");
+    let at_two = body.left() + 2.0 * h.app.zoom;
+    assert!((handle.center().x - at_two).abs() < 1.5, "the video In handle sits on the 2 s mark");
+    let step = egui::vec2(h.app.zoom, 0.0);
+
+    h.drag(handle.center(), &[handle.center() + step]);
+
+    let after = sequence_split(&h.app);
+    assert_eq!(after.0, Some(Tick(3 * TICKS_PER_SECOND)), "dragging the video In split moved it by one second");
+    assert_eq!((after.1, after.2, after.3), (before.1, before.2, before.3), "the other channel and the video Out stayed put");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(sequence_split(&h.app), before, "the whole drag is one undo step");
+}
+
+#[test]
+fn dragging_the_split_audio_out_before_its_in_clamps_at_the_channel_in() {
+    let (mut h, _) = seeded();
+    h.app.execute("markers.markSplitAudioIn", serde_json::json!({"time": 2 * TICKS_PER_SECOND})).unwrap();
+    h.app.execute("markers.markSplitAudioOut", serde_json::json!({"time": 6 * TICKS_PER_SECOND})).unwrap();
+    h.frame(Vec::new());
+
+    let handle = h.rect_of(egui::Id::new("ff-sequence-split-handle-audio-out")).expect("the audio Out split handle is laid out");
+    let back_five = egui::vec2(-5.0 * h.app.zoom, 0.0);
+
+    h.drag(handle.center(), &[handle.center() + back_five]);
+
+    let split = sequence_split(&h.app);
+    assert_eq!((split.2, split.3), (Some(Tick(2 * TICKS_PER_SECOND)), Some(Tick(2 * TICKS_PER_SECOND))), "the audio Out stopped on the audio In");
+}
+
 #[test]
 fn the_source_marker_strip_adds_seeks_and_deletes() {
     let (mut h, item) = seeded();
