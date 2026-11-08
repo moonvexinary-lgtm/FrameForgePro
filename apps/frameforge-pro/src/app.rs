@@ -108,10 +108,15 @@ pub struct App {
     pub bin_selection: Option<ItemId>,
     /// The cached Source-monitor texture and what it was rendered from.
     pub source_monitor: Option<SourceMonitor>,
-    /// Source-monitor playback: a video-only wall clock (the audio clock is
-    /// bound to the Program monitor's sequence).
+    /// Source-monitor playback. With sound the Source playhead follows the
+    /// audio clock (the shared output stream); without it a wall clock stands in.
     pub source_playing: bool,
     pub source_last: Option<Instant>,
+    /// True while the shared audio stream drives Source playback.
+    pub source_audio: bool,
+    /// The Source playhead when the audio clock started, so `player.position()`
+    /// (elapsed device frames) lands on real source time.
+    pub source_clock_start: Tick,
     pub seq: Option<ItemId>,
     pub status: String,
     pub export: ExportState,
@@ -242,6 +247,8 @@ impl App {
             source_monitor: None,
             source_playing: false,
             source_last: None,
+            source_audio: false,
+            source_clock_start: Tick::ZERO,
             effects_item: None,
             selected_effect: None,
             effect_search: String::new(),
@@ -780,6 +787,10 @@ impl App {
 
     fn start_playback(&mut self) {
         let Some(seq) = self.sequence_id() else { return };
+        // Program and Source share one output stream: starting Program takes it.
+        if self.source_playing {
+            crate::edit::source_stop(self);
+        }
         let Some(sources) = self.built_sources() else {
             self.status = "Cannot build media sources".to_string();
             return;
@@ -804,7 +815,7 @@ impl App {
         }
     }
 
-    fn stop_playback(&mut self) {
+    pub(crate) fn stop_playback(&mut self) {
         self.player.stop();
         self.playing = false;
         self.last = None;

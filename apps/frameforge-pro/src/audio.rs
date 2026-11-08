@@ -1,7 +1,9 @@
 //! Audio playback: a cpal output stream driven by a worker thread that
-//! renders the timeline mix through the editing engine's mixer graph. The
-//! samples the sound card consumes are the playback clock — the playhead is
-//! exactly where the audio is (upstream's design, minimal form).
+//! renders through the editing engine's mixer graph. The samples the sound card
+//! consumes are the playback clock — the playhead is exactly where the audio is
+//! (upstream's design, minimal form). Two mixes share one stream: the Program
+//! monitor plays the sequence ([`Player::play`]) and the Source monitor plays
+//! one media item's own sound ([`Player::play_item`]).
 //!
 //! The stream requests the sequence's rate (48 kHz) stereo f32; when the
 //! device insists on another rate the worker resamples linearly and the clock
@@ -15,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use filmcraft_project::{ItemId, Project};
+use filmcraft_render::SourceProvider;
 use filmcraft_render::audio::mix_sequence;
 use filmcraft_time::Tick;
 use frameforge_bridge::ProjectSources;
@@ -24,6 +27,66 @@ const CHUNK: usize = 4800;
 /// Queued chunks the callback may hold ahead of the playhead.
 const QUEUE_DEPTH: usize = 6;
 const SEQUENCE_RATE: u32 = 48_000;
+
+/// Whether `item` can make sound for Source-monitor auditioning: media that is
+/// not offline and declares an audio stream. Pure, so the transport's decision
+/// to play with sound or fall back to silence is testable without a device.
+pub fn item_has_audio(project: &Project, item: ItemId) -> bool {
+    project.item(item).and_then(|it| it.as_media()).is_some_and(|media| !media.offline && media.info.has_audio())
+}
+
+/// `frames` interleaved stereo samples of `item`'s own media audio starting at
+/// `start_sample` (the sequence rate), for Source-monitor auditioning. Silence
+/// when the item has no source or the decode fails: auditioning never edits the
+/// project and never panics on a missing or unsupported file. A source with more
+/// than two channels is monitored through its first pair — the Program monitor
+/// owns the full downmix.
+pub fn item_audio(sources: &ProjectSources, item: ItemId, start_sample: i64, frames: usize) -> Vec<f32> {
+    let Some(source) = sources.source(item) else {
+        return vec![0.0; frames * 2];
+    };
+    let Ok(buffer) = source.audio(start_sample, frames, SEQUENCE_RATE) else {
+        return vec![0.0; frames * 2];
+    };
+    let count = buffer.frames();
+    let left = buffer.channels.first();
+    let right = buffer.channels.get(1);
+    let mut out = Vec::with_capacity(count * 2);
+    for i in 0..count {
+        let l = left.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+        let r = right.and_then(|c| c.get(i)).copied().unwrap_or(l);
+        out.push(l);
+        out.push(r);
+    }
+    out
+}
+
+/// Render `[start_sample, end_sample)` of `mix` (interleaved stereo at the
+/// sequence rate), converted to the device's rate and channel count and handed
+/// to `emit` one chunk at a time until `emit` refuses or the range ends. The
+/// sound card's callback is `emit` in production; a test passes a local
+/// collector, so the whole render/convert queue is exercised without a device.
+fn render_into(
+    mix: impl Fn(i64, usize) -> Vec<f32>,
+    start_sample: u64,
+    end_sample: u64,
+    device_rate: u64,
+    channels: u16,
+    mut emit: impl FnMut(Vec<f32>) -> bool,
+) {
+    let rate = u64::from(SEQUENCE_RATE);
+    let mut sent = start_sample;
+    while sent < end_sample {
+        let frames = CHUNK.min((end_sample - sent) as usize);
+        let stereo = mix(sent as i64, frames);
+        let out = if device_rate == rate { stereo } else { resample(&stereo, rate, device_rate) };
+        let out = if channels == 2 { out } else { stereo_pairs(&out, channels) };
+        if !emit(out) {
+            break;
+        }
+        sent += frames as u64;
+    }
+}
 
 /// The callback's queue: the channel end plus the half-consumed chunk.
 struct Slot {
@@ -75,6 +138,22 @@ impl Player {
     /// Returns why playback is impossible (the caller falls back to the wall
     /// clock — honestly, silently).
     pub fn play(&mut self, project: Arc<Project>, sources: ProjectSources, seq: ItemId, start: Tick, end: Tick) -> Result<(), String> {
+        self.start(start, end, move |sent, frames| {
+            let Some(seq_ref) = project.items.get(&seq).and_then(|it| it.as_sequence()) else { return Vec::new() };
+            mix_sequence(&project, seq_ref, sent, frames, &sources).interleaved()
+        })
+    }
+
+    /// Play one media item's own sound, for the Source monitor. Same stream,
+    /// clock and fallback as [`Player::play`]; only the mix differs, so a Source
+    /// audition never runs through the sequence's tracks and effects.
+    pub fn play_item(&mut self, sources: ProjectSources, item: ItemId, start: Tick, end: Tick) -> Result<(), String> {
+        self.start(start, end, move |sent, frames| item_audio(&sources, item, sent, frames))
+    }
+
+    /// The shared playback start: open the device on first use, queue chunks
+    /// rendered by `mix`, and count the device frames consumed as the clock.
+    fn start(&mut self, start: Tick, end: Tick, mix: impl Fn(i64, usize) -> Vec<f32> + Send + 'static) -> Result<(), String> {
         self.stop();
         if let Some(why) = &self.note {
             return Err(why.clone());
@@ -104,7 +183,6 @@ impl Player {
         self.played.store(0, Ordering::Relaxed);
         self.finished.store(false, Ordering::Relaxed);
 
-        let rate = u64::from(SEQUENCE_RATE);
         let start_sample = start.to_units_floor(i64::from(SEQUENCE_RATE)) as u64;
         let end_sample = end.to_units_floor(i64::from(SEQUENCE_RATE)) as u64;
         let device_rate = u64::from(self.device_rate);
@@ -112,19 +190,7 @@ impl Player {
         let finished = Arc::clone(&self.finished);
 
         std::thread::spawn(move || {
-            let mut sent = start_sample;
-            while sent < end_sample {
-                let Some(seq_ref) = project.items.get(&seq).and_then(|it| it.as_sequence()) else { break };
-                let frames = CHUNK.min((end_sample - sent) as usize);
-                let mixed = mix_sequence(&project, seq_ref, sent as i64, frames, &sources);
-                let stereo = mixed.interleaved();
-                let out = if device_rate == rate { stereo } else { resample(&stereo, rate, device_rate) };
-                let out = if channels == 2 { out } else { stereo_pairs(&out, channels) };
-                if tx.send(out).is_err() {
-                    break; // stopped while rendering
-                }
-                sent += frames as u64;
-            }
+            render_into(mix, start_sample, end_sample, device_rate, channels, |chunk| tx.send(chunk).is_ok());
             finished.store(true, Ordering::Relaxed);
         });
         Ok(())
@@ -264,4 +330,117 @@ fn stereo_pairs(stereo: &[f32], channels: u16) -> Vec<f32> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use filmcraft_media::generators::GeneratorSource;
+    use filmcraft_media::{Generator, MediaSource};
+    use filmcraft_project::{ItemId, ItemKind, Label, MediaClip, MediaRef, Project};
+    use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
+    use frameforge_bridge::ProjectSources;
+
+    use super::{item_audio, item_has_audio, render_into};
+
+    /// A media item backed by `generator`, added to `project`.
+    fn media_item(project: &mut Project, generator: Generator) -> ItemId {
+        let source = GeneratorSource::new(generator.clone(), 64, 36, FrameRate::FPS_24, Tick(2 * TICKS_PER_SECOND));
+        let info = source.info().clone();
+        project.add_item(
+            "fixture",
+            Label::Iris,
+            ItemKind::Media(MediaClip {
+                media: MediaRef::Generator(generator),
+                info,
+                interpret: Default::default(),
+                mark_in: None,
+                mark_out: None,
+                markers: Vec::new(),
+                offline: false,
+                proxy: None,
+                identity: None,
+            }),
+            None,
+        )
+    }
+
+    fn sources(project: &Project) -> ProjectSources {
+        ProjectSources::build_from(project, &HashMap::new()).expect("build sources for the fixture")
+    }
+
+    #[test]
+    fn item_audio_renders_the_media_sound() {
+        let mut project = Project::new("audio");
+        let tone = media_item(&mut project, Generator::Tone { hz: 440.0, db: -12.0 });
+        let sources = sources(&project);
+
+        assert!(item_has_audio(&project, tone), "a Tone generator has an audio stream");
+        let out = item_audio(&sources, tone, 0, 4_800);
+        assert_eq!(out.len(), 9_600, "4 800 stereo frames");
+        assert!(out.iter().any(|s| s.abs() > 1e-4), "the media sound is not silence");
+    }
+
+    #[test]
+    fn item_audio_is_silent_without_a_source() {
+        let mut project = Project::new("audio");
+        let _ = media_item(&mut project, Generator::Tone { hz: 440.0, db: -12.0 });
+        let sources = sources(&project);
+
+        let out = item_audio(&sources, ItemId(9_999), 0, 1_000);
+        assert_eq!(out.len(), 2_000, "a missing source still fills the request");
+        assert!(out.iter().all(|s| *s == 0.0), "a missing source plays silence, never a panic");
+    }
+
+    #[test]
+    fn item_has_audio_follows_the_media_info() {
+        let mut project = Project::new("audio");
+        let tone = media_item(&mut project, Generator::Tone { hz: 440.0, db: -12.0 });
+        let black = media_item(&mut project, Generator::BlackVideo);
+
+        assert!(item_has_audio(&project, tone), "Tone is audible");
+        assert!(!item_has_audio(&project, black), "Black Video has no audio stream");
+        assert!(!item_has_audio(&project, ItemId(9_999)), "a missing item is not audible");
+    }
+
+    #[test]
+    fn render_into_streams_the_whole_range_in_chunks() {
+        let mut frames = 0usize;
+        let mut sizes = Vec::new();
+        render_into(
+            |_sent, want| vec![1.0; want * 2],
+            0,
+            10_000,
+            48_000,
+            2,
+            |chunk| {
+                frames += chunk.len() / 2;
+                sizes.push(chunk.len() / 2);
+                true
+            },
+        );
+
+        assert_eq!(frames, 10_000, "every requested frame reaches the device");
+        assert_eq!(sizes, vec![4_800, 4_800, 400], "100 ms chunks, then the remainder");
+    }
+
+    #[test]
+    fn render_into_resamples_and_remaps_channels() {
+        let mut samples = Vec::new();
+        render_into(
+            |_sent, want| vec![0.5; want * 2],
+            0,
+            1_000,
+            24_000,
+            1,
+            |chunk| {
+                samples.extend(chunk);
+                true
+            },
+        );
+
+        assert_eq!(samples.len(), 500, "48 kHz stereo in, 24 kHz mono out");
+        assert!(samples.iter().all(|s| (*s - 0.5).abs() < 1e-6), "the level survives the resample");
+    }
 }

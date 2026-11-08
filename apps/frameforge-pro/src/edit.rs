@@ -645,7 +645,7 @@ pub(crate) fn open_source(app: &mut App, item: ItemId) {
     match app.session.execute("source.open", serde_json::json!({"item": item.0})) {
         Ok(_) => {
             app.source_monitor = None;
-            app.source_playing = false;
+            source_stop(app);
             app.bin_selection = Some(item);
             app.status = "Opened in the Source monitor".to_string();
         }
@@ -656,12 +656,23 @@ pub(crate) fn open_source(app: &mut App, item: ItemId) {
 pub(crate) fn close_source(app: &mut App) {
     let _ = app.session.execute("source.closeAll", serde_json::json!({}));
     app.source_monitor = None;
-    app.source_playing = false;
+    source_stop(app);
     app.status = "Source monitor closed".to_string();
 }
 
 pub(crate) fn source_set_playhead(app: &mut App, t: Tick) {
     let _ = app.session.execute("source.setPlayhead", serde_json::json!({"time": t.0}));
+    if !app.source_audio {
+        return;
+    }
+    // The audio clock is anchored at the playhead it started from; a seek moves
+    // the playhead, so re-anchor there or the next frame would overwrite it.
+    let selected = source_selected(app);
+    if let Some(range) = selected
+        && source_start_audio(app, range).is_err()
+    {
+        app.source_audio = false;
+    }
 }
 
 /// Step the source playhead by `frames` on the source's frame grid.
@@ -695,47 +706,106 @@ pub(crate) fn source_clear(app: &mut App, command: &str) {
     app.status = "Source marks cleared".to_string();
 }
 
-/// Play / pause the Source monitor. A video-only wall clock: the audio clock is
-/// bound to the Program monitor's sequence, so source playback is silent.
+/// Play / pause the Source monitor. When the open media has sound the shared
+/// output stream drives the Source playhead (the audio clock, as in the Program
+/// monitor); otherwise a wall clock stands in and the transport says it is
+/// silent. Starting Source stops Program: they share one output stream.
 pub(crate) fn source_toggle_play(app: &mut App) {
     if app.session.state.source_item.is_none() {
         app.status = "Open a clip in the Source monitor first".to_string();
         return;
     }
     if app.source_playing {
-        app.source_playing = false;
-        app.source_last = None;
+        source_stop(app);
+        app.status = "Source stopped".to_string();
         return;
     }
-    if let Some(range) = source_selected(app)
-        && app.session.state.source_playhead >= range.end()
-    {
+    let Some(range) = source_selected(app) else { return };
+    if app.session.state.source_playhead >= range.end() {
         app.session.state.source_playhead = range.start;
+    }
+    if app.playing {
+        app.stop_playback();
     }
     app.source_playing = true;
     app.source_last = None;
-    app.status = "Source playing (silent)".to_string();
+    app.source_clock_start = app.session.state.source_playhead;
+    match source_start_audio(app, range) {
+        Ok(()) => {
+            app.source_audio = true;
+            app.status = "Source playing".to_string();
+        }
+        Err(why) => {
+            app.source_audio = false;
+            app.status = format!("Source playing (silent — {why})");
+        }
+    }
 }
 
-/// Advance source playback (called once per frame from `App::ui`).
+/// Stop the Source transport: silence the shared output stream when Source was
+/// the one playing and clear both clock states.
+pub(crate) fn source_stop(app: &mut App) {
+    if app.source_playing || app.source_audio {
+        app.player.stop();
+    }
+    app.source_playing = false;
+    app.source_audio = false;
+    app.source_last = None;
+    app.source_clock_start = Tick::ZERO;
+}
+
+/// Hand the open source's own audio to the shared player for `range`. `Err`
+/// names why the transport is silent (no audio stream, offline media, no
+/// device); the caller keeps the wall clock instead.
+fn source_start_audio(app: &mut App, range: filmcraft_time::TimeRange) -> Result<(), String> {
+    let Some(view) = source_inspect(app) else { return Err("source is unavailable".to_string()) };
+    let item = ItemId(view["item"].as_u64().unwrap_or(0));
+    if !crate::audio::item_has_audio(&app.session.project, item) {
+        return Err("this source has no audio".to_string());
+    }
+    let start = app.session.state.source_playhead.max(range.start);
+    let end = range.end();
+    if end <= start {
+        return Err("the source range is empty".to_string());
+    }
+    let sources = app.built_sources().ok_or("the media sources are unavailable")?;
+    app.player.play_item(sources, item, start, end)?;
+    app.source_clock_start = start;
+    Ok(())
+}
+
+/// Where the Source playhead goes next and whether it reached the end.
+/// `elapsed` is the audio-clock advance (device frames as ticks) or the
+/// wall-clock frame delta; the rule is the same, which is why it is pure.
+fn advance_source(current: Tick, elapsed: Tick, start: Tick, end: Tick) -> (Tick, bool) {
+    let next = current + elapsed;
+    if next >= end { (Tick((end.0 - 1).max(start.0)), true) } else { (next, false) }
+}
+
+/// Advance source playback (called once per frame from `App::ui_frame`).
 pub(crate) fn source_tick(app: &mut App) {
     if !app.source_playing {
         return;
     }
     let Some(range) = source_selected(app) else {
-        app.source_playing = false;
+        source_stop(app);
         return;
     };
-    let now = std::time::Instant::now();
-    let elapsed = app.source_last.map_or(std::time::Duration::ZERO, |last| now.duration_since(last));
-    app.source_last = Some(now);
-    let ticks = Tick::from_units(i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX / 4).min(i64::MAX / 8), 1_000_000_000);
-    let next = app.session.state.source_playhead + ticks;
-    if next >= range.end() {
-        app.session.state.source_playhead = Tick((range.end().0 - 1).max(range.start.0));
-        app.source_playing = false;
+    // With sound the audio clock is authoritative: the playhead is the source
+    // time the device is actually rendering. Without it, advance by wall time.
+    let (current, elapsed) = if app.source_audio {
+        (app.source_clock_start + app.player.position(), Tick::ZERO)
     } else {
-        app.session.state.source_playhead = next;
+        let now = std::time::Instant::now();
+        let elapsed = app.source_last.map_or(std::time::Duration::ZERO, |last| now.duration_since(last));
+        app.source_last = Some(now);
+        let ticks = Tick::from_units(i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX / 4).min(i64::MAX / 8), 1_000_000_000);
+        (app.session.state.source_playhead, ticks)
+    };
+    let (next, ended) = advance_source(current, elapsed, range.start, range.end());
+    app.session.state.source_playhead = next;
+    if ended || (app.source_audio && app.player.is_finished()) {
+        source_stop(app);
     }
 }
 
@@ -2993,6 +3063,21 @@ mod tests {
         let (_, clip, _) = loaded.project.resolve_media(src).unwrap();
         assert_eq!((clip.mark_in, clip.mark_out), (Some(Tick(1000)), Some(Tick(2000))));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_source_playhead_stops_on_the_last_frame() {
+        let (start, end) = (Tick::ZERO, Tick(10));
+
+        // Inside the range: the playhead advances by exactly the elapsed time.
+        assert_eq!(super::advance_source(Tick::ZERO, Tick(5), start, end), (Tick(5), false));
+
+        // Reaching the end lands on the last frame and reports the stop, so the
+        // audio clock and the wall clock end playback identically.
+        assert_eq!(super::advance_source(Tick::ZERO, Tick(10), start, end), (Tick(9), true));
+
+        // Overshooting (a slow frame, or a finished audio queue) still clamps.
+        assert_eq!(super::advance_source(Tick(8), Tick(5), start, end), (Tick(9), true));
     }
 
     #[test]
