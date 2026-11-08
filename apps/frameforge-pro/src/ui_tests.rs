@@ -626,6 +626,83 @@ fn dragging_the_source_range_body_moves_both_marks() {
     );
 }
 
+// ---- sequence In/Out ruler drag -------------------------------------------
+
+/// The Program (sequence) In/Out marks the document holds.
+fn sequence_marks(app: &App) -> (Option<Tick>, Option<Tick>) {
+    app.sequence().map(|q| (q.mark_in, q.mark_out)).unwrap_or((None, None))
+}
+
+/// Mark In at 2 s and Out at 6 s on the sequence through the real commands, so
+/// the ruler has two interior handles to drag.
+fn sequence_with_marks(h: &mut Harness) {
+    h.app.playhead = Tick(2 * TICKS_PER_SECOND);
+    edit::program_mark(&mut h.app, true);
+    h.app.playhead = Tick(6 * TICKS_PER_SECOND);
+    edit::program_mark(&mut h.app, false);
+    h.frame(Vec::new());
+}
+
+#[test]
+fn dragging_the_sequence_in_handle_sets_the_mark_and_one_undo_restores_it() {
+    let (mut h, _) = seeded();
+    assert_eq!(sequence_marks(&h.app), (None, None), "the fixture starts with no Program marks");
+    assert!(h.rect_of(egui::Id::new("ff-sequence-mark-in")).is_none(), "no handle is painted without a mark");
+    sequence_with_marks(&mut h);
+    let before = sequence_marks(&h.app);
+    assert_eq!(before, (Some(Tick(2 * TICKS_PER_SECOND)), Some(Tick(6 * TICKS_PER_SECOND))), "the fixture marked 2 s to 6 s");
+
+    let body = h.rect_of(egui::Id::new("ff-timeline-body")).expect("the timeline body registers `ff-timeline-body`");
+    let handle = h.rect_of(egui::Id::new("ff-sequence-mark-in")).expect("the Program In handle is laid out");
+    let at_two = body.left() + 2.0 * h.app.zoom;
+    assert!((handle.center().x - at_two).abs() < 1.5, "the In handle sits on the 2 s mark");
+    // The ruler zoom is pixels per second, so one second is one zoom-step wide.
+    let step = egui::vec2(h.app.zoom, 0.0);
+
+    h.drag(handle.center(), &[handle.center() + step]);
+
+    assert_eq!(sequence_marks(&h.app).0, Some(Tick(3 * TICKS_PER_SECOND)), "dragging the In handle by one second moved the mark");
+    assert_eq!(sequence_marks(&h.app).1, before.1, "the Out mark stayed put");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(sequence_marks(&h.app), before, "the whole drag is one undo step");
+}
+
+#[test]
+fn dragging_the_sequence_out_handle_sets_the_mark_and_one_undo_restores_it() {
+    let (mut h, _) = seeded();
+    sequence_with_marks(&mut h);
+    let before = sequence_marks(&h.app);
+
+    let handle = h.rect_of(egui::Id::new("ff-sequence-mark-out")).expect("the Program Out handle is laid out");
+    let step = egui::vec2(h.app.zoom, 0.0);
+
+    h.drag(handle.center(), &[handle.center() + step]);
+
+    assert_eq!(sequence_marks(&h.app).1, Some(Tick(7 * TICKS_PER_SECOND)), "dragging the Out handle by one second moved the mark");
+    assert_eq!(sequence_marks(&h.app).0, before.0, "the In mark stayed put");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(sequence_marks(&h.app), before, "the whole drag is one undo step");
+}
+
+#[test]
+fn dragging_the_sequence_out_before_the_in_clamps_at_the_in() {
+    let (mut h, _) = seeded();
+    sequence_with_marks(&mut h);
+
+    let handle = h.rect_of(egui::Id::new("ff-sequence-mark-out")).expect("the Program Out handle is laid out");
+    let back_five = egui::vec2(-5.0 * h.app.zoom, 0.0);
+
+    h.drag(handle.center(), &[handle.center() + back_five]);
+
+    assert_eq!(
+        sequence_marks(&h.app),
+        (Some(Tick(2 * TICKS_PER_SECOND)), Some(Tick(2 * TICKS_PER_SECOND))),
+        "an Out dragged past In stops on the In mark instead of clearing it"
+    );
+}
+
 #[test]
 fn the_source_marker_strip_adds_seeks_and_deletes() {
     let (mut h, item) = seeded();
