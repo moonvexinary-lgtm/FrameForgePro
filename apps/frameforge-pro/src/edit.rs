@@ -4032,7 +4032,7 @@ mod tests {
         // The export's own header, a quoted name/comment with commas, quotes and
         // a newline, and a second row that carries only a timecode.
         let text = format!(
-            "name,comment,start_ticks,duration_ticks,start_timecode,label\n\"Intro, \"\"wide\"\"\",\"line1\nline2\",{},{},00:00:01:00,Blue\n\"Cue B\",\"\",,0,00:00:04:00,Red\n",
+            "name,comment,start_ticks,duration_ticks,start_timecode,label\n\"Intro, \"\"wide\"\"\",\"line1\nline2\",{},{},00:00:01:00,Blue\n\"Cue B\",\"\",,0,00:00:04:00,Rose\n",
             TICKS_PER_SECOND,
             TICKS_PER_SECOND / 2
         );
@@ -4050,7 +4050,7 @@ mod tests {
             assert_eq!(first.color, Label::Blue, "the label column names the colour");
             let second = &q.markers[1];
             assert_eq!(second.start, Tick(4 * TICKS_PER_SECOND), "a blank start_ticks falls back to the timecode");
-            assert_eq!(second.color, Label::Red);
+            assert_eq!(second.color, Label::Rose);
         }
 
         app.undo();
