@@ -321,6 +321,171 @@ pub(crate) fn drag_sequence_mark(app: &mut App, is_in: bool, dx: f32, zoom: f32)
     }
 }
 
+// ---- sequence split (video/audio) In/Out -----------------------------------
+
+/// One of the sequence's four split points: a video-only or audio-only In/Out
+/// that the engine's `markers.markSplit*` commands set, distinct from the
+/// ordinary Program In/Out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SequenceSplit {
+    VideoIn,
+    VideoOut,
+    AudioIn,
+    AudioOut,
+}
+
+impl SequenceSplit {
+    pub(crate) const ALL: [Self; 4] = [Self::VideoIn, Self::VideoOut, Self::AudioIn, Self::AudioOut];
+
+    fn is_in(self) -> bool {
+        matches!(self, Self::VideoIn | Self::AudioIn)
+    }
+
+    fn is_video(self) -> bool {
+        matches!(self, Self::VideoIn | Self::VideoOut)
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::VideoIn => "Video In",
+            Self::VideoOut => "Video Out",
+            Self::AudioIn => "Audio In",
+            Self::AudioOut => "Audio Out",
+        }
+    }
+
+    fn short(self) -> &'static str {
+        match self {
+            Self::VideoIn => "V In",
+            Self::VideoOut => "V Out",
+            Self::AudioIn => "A In",
+            Self::AudioOut => "A Out",
+        }
+    }
+
+    fn command(self) -> &'static str {
+        match self {
+            Self::VideoIn => "markers.markSplitVideoIn",
+            Self::VideoOut => "markers.markSplitVideoOut",
+            Self::AudioIn => "markers.markSplitAudioIn",
+            Self::AudioOut => "markers.markSplitAudioOut",
+        }
+    }
+
+    fn button_id(self) -> &'static str {
+        match self {
+            Self::VideoIn => "ff-sequence-split-video-in",
+            Self::VideoOut => "ff-sequence-split-video-out",
+            Self::AudioIn => "ff-sequence-split-audio-in",
+            Self::AudioOut => "ff-sequence-split-audio-out",
+        }
+    }
+
+    fn handle_id(self) -> &'static str {
+        match self {
+            Self::VideoIn => "ff-sequence-split-handle-video-in",
+            Self::VideoOut => "ff-sequence-split-handle-video-out",
+            Self::AudioIn => "ff-sequence-split-handle-audio-in",
+            Self::AudioOut => "ff-sequence-split-handle-audio-out",
+        }
+    }
+}
+
+/// The width of a split-point tab on the ruler, in points.
+pub(crate) const SPLIT_HANDLE_W: f32 = 8.0;
+
+/// Read one split point from the sequence.
+fn split_mark(sequence: &Sequence, side: SequenceSplit) -> Option<Tick> {
+    match side {
+        SequenceSplit::VideoIn => sequence.split.video_in,
+        SequenceSplit::VideoOut => sequence.split.video_out,
+        SequenceSplit::AudioIn => sequence.split.audio_in,
+        SequenceSplit::AudioOut => sequence.split.audio_out,
+    }
+}
+
+/// The ruler grab targets for the four split points. A video point owns the top
+/// half of the ruler and an audio point the bottom half, so points at the same
+/// frame stay separately grabbable; time maps exactly as it does for the
+/// Program handles.
+pub(crate) fn sequence_split_rects(
+    alloc: egui::Rect,
+    video_in: Option<Tick>,
+    video_out: Option<Tick>,
+    audio_in: Option<Tick>,
+    audio_out: Option<Tick>,
+    zoom: f32,
+) -> [Option<egui::Rect>; 4] {
+    let mid = alloc.top() + RULER_H / 2.0;
+    let handle = |t: Tick, top: f32| {
+        let x = alloc.left() + t.seconds() as f32 * zoom;
+        let half = SPLIT_HANDLE_W / 2.0;
+        egui::Rect::from_min_max(egui::pos2(x - half, top), egui::pos2(x + half, top + RULER_H / 2.0))
+    };
+    [video_in.map(|t| handle(t, alloc.top())), video_out.map(|t| handle(t, alloc.top())), audio_in.map(|t| handle(t, mid)), audio_out.map(|t| handle(t, mid))]
+}
+
+/// Set the sequence split point named by `side` at the playhead through the
+/// engine's `markers.markSplit*` command (frame-snapped, undoable). The engine
+/// clears only the same channel's opposite point when the new one crosses it,
+/// which the drag below mirrors with a clamp.
+pub(crate) fn program_split_mark(app: &mut App, side: SequenceSplit) {
+    if app.sequence().is_none() {
+        app.status = "No sequence".to_string();
+        return;
+    }
+    let at = app.session.sequence_rate().snap_nearest(app.playhead.max(Tick::ZERO));
+    app.playhead = at;
+    app.session.set_playhead(at);
+    match app.execute(side.command(), serde_json::json!({"time": at.0})) {
+        Ok(_) => app.status = format!("Split {} marked", side.label()),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Drag a sequence split point by `dx` points on the ruler. The point lands on
+/// the sequence frame grid and stops at its same-channel effective opposite
+/// (the split point of that channel, or the ordinary Program mark it inherits),
+/// so a drag never clears the counterpart the way the engine's `Side::set`
+/// would. The write is one merged project edit, so a whole drag is one undo
+/// step.
+pub(crate) fn drag_split_mark(app: &mut App, side: SequenceSplit, dx: f32, zoom: f32) {
+    let Some(seq_id) = app.sequence_id() else { return };
+    let Some(sequence) = app.session.active_sequence() else { return };
+    let Some(current) = split_mark(sequence, side) else { return };
+    let other = match side {
+        SequenceSplit::VideoIn => sequence.split.video_out.or(sequence.mark_out),
+        SequenceSplit::VideoOut => sequence.split.video_in.or(sequence.mark_in),
+        SequenceSplit::AudioIn => sequence.split.audio_out.or(sequence.mark_out),
+        SequenceSplit::AudioOut => sequence.split.audio_in.or(sequence.mark_in),
+    };
+    let end = app.sequence_end();
+    let rate = app.session.sequence_rate();
+    let delta = Tick((dx as f64 / zoom.max(0.01) as f64 * TICKS_PER_SECOND as f64).round() as i64);
+    if delta.0 == 0 {
+        return;
+    }
+    let snapped = rate.snap_nearest(current + delta);
+    let next = if side.is_in() { snapped.clamp(Tick::ZERO, other.unwrap_or(end)) } else { snapped.clamp(other.unwrap_or(Tick::ZERO), end) };
+    if next == current {
+        return;
+    }
+    let result = app.edit_project_merged("Mark Split", "sequence-split-drag", |project, _| {
+        let q = project.sequence_mut(seq_id).ok_or_else(|| filmcraft_engine::EngineError::Other("the sequence is gone".into()))?;
+        match side {
+            SequenceSplit::VideoIn => q.split.video_in = Some(next),
+            SequenceSplit::VideoOut => q.split.video_out = Some(next),
+            SequenceSplit::AudioIn => q.split.audio_in = Some(next),
+            SequenceSplit::AudioOut => q.split.audio_out = Some(next),
+        }
+        Ok(())
+    });
+    match result {
+        Ok(()) => app.status = format!("Split {} moved", side.label()),
+        Err(error) => app.status = error.to_string(),
+    }
+}
+
 /// Lift the sequence In/Out range through `sequence.lift`: the targeted tracks
 /// lose the range and keep a gap. The marks stay set.
 pub(crate) fn lift_in_out(app: &mut App) {
@@ -794,9 +959,9 @@ fn seek_source(app: &mut App, bar: egui::Rect, bounds: filmcraft_time::TimeRange
     source_set_playhead(app, t);
 }
 
-/// A small painted chip with an explicit id, so a scripted click reaches the
-/// Source panel's custom-painted controls by name.
-fn source_chip(ui: &mut egui::Ui, id: egui::Id, label: &str) -> egui::Response {
+/// A small painted chip with an explicit id, so a scripted click reaches a
+/// custom-painted control by name.
+fn chip(ui: &mut egui::Ui, id: egui::Id, label: &str) -> egui::Response {
     let font = egui::FontId::proportional(10.0);
     let width = ui.painter().layout_no_wrap(label.to_string(), font.clone(), ui::TEXT_LO).size().x + 12.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
@@ -2044,6 +2209,16 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             }
         }
         ui.separator();
+        // The four split points, at the sequence playhead. Video and audio are
+        // marked separately, exactly like the engine's Mark Split submenu.
+        for side in SequenceSplit::ALL {
+            let response =
+                chip(ui, egui::Id::new(side.button_id()), side.short()).on_hover_text(format!("Set the {} split point at the sequence playhead", side.label()));
+            if response.clicked() {
+                program_split_mark(app, side);
+            }
+        }
+        ui.separator();
         ui.label(
             egui::RichText::new("T/S target/patch · V/M/L track states · drag clips to move · drag edges to trim · Ctrl+Z undo").size(9.5).color(ui::TEXT_OFF),
         );
@@ -2128,6 +2303,18 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         let x = rect.center().x;
         painter.line_segment([egui::pos2(x, alloc.top() + 1.0), egui::pos2(x, alloc.top() + RULER_H)], egui::Stroke::new(2.0, color));
         painter.rect_filled(egui::Rect::from_center_size(egui::pos2(x, alloc.top() + 4.0), egui::vec2(SEQUENCE_MARK_HANDLE_W, 7.0)), 1.0, color);
+    }
+
+    // Split points paint as channel-coloured tabs: video in the ruler's top
+    // half, audio in the bottom half, so both stay legible and grabbable at the
+    // same frame. They go last, over the Program handles.
+    let split_rects = sequence_split_rects(alloc, s.split.video_in, s.split.video_out, s.split.audio_in, s.split.audio_out, zoom);
+    for (rect, side) in split_rects.iter().zip(SequenceSplit::ALL) {
+        let Some(rect) = rect else { continue };
+        let color = if side.is_video() { ui::CLIP_VIDEO_HI } else { ui::CLIP_AUDIO_HI };
+        let x = rect.center().x;
+        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(2.0, color));
+        painter.rect_filled(egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(SPLIT_HANDLE_W, 6.0)), 1.0, color);
     }
 
     let mut hit_rects: Vec<(egui::Rect, filmcraft_project::ClipId)> = Vec::new();
@@ -2275,6 +2462,19 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         let handle = ui.interact(rect, id, egui::Sense::drag());
         if handle.dragged() {
             drag_sequence_mark(app, is_in, handle.drag_delta().x, zoom);
+        }
+        if handle.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+    }
+
+    // The split points follow, so at the same frame a split tab wins over the
+    // Program handle painting it.
+    for (rect, side) in split_rects.iter().zip(SequenceSplit::ALL) {
+        let Some(rect) = rect else { continue };
+        let handle = ui.interact(*rect, egui::Id::new(side.handle_id()), egui::Sense::drag());
+        if handle.dragged() {
+            drag_split_mark(app, side, handle.drag_delta().x, zoom);
         }
         if handle.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -2622,7 +2822,7 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
         if ui.small_button("Overwrite").on_hover_text("Overwrite with the source range at the sequence playhead").clicked() {
             source_edit(app, false);
         }
-        if source_chip(ui, egui::Id::new("ff-source-marker-add"), "+ Marker").on_hover_text("Add a Source marker on the Source playhead").clicked() {
+        if chip(ui, egui::Id::new("ff-source-marker-add"), "+ Marker").on_hover_text("Add a Source marker on the Source playhead").clicked() {
             source_add_marker(app);
         }
         let range = if mark_in.is_none() && mark_out.is_none() {
