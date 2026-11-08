@@ -407,8 +407,9 @@ the editor no longer has to guess a duration for Insert/Overwrite.
   with a draggable gutter. The Source panel renders the open item through the
   engine's own `filmcraft_render::render_item` path (same decode/colour path the
   renderer uses), with source timecode, frame-step, a seek slider, Play/Pause and
-  In/Out controls. Playback is a **video-only wall clock**: the audio clock is
-  bound to the Program sequence, so source playback is silent and labelled so.
+  In/Out controls. Playback is a **wall clock**: T5 left it video-only (the audio
+  clock was bound to the Program sequence); T14 below gives the Source monitor its
+  own sound through the same shared stream.
 - **Independence**: source seeking and marking act on `state.source_playhead` and
   never move the Program monitor's playhead; the two previews are separate
   textures. `I`/`O` set the source marks, `Shift+I`/`Shift+O` go to them, and
@@ -431,9 +432,44 @@ the editor no longer has to guess a duration for Insert/Overwrite.
   `source_insert_places_the_marked_range_and_ripples_markers_with_undo` (with
   before/at/after markers, undo, and ripple-off), `source_mark_edges_are_normalized_and_one_sided_marks_use_the_source_edges`
   and `source_marks_survive_project_save_and_reopen`.
-- **Limitations**: source playback has no audio; there is no source-marker panel
-  or source range drag; the Program monitor still owns In/Out for the sequence
-  (sequence in/out UI is still open).
+- **Limitations**: source playback was silent in T5 (T14 adds its own sound);
+  there is no source-marker panel or source range drag; the Program monitor still
+  owns In/Out for the sequence (sequence in/out UI is still open).
+
+## T14 - the Source monitor's own sound (CI-verified, run 42429090124)
+
+T5's Source transport was a video-only wall clock, so auditioning a clip was
+silent. The Program and Source monitors now share one output stream and one
+clock design.
+
+- **Item audio** (`audio.rs`): `item_audio(sources, item, start, frames)` renders
+  the open item's own decoded sound, folded to interleaved stereo — silence when
+  the item has no source or the decode fails, so auditioning never edits the
+  project and never panics on a missing or unsupported file. `item_has_audio` is
+  the transport's pure decision. A source with more than two channels is
+  monitored through its first pair; the Program monitor keeps the full downmix.
+- **One stream, two mixes**: `Player` gains `play_item` over a shared
+  `start(mix)`, so the sequence mix (`play`) and the item mix (`play_item`) use
+  the same device, queue, resampler, device-frame clock and silent fallback.
+  `render_into` extracts the worker's chunk/resample/channel loop.
+- **Clock and exclusivity** (`edit.rs`): `source_toggle_play` hands the audio to
+  the player and follows the audio clock (`source_clock_start + Player::position`);
+  otherwise it keeps the wall clock and names why it is silent ("this source has
+  no audio", the device error). `source_tick` uses the shared `advance_source`
+  boundary rule for both clocks. Both monitors share one stream, so starting one
+  stops the other, and a seek re-anchors the audio clock.
+- **Tests** (six): a real Tone source renders non-silent stereo of the requested
+  length; a missing source plays silence; `item_has_audio` follows the media info
+  (Tone audible, Black Video not); `render_into` streams the whole range in
+  100 ms chunks and resamples 48 kHz stereo to 24 kHz mono; and
+  `advance_source` stops on the last frame for both clocks. No test opens an
+  audio device.
+- **Limitations**: the cpal output path and the Program/Source exclusivity are
+  code-inspected, not automated (a test would open WASAPI); scrubbing while the
+  source plays with sound restarts the worker from the new position; the
+  source-marker panel and source range drag are still open.
+- **CI**: run `42429090124` — fmt, clippy `-D warnings`, check, **95 tests**,
+  release build and the binary self-test.
 
 ## T6 - Ripple delete with linked A/V and marker ripple (CI-verified, run 40163011141)
 
@@ -1130,6 +1166,7 @@ with a real, user-installed runtime.
 | T11 | Chosen transition length (1-600 frames) on Dissolve/Crossfade plus `sequence.setTransition` duration/alignment editing for the transition at the selected clip's In edge, with an apply/update/undo test | CI-verified, run 40256569182 |
 | T12 | Marker CSV export with RFC 4180 quoting, exact ticks, padded start timecode and a byte-for-byte file test | CI-verified, run 40260600879 |
 | T13 | Marker length (0-6000 frames) and colour editing through the existing undoable project edit, with the extended field/undo test | CI-verified, run 40513248065 |
+| T14 | Source-monitor audio: the open clip's own sound through a `play_item` mix that shares the Program stream, clock and silent fallback, with the render loop, item-audio fold and advance boundary tested without a device | CI-verified, run 42429090124 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
