@@ -572,6 +572,36 @@ audio-only split points had no UI. Both now have one.
 - **CI**: run `42527534314` - fmt, clippy `-D warnings`, check, **106 tests**,
   release build and the binary self-test.
 
+## T18 - source marker drag and marker CSV import (CI-verified, run 42537235054)
+
+Row 39's two remaining UI gaps, closed without an engine change.
+
+- **Source marker drag** (`edit.rs`): the Source range bar paints each marker
+  as a warm stem with a small tab in its top band. `source_marker_rects` maps
+  marker starts with the bar's own time-to-pixels rule, and `drag_source_marker`
+  snaps the new start to the source frame grid, clamps it to the source bounds
+  and writes one merged project edit ("Move Source Marker",
+  "source-marker-drag"), so a whole drag is one Ctrl+Z. The edit targets the
+  view's root `media` item, so a subclip's inherited markers move on the master
+  clip.
+- **CSV import** (`edit.rs`): `csv_records` is an RFC 4180 state machine
+  (quoted commas, doubled quotes, embedded line breaks, dropped blank lines);
+  `parse_markers_csv` reads the export's own header, prefers `start_ticks` and
+  falls back to `start_timecode` at the sequence rate, and rejects bad numbers
+  and labels with the spreadsheet row number. `import_markers_csv_text`
+  validates every row first, then one "Import Markers" project edit adds them
+  all, so a bad row imports nothing. The Markers menu gains "Import Markers
+  CSV...".
+- **Tests**: `edit::tests::marker_csv_import_parses_quoted_text_and_is_one_undo`
+  (quoted text, ticks/timecode precedence, one-step undo, row-numbered error)
+  and
+  `ui_tests::dragging_the_source_marker_handle_moves_only_that_marker_and_one_undo_restores_it`
+  (handle geometry, an isolated one-second drag, one-step undo).
+- **Limitations**: Program (timeline) markers still do not drag; EDL import and
+  marker-list selection remain; imported markers are always `Comment` kind.
+- **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
+  release build and the binary self-test.
+
 ## T6 - Ripple delete with linked A/V and marker ripple (CI-verified, run 40163011141)
 
 `Shift+Delete` and the timeline **Ripple Delete** button call the engine's real
@@ -1271,6 +1301,7 @@ with a real, user-installed runtime.
 | T15 | Source range bar and marker strip: click-to-seek, drag either In/Out handle or the whole band through the engine's `adjust_range` with one undo step per gesture, plus a marker list that adds, seeks and undoably deletes through the Source-targeted commands | CI-verified, run 42499750102 |
 | T16 | Sequence In/Out ruler drag: the Program range paints as a band with an In and an Out handle, each drag frame-snaps and clamps at the other mark through a merged project edit with one undo per gesture | CI-verified, run 42506032070 |
 | T17 | Split video/audio In/Out: four header chips run the engine's `markers.markSplit*` at the playhead, and channel-coloured ruler tabs drag through one merged edit, clamping at the channel's effective opposite | CI-verified, run 42527534314 |
+| T18 | Source marker drag and marker CSV import: bar handles move a source marker through one merged edit (root-media target, frame-snapped, clamped), and the Markers CSV importer reads the export's RFC 4180 format as one undoable edit that aborts wholly on a bad row | CI-verified, run 42537235054 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
