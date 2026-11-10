@@ -3925,7 +3925,7 @@ mod tests {
     fn a_snap_prefers_the_edge_that_actually_moved() {
         assert_eq!(super::choose_snap(Tick(100), Tick(110), Tick(100)), Tick(110), "a snapped start beats an unmoved end");
         assert_eq!(super::choose_snap(Tick(100), Tick(100), Tick(90)), Tick(90), "a snapped end beats an unmoved start");
-        assert_eq!(super::choose_snap(Tick(100), Tick(106), Tick(96)), Tick(106), "the nearer of two snapped edges wins");
+        assert_eq!(super::choose_snap(Tick(100), Tick(106), Tick(96)), Tick(96), "the nearer of two snapped edges wins");
         assert_eq!(super::choose_snap(Tick(100), Tick(100), Tick(100)), Tick(100), "nothing moves when neither edge snaps");
     }
 
