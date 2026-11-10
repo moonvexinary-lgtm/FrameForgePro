@@ -379,6 +379,29 @@ pub(crate) fn import_markers_csv(app: &mut App) {
     }
 }
 
+/// Import sequence markers from an EDL's `* LOC:` locator lines.
+pub(crate) fn import_markers_edl_text(_app: &mut App, _text: &str) -> Result<usize, String> {
+    Err("EDL marker import is not implemented".to_string())
+}
+
+/// Import sequence markers from an EDL chosen by the user.
+pub(crate) fn import_markers_edl(app: &mut App) {
+    let Some(path) = rfd::FileDialog::new().add_filter("EDL", &["edl"]).pick_file() else {
+        return;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => {
+            app.status = format!("Marker EDL import failed: {e}");
+            return;
+        }
+    };
+    match import_markers_edl_text(app, &text) {
+        Ok(count) => app.status = format!("Imported {count} markers from {}", path.display()),
+        Err(e) => app.status = format!("Marker EDL import failed: {e}"),
+    }
+}
+
 /// Write the sequence markers to `path`; returns the number of markers written.
 /// Kept separate from the file dialog so the bytes can be tested.
 pub(crate) fn write_markers_csv(app: &mut App, path: &std::path::Path) -> std::io::Result<usize> {
@@ -2555,6 +2578,10 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 import_markers_csv(app);
                 ui.close();
             }
+            if ui.add_enabled(app.sequence().is_some(), egui::Button::new("Import Markers EDL...")).clicked() {
+                import_markers_edl(app);
+                ui.close();
+            }
             if ui.add_enabled(app.sequence().is_some_and(|q| !q.markers.is_empty()), egui::Button::new("Export Markers as CSV...")).clicked() {
                 export_markers_csv(app);
                 ui.close();
@@ -4604,6 +4631,48 @@ mod tests {
         let err = super::import_markers_csv_text(&mut app, bad).expect_err("a bad tick count is an error");
         assert!(err.contains("row 2"), "the error names the offending row: {err}");
         assert_eq!(app.session.active_sequence().unwrap().markers.len(), 0, "a bad row imports nothing");
+    }
+
+    #[test]
+    fn marker_edl_import_reads_loc_lines_and_is_one_undo() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "MarkerEdl"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+
+        // A real CMX 3600 cut list with Avid locator lines: the record timecodes
+        // are an hour into the tape, so the hour is the base the markers drop.
+        let text = "TITLE: Cut\nFCM: NON-DROP FRAME\n\n001  AX       V     C        00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\n* FROM CLIP NAME: shot.mov\n* LOC: 01:00:02:00 BLUE Intro\n* LOC: 01:00:05:00 Wider shot\n";
+        let count = super::import_markers_edl_text(&mut app, text).unwrap();
+        assert_eq!(count, 2, "both locator lines import");
+        let markers: Vec<(Tick, String, Label, String)> =
+            app.sequence().unwrap().markers.iter().map(|m| (m.start, m.name.clone(), m.color, m.comment.clone())).collect();
+        assert_eq!(markers[0].0, Tick(2 * TICKS_PER_SECOND), "the record timecode drops the EDL's hour");
+        assert_eq!(markers[0].1, "Intro");
+        assert_eq!(markers[0].2, Label::Blue, "BLUE maps onto the label palette");
+        assert_eq!(markers[0].3, "", "an EDL locator has no comment column");
+        assert_eq!(markers[1].0, Tick(5 * TICKS_PER_SECOND));
+        assert_eq!(markers[1].1, "Wider shot");
+        assert_eq!(markers[1].2, Label::Green, "a locator without a colour word defaults to green");
+        assert_eq!(app.status, "Imported 2 markers");
+
+        app.undo();
+        assert!(app.sequence().unwrap().markers.is_empty(), "the whole EDL import is one undo step");
+    }
+
+    #[test]
+    fn marker_edl_import_refuses_a_bad_locator_and_a_file_without_any() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "MarkerEdl"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+
+        let err = super::import_markers_edl_text(&mut app, "TITLE: Cut\nFCM: NON-DROP FRAME\n").expect_err("a file with no locators is an error");
+        assert!(err.contains("no `* LOC:`"), "the error says what is missing: {err}");
+
+        let err = super::import_markers_edl_text(&mut app, "TITLE: Cut\n* LOC: 01:00:xx:00 BLUE bad\n").expect_err("a bad timecode is an error");
+        assert!(err.starts_with("line 2:"), "the error names the offending line: {err}");
+        assert!(app.sequence().unwrap().markers.is_empty(), "a bad locator imports nothing");
     }
 
     #[test]
