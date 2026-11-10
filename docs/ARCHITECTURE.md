@@ -602,6 +602,33 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T20 - timeline marker list (CI-verified, run 42749131608)
+
+T2's markers were only reachable by clicking their ruler stem; there was no
+place to read, choose or delete one by name.
+
+- **Window** (`edit.rs`): `MarkerList { selected: Option<u64> }` is editor
+  state on `App`, opened by the timeline header's `ff-marker-list-open` chip or
+  the Markers menu's "Marker List..." row, and drawn by `marker_list_window`
+  from `App::ui_frame` the way the relink dialog floats. The content width is
+  pinned to 360 points, so an anchored window never lays itself out at full
+  screen on its first pass. Rows carry the marker's colour dot, timecode, name
+  and comment, with explicit ids (`ff-marker-list-row`, `ff-marker-list-del`)
+  so scripted clicks reach them.
+- **Selection**: `select_marker` looks the id up on the sequence, moves the
+  Program and engine playheads to its start, and reports
+  `Marker "<name>" at <timecode>`; the window highlights the chosen row.
+- **Delete**: `delete_marker` removes exactly that id through one undoable
+  "Delete Marker" project edit (the engine only offers clear-at-playhead and
+  clear-all), clears the row's selection, and leaves the other markers alone.
+- **Tests** (two `ui_tests`): opening the list and clicking the 2 s then the
+  6 s row seeks both playheads and reports each marker, and selecting then
+  deleting the 2 s row removes only it, with one Ctrl+Z restoring both.
+- **Limitations**: the list is not a docked panel and has no inline rename
+  (the header's Update Marker still edits at the playhead); EDL import remains.
+- **CI**: run `42749131608` - fmt, clippy `-D warnings`, check,
+  **112 tests**, release build and the binary self-test.
+
 ## T19 - sequence marker ruler drag (CI-verified, run 42731129937)
 
 T18 made Source markers draggable; the timeline's own markers still only
@@ -1327,6 +1354,7 @@ with a real, user-installed runtime.
 | T17 | Split video/audio In/Out: four header chips run the engine's `markers.markSplit*` at the playhead, and channel-coloured ruler tabs drag through one merged edit, clamping at the channel's effective opposite | CI-verified, run 42527534314 |
 | T18 | Source marker drag and marker CSV import: bar handles move a source marker through one merged edit (root-media target, frame-snapped, clamped), and the Markers CSV importer reads the export's RFC 4180 format as one undoable edit that aborts wholly on a bad row | CI-verified, run 42537235054 |
 | T19 | Sequence marker ruler drag: every timeline marker gains a top-band grab target, and a drag frame-snaps and clamps it to the sequence through one merged edit (one undo per gesture) | CI-verified, run 42731129937 |
+| T20 | Timeline marker list: a floating window (header chip or Markers menu) lists markers with their colour, timecode, name and comment; a row seeks both playheads to its marker, and its own delete removes exactly that marker through one undoable edit | CI-verified, run 42749131608 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
