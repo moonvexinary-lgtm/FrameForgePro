@@ -327,12 +327,101 @@ fn parse_markers_csv(text: &str, rate: filmcraft_time::FrameRate) -> Result<Vec<
 /// Returns how many markers were added; one undoable project edit adds them all,
 /// and a bad row aborts the whole import.
 pub(crate) fn import_markers_csv_text(app: &mut App, text: &str) -> Result<usize, String> {
-    let Some(seq_id) = app.sequence_id() else { return Err("No sequence".to_string()) };
     let rate = app.session.sequence_rate();
     let parsed = parse_markers_csv(text, rate)?;
     if parsed.is_empty() {
         return Err("The CSV has no marker rows".to_string());
     }
+    apply_imported_markers(app, parsed)
+}
+
+/// Import the sequence markers from a CSV chosen by the user. The parse runs
+/// before the project edit, so a bad file leaves the sequence untouched.
+pub(crate) fn import_markers_csv(app: &mut App) {
+    let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).pick_file() else {
+        return;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => {
+            app.status = format!("Marker CSV import failed: {e}");
+            return;
+        }
+    };
+    match import_markers_csv_text(app, &text) {
+        Ok(count) => app.status = format!("Imported {count} markers from {}", path.display()),
+        Err(e) => app.status = format!("Marker CSV import failed: {e}"),
+    }
+}
+
+/// CMX 3600 / Avid locator colour words, mapped onto the project's labels.
+fn edl_marker_color(word: &str) -> Option<Label> {
+    Some(match word.to_ascii_uppercase().as_str() {
+        "RED" => Label::Rose,
+        "GREEN" => Label::Green,
+        "BLUE" => Label::Blue,
+        "CYAN" => Label::Teal,
+        "MAGENTA" => Label::Magenta,
+        "YELLOW" => Label::Yellow,
+        "WHITE" => Label::Lavender,
+        "BLACK" => Label::Brown,
+        _ => return None,
+    })
+}
+
+/// Read the `* LOC:` locator lines of an EDL: `* LOC: <record tc> [COLOR] <name>`.
+/// The record timecodes carry the hour the list starts at, so the hour of the
+/// first locator is the base and the markers land relative to it. Every other
+/// line (title, events, comments) is ignored, so a full cut list can be
+/// imported. A bad locator aborts with its line number.
+fn parse_markers_edl(text: &str, rate: filmcraft_time::FrameRate) -> Result<Vec<CsvMarker>, String> {
+    let mut locators: Vec<(usize, i64, String, Label)> = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line_no = index + 1;
+        let Some(rest) = line.trim_start().strip_prefix('*') else { continue };
+        let rest = rest.trim_start();
+        if !rest.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("LOC:")) {
+            continue;
+        }
+        let body = rest[4..].trim();
+        let (timecode, tail) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
+        let frames = filmcraft_time::parse_timecode(timecode, rate, false, 0).map_err(|e| format!("line {line_no}: bad locator timecode `{timecode}`: {e}"))?;
+        let words: Vec<&str> = tail.split_whitespace().collect();
+        let (color, name) = match words.split_first() {
+            Some((first, rest)) => match edl_marker_color(first) {
+                Some(color) => (color, rest.join(" ")),
+                None => (Label::Green, words.join(" ")),
+            },
+            None => (Label::Green, String::new()),
+        };
+        locators.push((line_no, frames, name, color));
+    }
+    if locators.is_empty() {
+        return Err("The EDL has no `* LOC:` marker lines".to_string());
+    }
+    let (_, hour, _, _, _) = filmcraft_time::frames_to_fields(locators[0].1, rate, false);
+    let base = filmcraft_time::fields_to_frames(hour, 0, 0, 0, rate, false);
+    let mut out = Vec::with_capacity(locators.len());
+    for (line_no, frames, name, color) in locators {
+        let offset = frames - base;
+        if offset < 0 {
+            return Err(format!("line {line_no}: locator `{name}` is before the EDL's hour"));
+        }
+        out.push(CsvMarker { name, comment: String::new(), start: rate.tick_of(offset), duration: Tick::ZERO, color });
+    }
+    Ok(out)
+}
+
+/// Import sequence markers from an EDL's `* LOC:` locator lines.
+pub(crate) fn import_markers_edl_text(app: &mut App, text: &str) -> Result<usize, String> {
+    let rate = app.session.sequence_rate();
+    let parsed = parse_markers_edl(text, rate)?;
+    apply_imported_markers(app, parsed)
+}
+
+/// Add parsed markers to the active sequence as one undoable edit.
+fn apply_imported_markers(app: &mut App, parsed: Vec<CsvMarker>) -> Result<usize, String> {
+    let Some(seq_id) = app.sequence_id() else { return Err("No sequence".to_string()) };
     let count = parsed.len();
     let result = app.edit_project("Import Markers", move |project, _| {
         let ids: Vec<MarkerId> = (0..parsed.len()).map(|_| MarkerId(project.alloc_id())).collect();
@@ -358,30 +447,6 @@ pub(crate) fn import_markers_csv_text(app: &mut App, text: &str) -> Result<usize
             Err(message)
         }
     }
-}
-
-/// Import the sequence markers from a CSV chosen by the user. The parse runs
-/// before the project edit, so a bad file leaves the sequence untouched.
-pub(crate) fn import_markers_csv(app: &mut App) {
-    let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).pick_file() else {
-        return;
-    };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) => {
-            app.status = format!("Marker CSV import failed: {e}");
-            return;
-        }
-    };
-    match import_markers_csv_text(app, &text) {
-        Ok(count) => app.status = format!("Imported {count} markers from {}", path.display()),
-        Err(e) => app.status = format!("Marker CSV import failed: {e}"),
-    }
-}
-
-/// Import sequence markers from an EDL's `* LOC:` locator lines.
-pub(crate) fn import_markers_edl_text(_app: &mut App, _text: &str) -> Result<usize, String> {
-    Err("EDL marker import is not implemented".to_string())
 }
 
 /// Import sequence markers from an EDL chosen by the user.
