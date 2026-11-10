@@ -158,6 +158,8 @@ pub struct App {
     pub offline_rows: Vec<crate::relink::MissingRow>,
     /// The floating Link Media dialog, when one is open.
     pub relink: Option<crate::relink::RelinkDialog>,
+    /// The floating timeline marker list, when one is open.
+    pub marker_list: Option<crate::edit::MarkerList>,
     /// The graphic clip selected in the Text & Graphics workspace.
     pub graphics_clip: Option<ClipId>,
     /// The layer index selected inside that graphic clip.
@@ -272,6 +274,7 @@ impl App {
             previews: MediaPreviews::new(),
             offline_rows: Vec::new(),
             relink: None,
+            marker_list: None,
             graphics_clip: None,
             graphics_layer: 0,
             text_draft: String::new(),
@@ -1140,6 +1143,9 @@ impl App {
             // The Link Media dialog floats over whatever workspace is showing,
             // so a missing file can be reconnected without leaving the edit.
             crate::relink::show(self, ui);
+            // The marker list floats the same way: it can stay open while the
+            // playhead moves and clips are edited underneath it.
+            crate::edit::marker_list_window(self, ui);
         }));
         if result.is_err() {
             self.status = "A UI error occurred. The project is intact — save it now.".to_string();

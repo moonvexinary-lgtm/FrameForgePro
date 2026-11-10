@@ -503,6 +503,147 @@ pub(crate) fn drag_sequence_marker(app: &mut App, marker_id: u64, dx: f32, zoom:
     }
 }
 
+/// The floating timeline marker list, when one is open. Selecting a row seeks
+/// to its marker; each row carries its own delete. Both are editor state; the
+/// seek moves the Program playhead, and the delete is one undoable edit.
+#[derive(Default)]
+pub struct MarkerList {
+    /// The id of the row the user selected, if any.
+    pub selected: Option<u64>,
+}
+
+/// Open the floating marker list (editor state: not undoable, not dirtying).
+pub(crate) fn open_marker_list(app: &mut App) {
+    app.marker_list = Some(MarkerList::default());
+}
+
+/// Seek to one sequence marker and name it in the status bar. Returns whether
+/// the marker still exists: the list can outlive an undo that removed it.
+pub(crate) fn select_marker(app: &mut App, marker_id: u64) -> bool {
+    let Some(seq_id) = app.sequence_id() else { return false };
+    let Some((at, name)) = app.session.project.sequence(seq_id).and_then(|q| q.markers.iter().find(|m| m.id.0 == marker_id).map(|m| (m.start, m.name.clone())))
+    else {
+        return false;
+    };
+    app.playhead = at;
+    app.session.set_playhead(at);
+    let label = if name.is_empty() { format!("Marker {marker_id}") } else { format!("Marker \"{name}\"") };
+    app.status = format!("{label} at {}", marker_timecode(app.session.sequence_rate(), at));
+    true
+}
+
+/// Delete one sequence marker by id through a custom, undoable project edit
+/// (the engine has no by-id marker delete, only clear-at-playhead and
+/// clear-all). Returns whether it was deleted.
+pub(crate) fn delete_marker(app: &mut App, marker_id: u64) -> bool {
+    let Some(seq_id) = app.sequence_id() else { return false };
+    if !app.session.project.sequence(seq_id).is_some_and(|q| q.markers.iter().any(|m| m.id.0 == marker_id)) {
+        app.status = "The marker is gone".to_string();
+        return false;
+    }
+    let result = app.edit_project("Delete Marker", move |project, _| {
+        let q = project.sequence_mut(seq_id).ok_or_else(|| filmcraft_engine::EngineError::Other("the sequence is gone".into()))?;
+        q.markers.retain(|m| m.id.0 != marker_id);
+        Ok(())
+    });
+    match result {
+        Ok(()) => {
+            app.status = "Marker deleted".to_string();
+            true
+        }
+        Err(error) => {
+            app.status = error.to_string();
+            false
+        }
+    }
+}
+
+/// Draw the floating marker list when one is open. Called every frame from
+/// `App::ui_frame`, so the window floats over whatever workspace is showing.
+/// Rows have explicit ids, so a scripted click reaches them like the relink
+/// dialog's.
+pub(crate) fn marker_list_window(app: &mut App, ui: &egui::Ui) {
+    let Some(mut list) = app.marker_list.take() else { return };
+    let markers = app.sequence().map(|q| q.markers.clone()).unwrap_or_default();
+    let rate = app.session.sequence_rate();
+    let mut closed = false;
+    egui::Window::new("Markers")
+        .id(egui::Id::new("ff-marker-list-window"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-24.0, 84.0))
+        .collapsible(false)
+        .resizable(true)
+        .show(ui.ctx(), |ui| {
+            ui.set_min_width(360.0);
+            ui.horizontal(|ui| {
+                let count = format!("{} marker{}", markers.len(), if markers.len() == 1 { "" } else { "s" });
+                ui.label(egui::RichText::new(count).size(11.0).strong().color(ui::TEXT_HI));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Close").clicked() {
+                        closed = true;
+                    }
+                });
+            });
+            if markers.is_empty() {
+                ui.label(ui::hint("No markers on this sequence. Add one with M."));
+                return;
+            }
+            egui::ScrollArea::vertical().id_salt("marker-list").max_height(280.0).auto_shrink([false, false]).show(ui, |ui| {
+                for marker in &markers {
+                    let id = marker.id.0;
+                    let width = ui.available_width();
+                    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::hover());
+                    let del_rect = egui::Rect::from_min_max(egui::pos2(row.right() - 22.0, row.top() + 7.0), egui::pos2(row.right(), row.bottom() - 7.0));
+                    let seek = ui.interact(row, egui::Id::new(("ff-marker-list-row", id)), egui::Sense::click());
+                    let del = ui.interact(del_rect, egui::Id::new(("ff-marker-list-del", id)), egui::Sense::click());
+                    let selected = list.selected == Some(id);
+                    let fill = if seek.hovered() || del.hovered() {
+                        ui::BG_HOVER
+                    } else if selected {
+                        ui::ACCENT_SEL
+                    } else {
+                        ui::BG_INSET
+                    };
+                    ui.painter().rect_filled(row, 3.0, fill);
+                    if selected {
+                        ui::selected_bar(ui.painter(), row);
+                    }
+                    ui.painter().circle_filled(egui::pos2(row.left() + 12.0, row.center().y), 4.0, marker_color(marker.color));
+                    let clipped =
+                        ui.painter_at(egui::Rect::from_min_max(egui::pos2(row.left() + 22.0, row.top()), egui::pos2(del_rect.left() - 6.0, row.bottom())));
+                    let name = if marker.name.is_empty() { "Marker".to_string() } else { marker.name.clone() };
+                    clipped.text(
+                        egui::pos2(row.left() + 22.0, row.center().y - 6.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("{}  {name}", marker_timecode(rate, marker.start)),
+                        egui::FontId::monospace(9.5),
+                        ui::TEXT_MID,
+                    );
+                    if !marker.comment.is_empty() {
+                        clipped.text(
+                            egui::pos2(row.left() + 22.0, row.center().y + 7.0),
+                            egui::Align2::LEFT_CENTER,
+                            &marker.comment,
+                            egui::FontId::proportional(9.0),
+                            ui::TEXT_LO,
+                        );
+                    }
+                    ui.painter().text(del_rect.center(), egui::Align2::CENTER_CENTER, "x", egui::FontId::proportional(10.0), ui::TEXT_LO);
+                    if del.clicked() {
+                        if delete_marker(app, id) && list.selected == Some(id) {
+                            list.selected = None;
+                        }
+                    } else if seek.clicked() {
+                        list.selected = Some(id);
+                        select_marker(app, id);
+                    }
+                }
+            });
+        });
+    if !closed {
+        app.marker_list = Some(list);
+    }
+}
+
 /// Drag the sequence (Program) In or Out mark by `dx` points on the ruler. The
 /// mark lands on the sequence frame grid and is clamped so In never passes Out
 /// (and Out never passes In, instead of the engine's `markers.markIn`/`markOut`
@@ -2348,6 +2489,11 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         }
 
         ui.menu_button("Markers", |ui| {
+            if ui.button("Marker List...").clicked() {
+                open_marker_list(app);
+                ui.close();
+            }
+            ui.separator();
             if ui.button("Add Marker (M)").clicked() {
                 add_marker(app);
                 ui.close();
@@ -2388,6 +2534,10 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 ui.close();
             }
         });
+
+        if chip(ui, egui::Id::new("ff-marker-list-open"), "Marker List").on_hover_text("Select, seek to and delete timeline markers").clicked() {
+            open_marker_list(app);
+        }
 
         let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
         ui.menu_button("In / Out", |ui| {
