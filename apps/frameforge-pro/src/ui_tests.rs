@@ -343,8 +343,8 @@ fn dragging_a_clip_snaps_its_start_and_linked_sound_to_a_marker() {
     let grab = clip.center();
     h.drag(grab, &[grab + Vec2::new(10.0, 0.0), grab + Vec2::new(86.0, 0.0)]);
 
-    assert_eq!(v1_span(&h.app).0, 2 * TICKS_PER_SECOND, "the picture snapped to the marker");
-    assert_eq!(a1_start(&h.app), 2 * TICKS_PER_SECOND, "the linked sound followed it to the same frame");
+    assert_eq!(v1_span(&h.app).0, Tick(2 * TICKS_PER_SECOND), "the picture snapped to the marker");
+    assert_eq!(a1_start(&h.app), Tick(2 * TICKS_PER_SECOND), "the linked sound followed it to the same frame");
     assert_eq!(h.app.status, "Moved clip (snapped)");
 }
 
