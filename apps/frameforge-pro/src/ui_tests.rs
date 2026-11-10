@@ -703,6 +703,57 @@ fn dragging_the_sequence_out_before_the_in_clamps_at_the_in() {
     );
 }
 
+// ---- sequence marker ruler drag -------------------------------------------
+
+/// The sequence marker starts, in document order.
+fn sequence_marker_starts(app: &App) -> Vec<Tick> {
+    app.sequence().map(|q| q.markers.iter().map(|m| m.start).collect()).unwrap_or_default()
+}
+
+/// The id of the sequence marker whose start is `at`.
+fn sequence_marker_id(app: &App, at: Tick) -> u64 {
+    app.sequence().and_then(|q| q.markers.iter().find(|m| m.start == at).map(|m| m.id.0)).expect("a sequence marker at the expected time")
+}
+
+#[test]
+fn dragging_the_sequence_marker_handle_moves_only_that_marker_and_one_undo_restores_it() {
+    let (mut h, _) = seeded();
+    h.app.execute("markers.add", serde_json::json!({"time": 2 * TICKS_PER_SECOND, "name": "A"})).unwrap();
+    h.app.execute("markers.add", serde_json::json!({"time": 6 * TICKS_PER_SECOND, "name": "B"})).unwrap();
+    h.frame(Vec::new());
+    let before = sequence_marker_starts(&h.app);
+    assert_eq!(before, vec![Tick(2 * TICKS_PER_SECOND), Tick(6 * TICKS_PER_SECOND)], "two sequence markers");
+    let marker_id = sequence_marker_id(&h.app, Tick(2 * TICKS_PER_SECOND));
+
+    let body = h.rect_of(egui::Id::new("ff-timeline-body")).expect("the timeline body registers `ff-timeline-body`");
+    let handle = h.rect_of(egui::Id::new(("ff-sequence-marker-handle", marker_id))).expect("the marker has a ruler handle");
+    let at_two = body.left() + 2.0 * h.app.zoom;
+    assert!((handle.center().x - at_two).abs() < 1.5, "the marker handle sits on the 2 s mark");
+    // The ruler zoom is pixels per second, so one second is one zoom-step wide.
+    let step = egui::vec2(h.app.zoom, 0.0);
+
+    h.drag(handle.center(), &[handle.center() + step]);
+
+    assert_eq!(sequence_marker_starts(&h.app), vec![Tick(3 * TICKS_PER_SECOND), Tick(6 * TICKS_PER_SECOND)], "only the dragged marker moved, by one second");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(sequence_marker_starts(&h.app), before, "the whole drag is one undo step");
+}
+
+#[test]
+fn dragging_a_sequence_marker_before_the_start_clamps_at_zero() {
+    let (mut h, _) = seeded();
+    h.app.execute("markers.add", serde_json::json!({"time": 2 * TICKS_PER_SECOND, "name": "A"})).unwrap();
+    h.frame(Vec::new());
+    let marker_id = sequence_marker_id(&h.app, Tick(2 * TICKS_PER_SECOND));
+    let handle = h.rect_of(egui::Id::new(("ff-sequence-marker-handle", marker_id))).expect("the marker has a ruler handle");
+
+    let back_five = egui::vec2(-5.0 * h.app.zoom, 0.0);
+    h.drag(handle.center(), &[handle.center() + back_five]);
+
+    assert_eq!(sequence_marker_starts(&h.app), vec![Tick::ZERO], "a marker dragged past the start stops at zero");
+}
+
 // ---- sequence split (video/audio) In/Out -----------------------------------
 
 /// The sequence's four split points, in the ruler's order: video In, video Out,
