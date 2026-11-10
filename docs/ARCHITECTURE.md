@@ -602,6 +602,39 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T21 - snapping to markers and across linked pairs (CI-verified, run 42761241822)
+
+T3's snapper knew only zero, the playhead and clip edges, and it treated the
+other half of a linked A/V pair as an ordinary neighbour, so a pair always
+tugged itself back onto its own edges.
+
+- **Marker targets** (`edit.rs`): `snap_targets` seeds every
+  `Sequence.markers` start alongside zero and the playhead, so a move or a
+  trim can land on a cue.
+- **Linked pairs**: when the dragged clip carries a `link`, every item sharing
+  it is left out of the target list. The engine moves or trims a pair as one,
+  so its own other start and end are not neighbours. The exclusion is derived
+  from the sequence alone, so `snap_move` and `snap_trim` both get it through
+  the one helper.
+- **Edge choice** (`edit.rs`): the move's "nearest of start or end" comparison
+  measured both candidates against the raw start, so an edge that did not snap
+  (distance zero) always beat one that did - a drag only snapped when both ends
+  found targets. `choose_snap` now prefers a moved edge, then the nearer of two
+  moved edges, and leaves the clip alone when neither snaps.
+- **Tests**: `edit::tests::snap_targets_include_sequence_markers` checks a
+  marker becomes a target; `edit::tests::snap_move_does_not_snap_a_linked_pair_to_its_own_other_half`
+  places a 10 s pair at 2 s and shows the picture stays at its raw 2.1 s
+  instead of snapping back to its sound's 2 s; the demo-fixture target test
+  now counts four excluded edges (both halves) instead of two; and
+  `ui_tests::dragging_a_clip_snaps_its_start_and_linked_sound_to_a_marker`
+  drags 1.9 s to a 2 s marker and asserts both halves land on 2 s with
+  `Moved clip (snapped)`; `edit::tests::a_snap_prefers_the_edge_that_actually_moved`
+  pins the edge choice on its own.
+- **Limitations**: ripple-aware snapping (so the material a ripple shifts also
+  lands on a target) remains open, and a marker snaps only by its start.
+- **CI**: run `42761241822` - fmt, clippy `-D warnings`, check, **116 tests**,
+  release build and the binary self-test.
+
 ## T20 - timeline marker list (CI-verified, run 42749131608)
 
 T2's markers were only reachable by clicking their ruler stem; there was no
@@ -1355,6 +1388,7 @@ with a real, user-installed runtime.
 | T18 | Source marker drag and marker CSV import: bar handles move a source marker through one merged edit (root-media target, frame-snapped, clamped), and the Markers CSV importer reads the export's RFC 4180 format as one undoable edit that aborts wholly on a bad row | CI-verified, run 42537235054 |
 | T19 | Sequence marker ruler drag: every timeline marker gains a top-band grab target, and a drag frame-snaps and clamps it to the sequence through one merged edit (one undo per gesture) | CI-verified, run 42731129937 |
 | T20 | Timeline marker list: a floating window (header chip or Markers menu) lists markers with their colour, timecode, name and comment; a row seeks both playheads to its marker, and its own delete removes exactly that marker through one undoable edit | CI-verified, run 42749131608 |
+| T21 | Snapping: moves and trims target every sequence marker, and a linked A/V pair is left out of its own edges so it no longer snaps back onto its other half | CI-verified, run 42761241822 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
