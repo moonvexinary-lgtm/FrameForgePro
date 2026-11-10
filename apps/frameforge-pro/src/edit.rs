@@ -911,13 +911,17 @@ fn snap_tick(candidate: Tick, targets: &[Tick], tolerance: Tick) -> Tick {
     best
 }
 
-/// Everything a move or trim can snap to: zero, the playhead and every clip
-/// edge except the one being dragged.
+/// Everything a move or trim can snap to: zero, the playhead, every sequence
+/// marker and every clip edge except those of the clips being dragged. A
+/// linked A/V pair moves as one, so the dragged clip's other half is left out
+/// too: the pair would otherwise snap straight back onto itself.
 fn snap_targets(seq: &Sequence, exclude: Option<filmcraft_project::ClipId>, playhead: Tick) -> Vec<Tick> {
     let mut targets = vec![Tick::ZERO, playhead.max(Tick::ZERO)];
+    targets.extend(seq.markers.iter().map(|marker| marker.start));
+    let exclude_link = exclude.and_then(|id| seq.find_item(id)).and_then(|(_, item)| item.link);
     for track in seq.video_tracks.iter().chain(&seq.audio_tracks) {
         for item in &track.items {
-            if Some(item.id) == exclude {
+            if Some(item.id) == exclude || exclude_link.is_some_and(|link| item.link == Some(link)) {
                 continue;
             }
             targets.push(item.start);
@@ -3895,7 +3899,7 @@ mod tests {
         let all = super::snap_targets(seq, None, Tick(777));
         let without = super::snap_targets(seq, Some(clip), Tick(777));
         assert!(without.contains(&Tick(777)), "the playhead is a target");
-        assert_eq!(all.len() - without.len(), 2, "the dragged clip contributes its start and end, and nothing else");
+        assert_eq!(all.len() - without.len(), 4, "the dragged clip and its linked sound contribute two edges each, and nothing else");
     }
 
     #[test]
