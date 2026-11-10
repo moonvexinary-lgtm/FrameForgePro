@@ -454,6 +454,55 @@ pub(crate) fn sequence_mark_rects(alloc: egui::Rect, mark_in: Option<Tick>, mark
     (mark_in.map(handle), mark_out.map(handle))
 }
 
+/// The width of a sequence marker tab on the ruler, in points.
+pub(crate) const SEQUENCE_MARKER_HANDLE_W: f32 = 7.0;
+
+/// The ruler grab targets for the sequence markers: the ruler's top band, so a
+/// marker stays grabbable over the Program handles' lower tab and the split
+/// tabs. The mapping is the ruler's own.
+pub(crate) fn sequence_marker_rects(alloc: egui::Rect, markers: &[(u64, Tick)], zoom: f32) -> Vec<egui::Rect> {
+    let half = SEQUENCE_MARKER_HANDLE_W / 2.0;
+    markers
+        .iter()
+        .map(|(_, t)| {
+            let x = alloc.left() + t.seconds() as f32 * zoom;
+            egui::Rect::from_min_max(egui::pos2(x - half, alloc.top()), egui::pos2(x + half, alloc.top() + 8.0))
+        })
+        .collect()
+}
+
+/// Move one sequence marker by `dx` points on the ruler. The start lands on the
+/// sequence frame grid and is clamped to the sequence (zero at the left; at the
+/// sequence end, or the marker's own start when that is already past the end,
+/// on the right). The marker keeps its id, name, comment, length and colour,
+/// and the write is a merged project edit, so a whole drag is one undo step.
+pub(crate) fn drag_sequence_marker(app: &mut App, marker_id: u64, dx: f32, zoom: f32) {
+    let Some(seq_id) = app.sequence_id() else { return };
+    let Some(sequence) = app.session.active_sequence() else { return };
+    let Some(current) = sequence.markers.iter().find(|m| m.id.0 == marker_id).map(|m| m.start) else { return };
+    let rate = app.session.sequence_rate();
+    let delta = Tick((dx as f64 / zoom.max(0.01) as f64 * TICKS_PER_SECOND as f64).round() as i64);
+    if delta.0 == 0 {
+        return;
+    }
+    let hi = app.sequence_end().max(current);
+    let next = rate.snap_nearest(current + delta).clamp(Tick::ZERO, hi);
+    if next == current {
+        return;
+    }
+    let result = app.edit_project_merged("Move Marker", "sequence-marker-drag", |project, _| {
+        let q = project.sequence_mut(seq_id).ok_or_else(|| filmcraft_engine::EngineError::Other("the sequence is gone".into()))?;
+        let marker = q.markers.iter_mut().find(|m| m.id.0 == marker_id).ok_or_else(|| filmcraft_engine::EngineError::Other("the marker is gone".into()))?;
+        marker.start = next;
+        q.markers.sort_by_key(|m| m.start);
+        Ok(())
+    });
+    match result {
+        Ok(()) => app.status = "Marker moved".to_string(),
+        Err(error) => app.status = error.to_string(),
+    }
+}
+
 /// Drag the sequence (Program) In or Out mark by `dx` points on the ruler. The
 /// mark lands on the sequence frame grid and is clamped so In never passes Out
 /// (and Out never passes In, instead of the engine's `markers.markIn`/`markOut`
@@ -2535,6 +2584,11 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         marker_hits.push((x, m.start, if m.name.is_empty() { format!("marker {}", m.id.0) } else { m.name.clone() }));
     }
 
+    // The marker grab targets: the ruler's top band, shared by the paint above
+    // and the drag below.
+    let marker_starts: Vec<(u64, Tick)> = s.markers.iter().map(|m| (m.id.0, m.start)).collect();
+    let marker_rects = sequence_marker_rects(alloc, &marker_starts, zoom);
+
     // Handles last, so a marker at the same frame cannot hide one. In is the
     // accent colour; Out is amber, far enough from the red playhead.
     for (rect, color) in [(in_rect, ui::ACCENT), (out_rect, egui::Color32::from_rgb(214, 155, 68))] {
@@ -2691,6 +2745,18 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
 
     let px = to_x(app.playhead);
     painter.line_segment([egui::pos2(px, alloc.top()), egui::pos2(px, alloc.bottom())], egui::Stroke::new(2.0, ui::DANGER));
+
+    // Sequence markers are grabbed first, so a Program or split handle at the
+    // same frame keeps the grab of the tab it paints over the marker.
+    for ((marker_id, _), rect) in marker_starts.iter().zip(&marker_rects) {
+        let handle = ui.interact(*rect, egui::Id::new(("ff-sequence-marker-handle", *marker_id)), egui::Sense::drag());
+        if handle.dragged() {
+            drag_sequence_marker(app, *marker_id, handle.drag_delta().x, zoom);
+        }
+        if handle.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+    }
 
     // Program In/Out are grabbed on the ruler. Registering them after the body
     // widget puts them on top, so pressing a handle is a mark drag rather than
