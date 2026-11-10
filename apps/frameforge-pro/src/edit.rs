@@ -935,6 +935,25 @@ fn snap_tolerance(zoom: f32) -> Tick {
     Tick(((SNAP_PX as f64 / zoom.max(1.0) as f64) * TICKS_PER_SECOND as f64) as i64)
 }
 
+/// Pick between the start and end candidates. A candidate that actually
+/// snapped beats one that did not: an unchanged edge has zero distance, so a
+/// plain nearest-distance comparison would always keep it and a move would
+/// never snap.
+fn choose_snap(raw: Tick, by_start: Tick, by_end: Tick) -> Tick {
+    match (by_start.0 != raw.0, by_end.0 != raw.0) {
+        (true, false) => by_start,
+        (false, true) => by_end,
+        (true, true) => {
+            if (by_start.0 - raw.0).abs() <= (by_end.0 - raw.0).abs() {
+                by_start
+            } else {
+                by_end
+            }
+        }
+        (false, false) => raw,
+    }
+}
+
 /// Snap a moved clip: whichever of its start or end is closer to a target wins.
 fn snap_move(app: &App, clip: filmcraft_project::ClipId, raw: Tick, zoom: f32) -> Tick {
     if !app.session.state.snapping {
@@ -946,7 +965,7 @@ fn snap_move(app: &App, clip: filmcraft_project::ClipId, raw: Tick, zoom: f32) -
     let duration = seq.find_item(clip).map(|(_, i)| i.duration).unwrap_or_default();
     let by_start = snap_tick(raw, &targets, tol);
     let by_end = Tick(snap_tick(raw + duration, &targets, tol).0 - duration.0);
-    if (by_start.0 - raw.0).abs() <= (by_end.0 - raw.0).abs() { by_start } else { by_end }
+    choose_snap(raw, by_start, by_end)
 }
 
 /// Snap a trimmed edge to a nearby target (the delta is adjusted to land there).
@@ -3900,6 +3919,14 @@ mod tests {
         let without = super::snap_targets(seq, Some(clip), Tick(777));
         assert!(without.contains(&Tick(777)), "the playhead is a target");
         assert_eq!(all.len() - without.len(), 4, "the dragged clip and its linked sound contribute two edges each, and nothing else");
+    }
+
+    #[test]
+    fn a_snap_prefers_the_edge_that_actually_moved() {
+        assert_eq!(super::choose_snap(Tick(100), Tick(110), Tick(100)), Tick(110), "a snapped start beats an unmoved end");
+        assert_eq!(super::choose_snap(Tick(100), Tick(100), Tick(90)), Tick(90), "a snapped end beats an unmoved start");
+        assert_eq!(super::choose_snap(Tick(100), Tick(106), Tick(96)), Tick(106), "the nearer of two snapped edges wins");
+        assert_eq!(super::choose_snap(Tick(100), Tick(100), Tick(100)), Tick(100), "nothing moves when neither edge snaps");
     }
 
     #[test]
