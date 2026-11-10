@@ -754,6 +754,60 @@ fn dragging_a_sequence_marker_before_the_start_clamps_at_zero() {
     assert_eq!(sequence_marker_starts(&h.app), vec![Tick::ZERO], "a marker dragged past the start stops at zero");
 }
 
+// ---- marker list ----------------------------------------------------------
+
+/// Open the floating timeline-marker list from the timeline header and lay the
+/// window out, so its rows are addressable on the next frame.
+fn marker_list_open(h: &mut Harness) {
+    h.click(egui::Id::new("ff-marker-list-open"));
+    h.frame(Vec::new());
+}
+
+#[test]
+fn the_marker_list_selects_a_row_and_seeks_the_playhead_to_its_marker() {
+    let (mut h, _) = seeded();
+    h.app.execute("markers.add", serde_json::json!({"time": 2 * TICKS_PER_SECOND, "name": "Intro"})).unwrap();
+    h.app.execute("markers.add", serde_json::json!({"time": 6 * TICKS_PER_SECOND, "name": "Outro"})).unwrap();
+    h.app.playhead = Tick::ZERO;
+    h.frame(Vec::new());
+    let intro = sequence_marker_id(&h.app, Tick(2 * TICKS_PER_SECOND));
+
+    marker_list_open(&mut h);
+    h.click(egui::Id::new(("ff-marker-list-row", intro)));
+
+    assert_eq!(h.app.playhead, Tick(2 * TICKS_PER_SECOND), "the row seeks the Program playhead to its marker");
+    assert_eq!(h.app.session.playhead(), Tick(2 * TICKS_PER_SECOND), "the engine playhead stays in step");
+    assert_eq!(h.app.status, "Marker \"Intro\" at 00:00:02:00", "the row names the marker and its position");
+
+    h.frame(Vec::new());
+    let outro = sequence_marker_id(&h.app, Tick(6 * TICKS_PER_SECOND));
+    h.click(egui::Id::new(("ff-marker-list-row", outro)));
+    assert_eq!(h.app.playhead, Tick(6 * TICKS_PER_SECOND), "another row moves to its own marker");
+    assert_eq!(h.app.status, "Marker \"Outro\" at 00:00:06:00");
+}
+
+#[test]
+fn deleting_a_marker_from_the_list_removes_only_that_marker_and_one_undo_restores_it() {
+    let (mut h, _) = seeded();
+    h.app.execute("markers.add", serde_json::json!({"time": 2 * TICKS_PER_SECOND, "name": "A"})).unwrap();
+    h.app.execute("markers.add", serde_json::json!({"time": 6 * TICKS_PER_SECOND, "name": "B"})).unwrap();
+    h.frame(Vec::new());
+    let before = sequence_marker_starts(&h.app);
+    assert_eq!(before, vec![Tick(2 * TICKS_PER_SECOND), Tick(6 * TICKS_PER_SECOND)], "two sequence markers");
+    let two = sequence_marker_id(&h.app, Tick(2 * TICKS_PER_SECOND));
+
+    marker_list_open(&mut h);
+    h.click(egui::Id::new(("ff-marker-list-row", two)));
+    h.frame(Vec::new());
+    h.click(egui::Id::new(("ff-marker-list-del", two)));
+
+    assert_eq!(sequence_marker_starts(&h.app), vec![Tick(6 * TICKS_PER_SECOND)], "only the chosen marker is deleted");
+    assert_eq!(h.app.status, "Marker deleted");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(sequence_marker_starts(&h.app), before, "deleting a marker from the list is one undo step");
+}
+
 // ---- sequence split (video/audio) In/Out -----------------------------------
 
 /// The sequence's four split points, in the ruler's order: video In, video Out,
