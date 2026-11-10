@@ -3899,6 +3899,46 @@ mod tests {
     }
 
     #[test]
+    fn snap_targets_include_sequence_markers() {
+        let mut s = demo_session();
+        s.execute("markers.add", json!({"time": 4 * TICKS_PER_SECOND, "name": "cue"})).unwrap();
+        let seq = s.active_sequence().unwrap();
+        let targets = super::snap_targets(seq, None, Tick(777));
+        assert!(targets.contains(&Tick(4 * TICKS_PER_SECOND)), "a sequence marker is a snap target");
+    }
+
+    #[test]
+    fn snap_move_does_not_snap_a_linked_pair_to_its_own_other_half() {
+        let mut s = Session::default();
+        s.execute("file.newProject", json!({"name": "Snap"})).unwrap();
+        s.execute("file.newSequence", json!({"name": "S1", "fps": 24})).unwrap();
+        let a = ItemId(s.execute("file.newBarsAndTone", json!({"seconds": 10.0})).unwrap()["item"].as_u64().unwrap());
+        let seq = s.state.active_sequence.unwrap();
+        let tg = s.targeting();
+        let plan = {
+            let q = s.active_sequence().unwrap();
+            let mut p = plan_placement(&s.project, q, a, &tg).unwrap();
+            p.at = Tick(2 * TICKS_PER_SECOND);
+            p
+        };
+        s.execute("timeline.place", placement_params(a, seq, &plan)).unwrap();
+
+        let mut app = crate::app::App::from_parts((*s.project).clone(), std::collections::HashMap::new(), None, "test");
+        app.playhead = Tick(8 * TICKS_PER_SECOND);
+        let video = {
+            let q = app.sequence().unwrap();
+            let item = q.video_tracks[0].items.first().expect("the pair's picture");
+            assert!(item.link.is_some(), "the fixture is a linked A/V pair");
+            item.id
+        };
+
+        // The picture half would otherwise snap backwards onto its own sound at
+        // 2 s (the pair has not moved yet), instead of following the pointer.
+        let raw = Tick(2 * TICKS_PER_SECOND + TICKS_PER_SECOND / 10);
+        assert_eq!(super::snap_move(&app, video, raw, 40.0), raw, "the pair's own other half is not a snap target");
+    }
+
+    #[test]
     fn insert_and_overwrite_at_the_playhead_use_the_real_engine_insert_flag() {
         let mut s = Session::default();
         s.execute("file.newProject", json!({"name": "IO"})).unwrap();

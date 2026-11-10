@@ -266,6 +266,16 @@ fn v1_span(app: &App) -> (Tick, Tick) {
     (start, duration)
 }
 
+/// The fixture's A1 clip start: the sound half of the linked pair.
+fn a1_start(app: &App) -> Tick {
+    app.sequence()
+        .expect("the fixture has a sequence")
+        .audio_tracks
+        .iter()
+        .find_map(|track| track.items.first().map(|item| item.start))
+        .expect("the fixture placed the linked sound")
+}
+
 /// The engine's id for the fixture's video clip, which is what a selection holds.
 fn v1_id(app: &App) -> filmcraft_project::ClipId {
     let (row, _, _) = v1_clip(app);
@@ -318,6 +328,24 @@ fn dragging_a_clip_moves_it_and_ctrl_z_undoes_the_move() {
 
     h.press(Key::Z, command(false));
     assert_eq!(v1_span(&h.app).0, Tick::ZERO, "the drag is one undo step");
+}
+
+#[test]
+fn dragging_a_clip_snaps_its_start_and_linked_sound_to_a_marker() {
+    let (mut h, _) = seeded();
+    h.app.execute("markers.add", serde_json::json!({"time": 2 * TICKS_PER_SECOND, "name": "cue"})).unwrap();
+    let (_, clip) = timeline_at(&mut h, 40.0);
+
+    // The gesture is read from the first waypoint past egui's 6 px tolerance,
+    // so 10 px then 86 px is a 76 px (1.9 s) move: 0.1 s short of the marker at
+    // 2 s, inside the 0.2 s (8 px) snap radius, and 0.1 s short of the clip's
+    // own linked sound at 0 s, which must not pull it back.
+    let grab = clip.center();
+    h.drag(grab, &[grab + Vec2::new(10.0, 0.0), grab + Vec2::new(86.0, 0.0)]);
+
+    assert_eq!(v1_span(&h.app).0, 2 * TICKS_PER_SECOND, "the picture snapped to the marker");
+    assert_eq!(a1_start(&h.app), 2 * TICKS_PER_SECOND, "the linked sound followed it to the same frame");
+    assert_eq!(h.app.status, "Moved clip (snapped)");
 }
 
 #[test]
