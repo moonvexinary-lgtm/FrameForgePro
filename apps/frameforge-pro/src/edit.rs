@@ -571,9 +571,12 @@ pub(crate) fn marker_list_window(app: &mut App, ui: &egui::Ui) {
         .id(egui::Id::new("ff-marker-list-window"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-24.0, 84.0))
         .collapsible(false)
-        .resizable(true)
+        .resizable(false)
         .show(ui.ctx(), |ui| {
-            ui.set_min_width(360.0);
+            // Pin the width: a scroll area that auto-shrinks horizontally would
+            // otherwise take the whole screen on the window's first layout pass,
+            // which an anchored window would then place off-screen.
+            ui.set_width(360.0);
             ui.horizontal(|ui| {
                 let count = format!("{} marker{}", markers.len(), if markers.len() == 1 { "" } else { "s" });
                 ui.label(egui::RichText::new(count).size(11.0).strong().color(ui::TEXT_HI));

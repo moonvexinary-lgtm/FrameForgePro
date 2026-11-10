@@ -760,6 +760,9 @@ fn dragging_a_sequence_marker_before_the_start_clamps_at_zero() {
 /// window out, so its rows are addressable on the next frame.
 fn marker_list_open(h: &mut Harness) {
     h.click(egui::Id::new("ff-marker-list-open"));
+    // The anchored window positions itself from the previous frame's size, so
+    // let it settle before its rows are clicked.
+    h.frame(Vec::new());
     h.frame(Vec::new());
 }
 
