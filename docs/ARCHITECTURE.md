@@ -602,6 +602,30 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T19 - sequence marker ruler drag (CI-verified, run 42731129937)
+
+T18 made Source markers draggable; the timeline's own markers still only
+jumped on click.
+
+- **Geometry** (`edit.rs`): `sequence_marker_rects` gives every marker a
+  `SEQUENCE_MARKER_HANDLE_W`-wide grab target in the ruler's top band, using
+  the ruler's own time-to-pixels mapping. The targets are registered before
+  the Program In/Out and split handles, so paint precedence (a mark draws over
+  a marker) and grab precedence agree: a mark at the same frame wins.
+- **Gesture**: `drag_sequence_marker` snaps the new start to the sequence
+  frame grid and clamps it to `[0, max(sequence_end, current)]` - a marker
+  already past the end keeps its own start as the upper bound instead of being
+  pulled inward. The marker keeps its id, name, comment, length and colour, and
+  the write is one merged project edit ("Move Marker",
+  "sequence-marker-drag"), so a whole drag is one Ctrl+Z.
+- **Tests** (two `ui_tests`): a marker at 2 s among a second at 6 s is dragged
+  by one ruler second, only it moves, and one Ctrl+Z restores both; a 2 s
+  marker dragged five seconds left stops at zero.
+- **Limitations**: markers may share a frame (the later one wins the grab);
+  EDL import and marker-list selection remain.
+- **CI**: run `42731129937` - fmt, clippy `-D warnings`, check, **110 tests**,
+  release build and the binary self-test.
+
 ## T6 - Ripple delete with linked A/V and marker ripple (CI-verified, run 40163011141)
 
 `Shift+Delete` and the timeline **Ripple Delete** button call the engine's real
@@ -1302,6 +1326,7 @@ with a real, user-installed runtime.
 | T16 | Sequence In/Out ruler drag: the Program range paints as a band with an In and an Out handle, each drag frame-snaps and clamps at the other mark through a merged project edit with one undo per gesture | CI-verified, run 42506032070 |
 | T17 | Split video/audio In/Out: four header chips run the engine's `markers.markSplit*` at the playhead, and channel-coloured ruler tabs drag through one merged edit, clamping at the channel's effective opposite | CI-verified, run 42527534314 |
 | T18 | Source marker drag and marker CSV import: bar handles move a source marker through one merged edit (root-media target, frame-snapped, clamped), and the Markers CSV importer reads the export's RFC 4180 format as one undoable edit that aborts wholly on a bad row | CI-verified, run 42537235054 |
+| T19 | Sequence marker ruler drag: every timeline marker gains a top-band grab target, and a drag frame-snaps and clamps it to the sequence through one merged edit (one undo per gesture) | CI-verified, run 42731129937 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
