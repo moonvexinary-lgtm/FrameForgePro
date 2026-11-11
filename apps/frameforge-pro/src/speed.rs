@@ -99,7 +99,18 @@ pub fn apply(app: &mut App, dialog: &SpeedDialog) -> Result<(), String> {
 /// Freeze the selected video clip on one source frame.
 pub fn freeze(app: &mut App, hold_on: HoldOn) -> Result<(), String> {
     let Some((clip, _)) = app.selected_clip() else { return Err("Select a video clip to freeze".to_string()) };
-    let params = serde_json::json!({"clips": [clip.0], "enabled": true, "holdOn": hold_on.id()});
+    // "playhead" would read the engine's own playhead, which the shell does not
+    // mirror: the Program monitor's playhead lives on `App`. Pass it as an
+    // explicit sequence time so the held frame is the one the user sees.
+    let params = match hold_on {
+        HoldOn::Playhead => serde_json::json!({
+            "clips": [clip.0],
+            "enabled": true,
+            "holdOn": "sequenceTime",
+            "time": app.playhead.max(filmcraft_time::Tick::ZERO).0,
+        }),
+        _ => serde_json::json!({"clips": [clip.0], "enabled": true, "holdOn": hold_on.id()}),
+    };
     let result = with_engine_selection(app, clip, |app| app.execute("clip.frameHoldOptions", params));
     match result {
         Ok(_) => {
