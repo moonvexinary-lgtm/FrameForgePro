@@ -160,6 +160,8 @@ pub struct App {
     pub relink: Option<crate::relink::RelinkDialog>,
     /// The floating timeline marker list, when one is open.
     pub marker_list: Option<crate::edit::MarkerList>,
+    /// The floating Speed / Duration dialog, when one is open.
+    pub speed: Option<crate::speed::SpeedDialog>,
     /// The graphic clip selected in the Text & Graphics workspace.
     pub graphics_clip: Option<ClipId>,
     /// The layer index selected inside that graphic clip.
@@ -275,6 +277,7 @@ impl App {
             offline_rows: Vec::new(),
             relink: None,
             marker_list: None,
+            speed: None,
             graphics_clip: None,
             graphics_layer: 0,
             text_draft: String::new(),
@@ -1146,6 +1149,9 @@ impl App {
             // The marker list floats the same way: it can stay open while the
             // playhead moves and clips are edited underneath it.
             crate::edit::marker_list_window(self, ui);
+            // Speed / Duration edits the selected clip, so it floats over the
+            // timeline it changes.
+            crate::speed::show(self, ui);
         }));
         if result.is_err() {
             self.status = "A UI error occurred. The project is intact — save it now.".to_string();
@@ -1251,6 +1257,11 @@ impl App {
                 }
                 if ui.button("Slide Right").clicked() {
                     crate::edit::slide_selected(self, 1);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.add_enabled(self.selection.is_some(), egui::Button::new("Speed/Duration...")).clicked() {
+                    crate::speed::open(self);
                     ui.close();
                 }
                 ui.separator();

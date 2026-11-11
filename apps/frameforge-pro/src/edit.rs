@@ -2657,6 +2657,12 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             open_marker_list(app);
         }
 
+        if app.selection.is_some()
+            && chip(ui, egui::Id::new("ff-speed-open"), "Speed").on_hover_text("Speed, reverse and freeze frame for the selected clip").clicked()
+        {
+            crate::speed::open(app);
+        }
+
         let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
         ui.menu_button("In / Out", |ui| {
             if ui.button("Mark In").clicked() {

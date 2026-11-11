@@ -31,6 +31,7 @@ mod roto_bench;
 mod roto_engine;
 mod roto_run;
 mod roto_segment;
+mod speed;
 mod ui;
 #[cfg(test)]
 mod ui_tests;

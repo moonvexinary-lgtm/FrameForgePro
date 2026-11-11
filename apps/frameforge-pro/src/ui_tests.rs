@@ -349,6 +349,31 @@ fn dragging_a_clip_snaps_its_start_and_linked_sound_to_a_marker() {
 }
 
 #[test]
+fn the_speed_chip_opens_the_dialog_and_a_preset_halves_the_selected_clip() {
+    let (mut h, _) = seeded();
+    let (_, clip) = timeline_at(&mut h, 40.0);
+    h.click_at(clip.center());
+    assert!(h.app.selection.is_some(), "the click selected the clip under the pointer");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-speed-open"));
+    assert!(h.app.speed.is_some(), "the toolbar chip opened the dialog");
+
+    // One frame lays the floating window out, so its controls are addressable.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-speed-preset-200"));
+    assert_eq!(h.app.speed.as_ref().map(|d| d.percent), Some(200.0), "the preset sets the rate");
+    h.click(egui::Id::new("ff-speed-apply"));
+
+    assert_eq!(v1_span(&h.app).1, Tick(5 * TICKS_PER_SECOND), "200% halves the picture's length");
+    assert_eq!(h.app.status, "Speed 200%");
+    assert!(h.app.speed.is_none(), "Apply closes the dialog");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(v1_span(&h.app).1, Tick(10 * TICKS_PER_SECOND), "one Ctrl+Z restores the length");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
