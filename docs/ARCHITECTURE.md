@@ -602,6 +602,37 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T22 - sequence marker EDL import (CI-verified, run 42834979022)
+
+Markers could round-trip through the CSV report but not through the EDLs
+editors already exchange, where locators ride as `* LOC:` comment lines.
+
+- **Format** (`edit.rs`): `parse_markers_edl` reads
+  `* LOC: <record tc> [COLOR] <name>` from any CMX 3600 list (a title, FCM
+  and cut events are ignored, so a full EDL works). The record timecodes
+  carry the hour the list starts at, so the hour of the first locator is the
+  base and every marker lands relative to it; a locator before that hour is
+  refused. The Avid colour words map onto the label palette (`BLUE` ->
+  `Blue`, `CYAN` -> `Teal`, ...) and a locator without one is green. Names
+  are the remaining words; locators have no comment or length.
+- **One edit** (`edit.rs`): the CSV and EDL importers share
+  `apply_imported_markers`, so both add every marker through one undoable
+  "Import Markers" edit and a bad row aborts the whole import. Errors name
+  the line (EDL) or the row (CSV).
+- **UI**: the marker panel gains "Import Markers EDL..." beside the CSV
+  button; the parse runs before the edit, so a bad file leaves the sequence
+  untouched.
+- **Tests**: `marker_edl_import_reads_loc_lines_and_is_one_undo` imports a
+  24 fps cut list with `BLUE Intro` at `01:00:02:00` and a plain
+  `Wider shot` at `01:00:05:00`, asserting the 2 s/5 s starts, the colour
+  mapping, the green default, the empty comment, the status line and a
+  single undo; `marker_edl_import_refuses_a_bad_locator_and_a_file_without_any`
+  covers the no-locator and bad-timecode refusals and that nothing is added.
+- **Limitations**: marker EDL export remains CSV only, and drop-frame EDL
+  timecodes are read as non-drop.
+- **CI**: run `42834979022` - fmt, clippy `-D warnings`, check, **118 tests**,
+  release build and the binary self-test.
+
 ## T21 - snapping to markers and across linked pairs (CI-verified, run 42761241822)
 
 T3's snapper knew only zero, the playhead and clip edges, and it treated the
@@ -1389,6 +1420,7 @@ with a real, user-installed runtime.
 | T19 | Sequence marker ruler drag: every timeline marker gains a top-band grab target, and a drag frame-snaps and clamps it to the sequence through one merged edit (one undo per gesture) | CI-verified, run 42731129937 |
 | T20 | Timeline marker list: a floating window (header chip or Markers menu) lists markers with their colour, timecode, name and comment; a row seeks both playheads to its marker, and its own delete removes exactly that marker through one undoable edit | CI-verified, run 42749131608 |
 | T21 | Snapping: moves and trims target every sequence marker, and a linked A/V pair is left out of its own edges so it no longer snaps back onto its other half | CI-verified, run 42761241822 |
+| T22 | Sequence marker EDL import: `* LOC:` locator lines from a CMX 3600 list become markers at their record timecodes (hour-relative), with the Avid colour words mapped and one undoable edit for the whole file | CI-verified, run 42834979022 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
