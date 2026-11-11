@@ -436,6 +436,56 @@ fn the_transition_chip_opens_the_browser_and_applies_the_chosen_effect() {
 }
 
 #[test]
+fn clicking_a_timeline_transition_selects_it_and_dragging_its_edge_sets_its_length() {
+    let (mut h, _) = seeded();
+    // Cut the fixture's 10 s clip in two so V1 has an edit to hang a
+    // transition on (Ctrl+K also splits the linked sound).
+    h.app.playhead = Tick(5 * TICKS_PER_SECOND);
+    h.press(Key::K, command(false));
+    let (body, _) = timeline_at(&mut h, 40.0);
+
+    // A 24-frame dissolve at the cut through the app's own path, so the
+    // timeline draws a transition the engine document really has.
+    let second = h.app.sequence().expect("the fixture has a sequence").video_tracks[0].items[1].id;
+    h.app.selection = Some(second);
+    h.app.transition_frames = 24;
+    edit::apply_dissolve(&mut h.app, true);
+    let (start, duration, id) = {
+        let tr = &h.app.sequence().expect("the fixture has a sequence").video_tracks[0].transitions[0];
+        (tr.start, tr.duration, tr.id.0)
+    };
+    assert_eq!(duration, FrameRate::FPS_24.tick_of(24), "the fixture transition is 24 frames");
+
+    // The transition paints over the cut, where a person sees it.
+    let rect = edit::timeline_clip_rect(body, 0, start, duration, 40.0);
+    h.click_at(rect.center());
+    assert_eq!(
+        h.app.session.state.transition_selection.iter().map(|t| t.0).collect::<Vec<_>>(),
+        vec![id],
+        "clicking the transition on the track selects it in the engine"
+    );
+    assert_eq!(h.app.selection, Some(second), "the click also selects the clip the transition lands on");
+    assert!(h.app.status.contains("Cross Dissolve"), "the status names what was selected: {}", h.app.status);
+
+    // Dragging the right edge one second out (40 px at 40 px/s) doubles the
+    // centred transition: 24 frames becomes 48.
+    let grab = Pos2::new(rect.right() - 3.0, rect.center().y);
+    h.drag(grab, &[grab + Vec2::new(12.0, 0.0), grab + Vec2::new(40.0, 0.0)]);
+    assert_eq!(
+        h.app.sequence().expect("the fixture has a sequence").video_tracks[0].transitions[0].duration,
+        FrameRate::FPS_24.tick_of(48),
+        "the dragged edge sets the length"
+    );
+
+    h.press(Key::Z, command(false));
+    assert_eq!(
+        h.app.sequence().expect("the fixture has a sequence").video_tracks[0].transitions[0].duration,
+        FrameRate::FPS_24.tick_of(24),
+        "one Ctrl+Z restores the length"
+    );
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
