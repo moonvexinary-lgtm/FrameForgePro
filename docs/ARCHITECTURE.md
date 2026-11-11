@@ -602,6 +602,46 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T23 - speed, reverse and freeze (CI-verified, run 42949817569)
+
+The engine could change a clip's rate (`clip.speedDuration`) and hold a source
+frame (`clip.frameHoldOptions`), but the shell called neither, so the parity row
+for speed and freeze was empty.
+
+- **Dialog** (`speed.rs`): the Clip menu's "Speed/Duration..." and a Speed chip
+  in the timeline toolbar (shown when a clip is selected) open a floating
+  window seeded from the selected clip's own rate, direction and time
+  interpolation. It carries a percentage field, 25/50/100/200/400 presets,
+  Reverse, Ripple and the Frame Sampling / Frame Blending / Optical Flow
+  choice, and its width is pinned so an anchored window cannot take the whole
+  screen on its first layout pass.
+- **Apply**: runs `clip.speedDuration` with the clip named explicitly, so the
+  engine recomputes the timeline length from the source span (200% halves a
+  10 s clip), moves a linked pair together and keeps the change as one undo.
+  The command is gated on the engine's own selection, which the timeline keeps
+  on the app, so `with_engine_selection` mirrors the clip into the engine
+  state for the call and restores the previous selection afterwards.
+- **Freeze**: Freeze Frame runs `clip.frameHoldOptions` on the in point, the
+  out point or the Program playhead, which holds that source frame for the
+  clip's whole length without changing it; Remove Hold clears it. The
+  playhead is sent as an explicit `sequenceTime` because the engine's own
+  playhead is never mirrored from the monitor - a "playhead" hold would
+  otherwise freeze frame 0. A freeze is a held frame in the document, not a
+  rendered still file.
+- **Tests**: `speed::tests::speed_dialog_doubles_the_rate_and_halves_the_duration_as_one_undo`,
+  `speed::tests::speed_dialog_slows_down_reverses_and_ripples_the_clips_after_it`
+  and `speed::tests::freeze_frame_holds_a_source_frame_and_can_be_removed`
+  assert the exact durations, the reverse flag, the ripple shift, the held
+  source frame and the undo; `ui_tests::the_speed_chip_opens_the_dialog_and_a_preset_halves_the_selected_clip`
+  clicks the clip, opens the dialog from the chip, clicks the 200% preset and
+  Apply, then restores the length with one Ctrl+Z.
+- **Limitations**: no duration field (the rate drives the length), the
+  interpolation mode is stored and handed to the renderer but no rendered
+  optical-flow difference is measured, and a freeze cannot yet be given its
+  own length inside the dialog.
+- **CI**: run `42949817569` - fmt, clippy `-D warnings`, check, **122 tests**,
+  release build and the binary self-test.
+
 ## T22 - sequence marker EDL import (CI-verified, run 42834979022)
 
 Markers could round-trip through the CSV report but not through the EDLs
@@ -1421,6 +1461,7 @@ with a real, user-installed runtime.
 | T20 | Timeline marker list: a floating window (header chip or Markers menu) lists markers with their colour, timecode, name and comment; a row seeks both playheads to its marker, and its own delete removes exactly that marker through one undoable edit | CI-verified, run 42749131608 |
 | T21 | Snapping: moves and trims target every sequence marker, and a linked A/V pair is left out of its own edges so it no longer snaps back onto its other half | CI-verified, run 42761241822 |
 | T22 | Sequence marker EDL import: `* LOC:` locator lines from a CMX 3600 list become markers at their record timecodes (hour-relative), with the Avid colour words mapped and one undoable edit for the whole file | CI-verified, run 42834979022 |
+| T23 | Speed / Duration: a floating dialog drives the engine's rate, reverse, ripple and time interpolation, and Freeze Frame holds a source frame at the clip's in point, out point or the Program playhead | CI-verified, run 42949817569 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
