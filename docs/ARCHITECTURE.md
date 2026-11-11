@@ -602,6 +602,55 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T24 - transition browser (CI-verified, run 43090989519)
+
+The transitions row could apply the default dissolve / crossfade and edit the
+one at the selected clip's In edge, but nothing listed the engine's other
+transitions, the audio variants were unreachable and there was no way to pick
+one.
+
+- **Catalog** (`transitions.rs`): the browser loads `effects.list` with
+  `kind: "VideoTransition"` / `"AudioTransition"` - a query, so opening it
+  neither dirties the project nor adds a history step - and keeps each row's
+  engine id, name and folder path. The window is a fixed 400x540 box: an
+  auto-sized anchored window takes its size from its contents, and the
+  contents-filling catalog handed that size straight back, so the window
+  resized by the same 34.7 pt every other frame and no click could land on it.
+  It offers the two tabs, labels every row with the engine's leaf folder and
+  narrows the list with a name/folder filter.
+- **Apply**: the chosen id, the browser's length (1-600 frames) and the
+  selected clip's In edge go to `sequence.applyVideoTransition` /
+  `sequence.applyAudioTransition`; a linked pair is resolved first, so an
+  audio variant can be applied from the picture (and the other way round).
+  Apply only takes a length, so a Start / End at cut alignment is a second
+  `sequence.setTransition`; Center at cut is one edit and one undo.
+- **Selection and removal**: the browser names the transition already at the
+  selected edit (effect, frames, alignment) and Select makes it the engine's
+  `transition_selection` through `timeline.select`; Remove deletes that one
+  transition in one undo. Clicking a row arms Apply through `choose`, which
+  ignores an id the reloaded catalog no longer lists.
+- **Tests**:
+  `transitions::tests::the_catalog_is_the_engines_own_transition_registry`
+  (engine folders and the filter),
+  `...::the_browser_chooses_a_catalog_row_and_ignores_an_unknown_effect`,
+  `...::applying_a_wipe_uses_the_chosen_effect_alignment_and_length`
+  (Linear Wipe, 10 frames, Start at cut on the cut),
+  `...::an_audio_transition_variant_applies_to_the_linked_sound` (Constant
+  Gain on A1 only) and
+  `...::the_browser_selects_and_removes_the_transition_at_the_selected_edit`
+  (selection, removal, one-undo restore);
+  `ui_tests::the_transition_chip_opens_the_browser_and_applies_the_chosen_effect`
+  clicks the clip, opens the browser from the chip, checks the engine catalog
+  and a filtered row, requires the Apply button's rect to be identical across
+  three frames (the window must stop moving before a click can land), applies
+  Linear Wipe and restores with one Ctrl+Z.
+- **Limitations**: a non-Center alignment is two engine edits (two undos);
+  a transition cannot be dragged or clicked in the Timeline yet, so the
+  browser is the only per-transition selection, and changing an applied
+  transition's effect means removing and re-applying it.
+- **CI**: run `43090989519` - fmt, clippy `-D warnings`, check, **128 tests**,
+  release build and the binary self-test.
+
 ## T23 - speed, reverse and freeze (CI-verified, run 42949817569)
 
 The engine could change a clip's rate (`clip.speedDuration`) and hold a source
@@ -1462,6 +1511,7 @@ with a real, user-installed runtime.
 | T21 | Snapping: moves and trims target every sequence marker, and a linked A/V pair is left out of its own edges so it no longer snaps back onto its other half | CI-verified, run 42761241822 |
 | T22 | Sequence marker EDL import: `* LOC:` locator lines from a CMX 3600 list become markers at their record timecodes (hour-relative), with the Avid colour words mapped and one undoable edit for the whole file | CI-verified, run 42834979022 |
 | T23 | Speed / Duration: a floating dialog drives the engine's rate, reverse, ripple and time interpolation, and Freeze Frame holds a source frame at the clip's in point, out point or the Program playhead | CI-verified, run 42949817569 |
+| T24 | Transition browser: a floating window over the engine's own `effects.list` catalog, with video/audio tabs, folder paths and a filter, applying the chosen effect, length and alignment at the selected edit and selecting or removing the transition there | CI-verified, run 43090989519 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
