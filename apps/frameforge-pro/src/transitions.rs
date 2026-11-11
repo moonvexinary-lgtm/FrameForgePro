@@ -121,6 +121,15 @@ pub fn visible(browser: &TransitionBrowser) -> Vec<CatalogEntry> {
         .collect()
 }
 
+/// Pick a catalog row for Apply. Unknown effects are ignored, so a stale id
+/// (the catalog reloaded under a pointer press) can never arm Apply with an
+/// effect the engine does not list.
+pub fn choose(browser: &mut TransitionBrowser, id: &str) {
+    if browser.catalog.iter().any(|e| e.id == id) {
+        browser.effect = Some(id.to_string());
+    }
+}
+
 /// Apply the chosen transition at the selected edit: the engine's apply
 /// command (effect, length, at the clip's In edge), then the alignment through
 /// `sequence.setTransition` because apply only takes a length.
@@ -311,7 +320,7 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                             ui::TEXT_OFF,
                         );
                         if hit.clicked() {
-                            browser.effect = Some(entry.id.clone());
+                            choose(&mut browser, &entry.id);
                         }
                     }
                 });
@@ -384,7 +393,7 @@ fn action(ui: &mut egui::Ui, id: &str, label: &str, accent: bool) -> egui::Respo
 
 #[cfg(test)]
 mod tests {
-    use super::{apply, at_selection, open, remove, select, set_kind, visible};
+    use super::{apply, at_selection, choose, open, remove, select, set_kind, visible};
     use crate::app::App;
     use filmcraft_project::{ClipId, ItemId, TransitionAlign};
     use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
@@ -444,6 +453,23 @@ mod tests {
         audio.filter = "gain".to_string();
         let rows = visible(&audio);
         assert_eq!(rows.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["constant_gain"], "the filter narrows by name");
+    }
+
+    #[test]
+    fn the_browser_chooses_a_catalog_row_and_ignores_an_unknown_effect() {
+        let (mut app, _) = two_clip_app(true);
+        open(&mut app);
+        let mut browser = app.transitions.clone().expect("the browser opens");
+        assert_eq!(browser.effect, None, "nothing is armed before a row is picked");
+
+        choose(&mut browser, "linear_wipe");
+        assert_eq!(browser.effect.as_deref(), Some("linear_wipe"), "the clicked row arms Apply");
+
+        choose(&mut browser, "no_such_transition");
+        assert_eq!(browser.effect.as_deref(), Some("linear_wipe"), "an id the engine does not list never arms Apply");
+
+        choose(&mut browser, "cross_dissolve");
+        assert_eq!(browser.effect.as_deref(), Some("cross_dissolve"), "another row replaces the choice");
     }
 
     #[test]

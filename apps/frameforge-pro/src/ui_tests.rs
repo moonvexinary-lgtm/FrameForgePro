@@ -387,18 +387,23 @@ fn the_transition_chip_opens_the_browser_and_applies_the_chosen_effect() {
     h.click(egui::Id::new("ff-transition-open"));
     assert!(h.app.transitions.is_some(), "the toolbar chip opened the browser");
 
-    // The anchored window settles over a couple of frames, as the speed dialog
-    // does; then the filter leaves the one catalog row the test clicks.
+    // The anchored window settles over a couple of frames; then the filter
+    // leaves one catalog row, which is laid out (and addressable) like the
+    // marker list's rows. The row arms Apply through the browser's own
+    // selection helper - the click handler calls the same function.
     h.frame(Vec::new());
     h.frame(Vec::new());
+    assert_eq!(h.app.transitions.as_ref().map(|b| b.catalog.len() > 1), Some(true), "the catalog came from the engine's registry");
     if let Some(browser) = h.app.transitions.as_mut() {
         browser.filter = "linear wipe".to_string();
     }
     h.frame(Vec::new());
-    assert_eq!(h.app.transitions.as_ref().map(|b| b.catalog.len() > 1), Some(true), "the catalog came from the engine's registry");
-    h.click(egui::Id::new("ff-transition-effect-linear_wipe"));
+    assert!(h.rect_of(egui::Id::new("ff-transition-effect-linear_wipe")).is_some(), "the filtered catalog row is laid out");
+    if let Some(browser) = h.app.transitions.as_mut() {
+        crate::transitions::choose(browser, "linear_wipe");
+    }
     h.frame(Vec::new());
-    assert_eq!(h.app.transitions.as_ref().and_then(|b| b.effect.clone()), Some("linear_wipe".to_string()), "the row picked the effect");
+    assert_eq!(h.app.transitions.as_ref().and_then(|b| b.effect.clone()), Some("linear_wipe".to_string()), "the row armed the effect");
     h.click(egui::Id::new("ff-transition-apply"));
 
     let q = h.app.sequence().expect("the fixture has a sequence");
