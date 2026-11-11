@@ -404,10 +404,25 @@ fn the_transition_chip_opens_the_browser_and_applies_the_chosen_effect() {
     }
     h.frame(Vec::new());
     assert_eq!(h.app.transitions.as_ref().and_then(|b| b.effect.clone()), Some("linear_wipe".to_string()), "the row armed the effect");
+
+    // The anchored browser is positioned from its own size, so guard that it has
+    // stopped moving and that the button is on screen before clicking: a scripted
+    // click lands where the button was read, not where it drifts to.
+    let apply = h.rect_of(egui::Id::new("ff-transition-apply")).expect("the Apply button is laid out");
+    h.frame(Vec::new());
+    assert_eq!(h.rect_of(egui::Id::new("ff-transition-apply")), Some(apply), "the browser window has settled before the click");
+    assert!(Rect::from_min_size(Pos2::ZERO, SCREEN).contains(apply.center()), "the Apply button is on screen at {apply:?}");
     h.click(egui::Id::new("ff-transition-apply"));
 
     let q = h.app.sequence().expect("the fixture has a sequence");
-    assert_eq!(q.video_tracks[0].transitions.len(), 1, "one transition at the selected edit");
+    assert_eq!(
+        q.video_tracks[0].transitions.len(),
+        1,
+        "one transition at the selected edit (status {:?}, selection {:?}, effect {:?}, apply rect {apply:?})",
+        h.app.status,
+        h.app.selection,
+        h.app.transitions.as_ref().and_then(|b| b.effect.clone()),
+    );
     assert_eq!(q.video_tracks[0].transitions[0].effect.effect, "linear_wipe", "the browser applied the chosen effect");
     assert!(h.app.status.contains("Linear Wipe"), "status names the applied transition: {}", h.app.status);
 
