@@ -152,7 +152,10 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
         .collapsible(false)
         .resizable(false)
         .show(ui.ctx(), |ui| {
-            ui.set_min_width(340.0);
+            // Pin the width: an auto-sized anchored window takes the whole
+            // screen on its first layout pass and would then be placed
+            // off-screen, the same reason the marker list pins its width.
+            ui.set_width(340.0);
             let name = clip_name(app);
             ui.label(ui::hint(&format!("{name} - the clip changes at its start; a linked pair changes together.")));
             ui.add_space(4.0);
@@ -349,6 +352,8 @@ mod tests {
         app.undo();
         assert_eq!(app.sequence().unwrap().find_item(clip).unwrap().1.frame_hold, None, "one undo removes the hold");
 
+        // Undo clears the timeline selection, so pick the clip again.
+        app.selection = Some(clip);
         freeze(&mut app, HoldOn::Playhead).expect("a freeze at the playhead");
         let (_, item) = app.sequence().unwrap().find_item(clip).unwrap();
         assert_eq!(item.frame_hold, Some(item.source_in + Tick(4 * TICKS_PER_SECOND)), "the playhead's frame is held");

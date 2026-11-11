@@ -359,10 +359,13 @@ fn the_speed_chip_opens_the_dialog_and_a_preset_halves_the_selected_clip() {
     h.click(egui::Id::new("ff-speed-open"));
     assert!(h.app.speed.is_some(), "the toolbar chip opened the dialog");
 
-    // One frame lays the floating window out, so its controls are addressable.
+    // The anchored window positions itself from the previous frame's size and
+    // settles after a couple of frames, so its controls are addressable.
+    h.frame(Vec::new());
     h.frame(Vec::new());
     h.click(egui::Id::new("ff-speed-preset-200"));
     assert_eq!(h.app.speed.as_ref().map(|d| d.percent), Some(200.0), "the preset sets the rate");
+    h.frame(Vec::new());
     h.click(egui::Id::new("ff-speed-apply"));
 
     assert_eq!(v1_span(&h.app).1, Tick(5 * TICKS_PER_SECOND), "200% halves the picture's length");
