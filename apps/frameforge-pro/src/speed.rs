@@ -294,12 +294,6 @@ mod tests {
         (app, clip)
     }
 
-    fn span(app: &App) -> (Tick, Tick) {
-        let seq = app.sequence().expect("the sequence");
-        let item = &seq.video_tracks[0].items[0];
-        (item.start, item.duration)
-    }
-
     #[test]
     fn speed_dialog_doubles_the_rate_and_halves_the_duration_as_one_undo() {
         let (mut app, clip) = seeded();
