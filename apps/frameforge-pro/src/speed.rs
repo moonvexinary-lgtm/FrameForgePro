@@ -72,22 +72,73 @@ pub fn open(app: &mut App) {
 
 /// Apply the dialog to the selected clip. One undoable engine edit.
 pub fn apply(app: &mut App, dialog: &SpeedDialog) -> Result<(), String> {
-    let _ = (dialog.percent, dialog.reverse, dialog.ripple, dialog.interpolation);
-    let message = "Speed/Duration is not implemented".to_string();
-    app.status = message.clone();
-    Err(message)
+    let Some((clip, _)) = app.selected_clip() else { return Err("Select a clip to change its speed".to_string()) };
+    if !(dialog.percent.is_finite() && dialog.percent > 0.0) {
+        return Err("Speed must be greater than 0%".to_string());
+    }
+    let params = serde_json::json!({
+        "clips": [clip.0],
+        "speed": dialog.percent,
+        "reverse": dialog.reverse,
+        "ripple": dialog.ripple,
+        "interpolation": dialog.interpolation.name(),
+    });
+    let result = with_engine_selection(app, clip, |app| app.execute("clip.speedDuration", params));
+    match result {
+        Ok(_) => {
+            app.status = format!("Speed {}%{}", dialog.percent.round(), if dialog.reverse { " reversed" } else { "" });
+            Ok(())
+        }
+        Err(error) => {
+            app.status = error.clone();
+            Err(error)
+        }
+    }
 }
 
 /// Freeze the selected video clip on one source frame.
 pub fn freeze(app: &mut App, hold_on: HoldOn) -> Result<(), String> {
-    app.status = format!("Freeze frame ({}) is not implemented", hold_on.name());
-    Err(app.status.clone())
+    let Some((clip, _)) = app.selected_clip() else { return Err("Select a video clip to freeze".to_string()) };
+    let params = serde_json::json!({"clips": [clip.0], "enabled": true, "holdOn": hold_on.id()});
+    let result = with_engine_selection(app, clip, |app| app.execute("clip.frameHoldOptions", params));
+    match result {
+        Ok(_) => {
+            app.status = format!("Freeze frame ({})", hold_on.name());
+            Ok(())
+        }
+        Err(error) => {
+            app.status = error.clone();
+            Err(error)
+        }
+    }
 }
 
 /// Remove a frame hold from the selected clip.
 pub fn clear_hold(app: &mut App) -> Result<(), String> {
-    app.status = "Removing a frame hold is not implemented".to_string();
-    Err(app.status.clone())
+    let Some((clip, _)) = app.selected_clip() else { return Err("Select a clip to remove its frame hold".to_string()) };
+    let params = serde_json::json!({"clips": [clip.0], "enabled": false});
+    let result = with_engine_selection(app, clip, |app| app.execute("clip.frameHoldOptions", params));
+    match result {
+        Ok(_) => {
+            app.status = "Frame hold removed".to_string();
+            Ok(())
+        }
+        Err(error) => {
+            app.status = error.clone();
+            Err(error)
+        }
+    }
+}
+
+/// Run an engine command that is gated on the engine's own selection. The
+/// timeline's selection lives on [`App`], so the clip is mirrored into the
+/// engine state for the call and the engine's previous selection is restored
+/// afterwards; the document edit itself is still the engine's.
+fn with_engine_selection<T>(app: &mut App, clip: filmcraft_project::ClipId, f: impl FnOnce(&mut App) -> Result<T, String>) -> Result<T, String> {
+    let previous = std::mem::replace(&mut app.session.state.selection, vec![clip]);
+    let result = f(&mut *app);
+    app.session.state.selection = previous;
+    result
 }
 
 /// Draw the dialog when one is open. Called every frame from `App::ui_frame`,
