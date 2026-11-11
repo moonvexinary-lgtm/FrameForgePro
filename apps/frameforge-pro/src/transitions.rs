@@ -70,8 +70,35 @@ pub fn open(app: &mut App) {
 /// Load (or reload) the catalog for the browser's current kind. A query: it
 /// does not change the document, the history or the dirty flag.
 pub fn refresh(app: &mut App, browser: &mut TransitionBrowser) {
-    let _ = app;
-    let _ = browser;
+    let kind = if browser.video { "VideoTransition" } else { "AudioTransition" };
+    match app.session.execute("effects.list", serde_json::json!({"kind": kind})) {
+        Ok(value) => {
+            browser.catalog = value
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|e| {
+                            Some(CatalogEntry {
+                                id: e.get("id")?.as_str()?.to_string(),
+                                name: e.get("name")?.as_str()?.to_string(),
+                                path: e.get("path").and_then(|p| p.as_str()).unwrap_or_default().to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            browser.error = None;
+        }
+        Err(error) => {
+            browser.catalog.clear();
+            browser.error = Some(error.to_string());
+        }
+    }
+    // The chosen row only survives a reload that still lists it: switching to
+    // the audio tab must not leave a video effect armed for Apply.
+    if browser.effect.as_ref().is_none_or(|id| !browser.catalog.iter().any(|e| &e.id == id)) {
+        browser.effect = None;
+    }
 }
 
 /// Switch between the video and audio catalogs.
@@ -98,28 +125,78 @@ pub fn visible(browser: &TransitionBrowser) -> Vec<CatalogEntry> {
 /// command (effect, length, at the clip's In edge), then the alignment through
 /// `sequence.setTransition` because apply only takes a length.
 pub fn apply(app: &mut App, browser: &TransitionBrowser) -> Result<(), String> {
-    let _ = (app, browser);
-    Err("The transition browser is not wired to the engine yet".to_string())
+    let Some((clip, _)) = app.selected_clip() else {
+        return Err("Select a clip to apply a transition".to_string());
+    };
+    let Some(selected_video) = clip_is_video(app, clip) else {
+        return Err("The selected clip is no longer in the sequence".to_string());
+    };
+    let target = if selected_video == browser.video { Some(clip) } else { linked_half(app, clip, browser.video) };
+    let Some(target) = target else {
+        return Err(if browser.video {
+            "Select a video clip (or its linked sound) for a video transition".to_string()
+        } else {
+            "Select an audio clip (or its linked picture) for an audio transition".to_string()
+        });
+    };
+    let Some(effect) = browser.effect.clone() else {
+        return Err(format!("Choose a {} transition from the catalog first", if browser.video { "video" } else { "audio" }));
+    };
+    let name = effect_name(browser, &effect);
+    let frames = app.transition_frames.clamp(1, 600);
+    let command = if browser.video { "sequence.applyVideoTransition" } else { "sequence.applyAudioTransition" };
+    let value = app.execute(command, serde_json::json!({"clip": target.0, "edge": "in", "frames": frames, "effect": effect}))?;
+    let align = align_id(app.transition_align);
+    if align != "center" {
+        // Apply only takes a length; the alignment is one more engine edit.
+        let id = value["transition"].as_u64().unwrap_or(0);
+        if let Err(error) = app.execute("sequence.setTransition", serde_json::json!({"transition": id, "align": align})) {
+            app.status = format!("{name} applied, but not aligned: {error}");
+            return Err(error);
+        }
+    }
+    app.status = format!("{name} at the selected edit ({frames} frames, {align} at the cut)");
+    Ok(())
 }
 
 /// The transition at the selected clip's In edge, for the browser's heading
 /// and the Select / Remove buttons.
 pub fn at_selection(app: &App, video: bool) -> Option<AppliedTransition> {
-    let _ = (app, video);
-    None
+    let (clip, _) = app.selected_clip()?;
+    let q = app.sequence()?;
+    let tracks = if video { &q.video_tracks } else { &q.audio_tracks };
+    let target = if tracks.iter().any(|t| t.items.iter().any(|i| i.id == clip)) { clip } else { linked_half(app, clip, video)? };
+    let rate = app.sequence_rate();
+    tracks.iter().flat_map(|track| &track.transitions).find(|x| x.to == Some(target)).map(|x| AppliedTransition {
+        id: x.id.0,
+        name: x.effect.def().map_or_else(|| x.effect.effect.clone(), |d| d.name.to_string()),
+        frames: rate.frame_at(x.duration).max(1),
+        align: x.align,
+    })
 }
 
 /// Make the transition at the selected edit the engine's selection, so
 /// Clear Transition and the transition commands act on it.
 pub fn select(app: &mut App, video: bool) -> Result<(), String> {
-    let _ = (app, video);
-    Err("Selecting a transition is not wired to the engine yet".to_string())
+    let Some((clip, _)) = app.selected_clip() else {
+        return Err("Select the incoming clip of a transition".to_string());
+    };
+    let Some(current) = at_selection(app, video) else {
+        return Err("No transition at the selected clip's In edge".to_string());
+    };
+    app.session.execute("timeline.select", serde_json::json!({"clips": [clip.0], "transitions": [current.id]})).map_err(|error| error.to_string())?;
+    app.status = format!("Selected {} (transition {})", current.name, current.id);
+    Ok(())
 }
 
 /// Remove the transition at the selected clip's In edge (one engine edit).
 pub fn remove(app: &mut App, video: bool) -> Result<(), String> {
-    let _ = (app, video);
-    Err("Removing a transition is not wired to the engine yet".to_string())
+    let Some(current) = at_selection(app, video) else {
+        return Err("No transition at the selected clip's In edge".to_string());
+    };
+    app.execute("sequence.removeTransition", serde_json::json!({"transitions": [current.id]}))?;
+    app.status = format!("Removed {}", current.name);
+    Ok(())
 }
 
 /// The engine's `align` value for a transition alignment.
@@ -146,6 +223,16 @@ fn clip_is_video(app: &App, clip: ClipId) -> Option<bool> {
 fn selected_is_video(app: &App) -> Option<bool> {
     let (clip, _) = app.selected_clip()?;
     clip_is_video(app, clip)
+}
+
+/// The other half of the selected clip's linked pair on the wanted kind, so a
+/// video transition applies to the picture when its linked sound is selected
+/// (and the other way round), as the Dissolve shortcut already does.
+fn linked_half(app: &App, clip: ClipId, video: bool) -> Option<ClipId> {
+    let q = app.sequence()?;
+    let link = q.find_item(clip)?.1.link?;
+    let tracks = if video { &q.video_tracks } else { &q.audio_tracks };
+    tracks.iter().flat_map(|t| &t.items).find(|i| i.id != clip && i.link == Some(link)).map(|i| i.id)
 }
 
 /// The name the catalog gives an effect id, or the id itself.
@@ -263,10 +350,10 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
             ui.horizontal(|ui| {
                 let chosen = browser.effect.as_ref().map_or_else(|| "Choose a transition".to_string(), |id| effect_name(&browser, id));
                 ui.label(ui::hint(&chosen));
-                if action(ui, "ff-transition-apply", "Apply", true).clicked() {
-                    if let Err(error) = apply(app, &browser) {
-                        app.status = error;
-                    }
+                if action(ui, "ff-transition-apply", "Apply", true).clicked()
+                    && let Err(error) = apply(app, &browser)
+                {
+                    app.status = error;
                 }
             });
         });
