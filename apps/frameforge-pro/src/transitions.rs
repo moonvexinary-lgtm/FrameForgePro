@@ -257,11 +257,16 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
     egui::Window::new("Transitions")
         .id(egui::Id::new("ff-transition-window"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-24.0, 84.0))
+        // A fixed size, not an auto-sized anchored window: an auto-sized one
+        // takes its size from its contents, and a contents-filling scroll area
+        // inside it hands that size straight back, so the window resized by the
+        // same amount every other frame and no click could land on it. The
+        // content is pinned to 380 pt wide and a 260 pt catalog, both of which
+        // fit this box.
+        .fixed_size(egui::vec2(400.0, 540.0))
         .collapsible(false)
         .resizable(false)
         .show(ui.ctx(), |ui| {
-            // Pin the width: an auto-sized anchored window would otherwise take
-            // the whole screen on its first layout pass.
             ui.set_width(380.0);
             ui.horizontal(|ui| {
                 let label = if browser.video { "Video transitions" } else { "Audio transitions" };

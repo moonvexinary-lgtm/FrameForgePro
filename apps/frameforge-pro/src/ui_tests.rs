@@ -387,10 +387,10 @@ fn the_transition_chip_opens_the_browser_and_applies_the_chosen_effect() {
     h.click(egui::Id::new("ff-transition-open"));
     assert!(h.app.transitions.is_some(), "the toolbar chip opened the browser");
 
-    // The anchored window settles over a couple of frames; then the filter
-    // leaves one catalog row, which is laid out (and addressable) like the
-    // marker list's rows. The row arms Apply through the browser's own
-    // selection helper - the click handler calls the same function.
+    // The window takes a frame to appear; then the filter leaves one catalog
+    // row, which is laid out (and addressable) like the marker list's rows. The
+    // row arms Apply through the browser's own selection helper - the click
+    // handler calls the same function.
     h.frame(Vec::new());
     h.frame(Vec::new());
     assert_eq!(h.app.transitions.as_ref().map(|b| b.catalog.len() > 1), Some(true), "the catalog came from the engine's registry");
@@ -405,12 +405,17 @@ fn the_transition_chip_opens_the_browser_and_applies_the_chosen_effect() {
     h.frame(Vec::new());
     assert_eq!(h.app.transitions.as_ref().and_then(|b| b.effect.clone()), Some("linear_wipe".to_string()), "the row armed the effect");
 
-    // The anchored browser is positioned from its own size, so guard that it has
-    // stopped moving and that the button is on screen before clicking: a scripted
-    // click lands where the button was read, not where it drifts to.
-    let apply = h.rect_of(egui::Id::new("ff-transition-apply")).expect("the Apply button is laid out");
-    h.frame(Vec::new());
-    assert_eq!(h.rect_of(egui::Id::new("ff-transition-apply")), Some(apply), "the browser window has settled before the click");
+    // The browser is a fixed-size anchored window, so its controls must sit
+    // still: a window that resized every frame would jitter in use and a click
+    // would land where the button was read, not where it is.
+    let samples: Vec<Rect> = (0..3)
+        .map(|_| {
+            h.frame(Vec::new());
+            h.rect_of(egui::Id::new("ff-transition-apply")).expect("the Apply button is laid out")
+        })
+        .collect();
+    assert!(samples.iter().all(|rect| *rect == samples[0]), "the browser window must stop moving before a click can land: {samples:?}");
+    let apply = samples[0];
     assert!(Rect::from_min_size(Pos2::ZERO, SCREEN).contains(apply.center()), "the Apply button is on screen at {apply:?}");
     h.click(egui::Id::new("ff-transition-apply"));
 
