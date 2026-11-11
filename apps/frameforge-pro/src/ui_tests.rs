@@ -377,6 +377,40 @@ fn the_speed_chip_opens_the_dialog_and_a_preset_halves_the_selected_clip() {
 }
 
 #[test]
+fn the_transition_chip_opens_the_browser_and_applies_the_chosen_effect() {
+    let (mut h, _) = seeded();
+    let (_, clip) = timeline_at(&mut h, 40.0);
+    h.click_at(clip.center());
+    assert!(h.app.selection.is_some(), "the click selected the clip");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-transition-open"));
+    assert!(h.app.transitions.is_some(), "the toolbar chip opened the browser");
+
+    // The anchored window settles over a couple of frames, as the speed dialog
+    // does; then the filter leaves the one catalog row the test clicks.
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    if let Some(browser) = h.app.transitions.as_mut() {
+        browser.filter = "linear wipe".to_string();
+    }
+    h.frame(Vec::new());
+    assert_eq!(h.app.transitions.as_ref().map(|b| b.catalog.len() > 1), Some(true), "the catalog came from the engine's registry");
+    h.click(egui::Id::new("ff-transition-effect-linear_wipe"));
+    h.frame(Vec::new());
+    assert_eq!(h.app.transitions.as_ref().and_then(|b| b.effect.clone()), Some("linear_wipe".to_string()), "the row picked the effect");
+    h.click(egui::Id::new("ff-transition-apply"));
+
+    let q = h.app.sequence().expect("the fixture has a sequence");
+    assert_eq!(q.video_tracks[0].transitions.len(), 1, "one transition at the selected edit");
+    assert_eq!(q.video_tracks[0].transitions[0].effect.effect, "linear_wipe", "the browser applied the chosen effect");
+    assert!(h.app.status.contains("Linear Wipe"), "status names the applied transition: {}", h.app.status);
+
+    h.press(Key::Z, command(false));
+    assert!(h.app.sequence().expect("the fixture has a sequence").video_tracks[0].transitions.is_empty(), "the apply is one undo step");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);

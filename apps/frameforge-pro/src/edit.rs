@@ -2663,6 +2663,14 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             crate::speed::open(app);
         }
 
+        if app.selection.is_some()
+            && chip(ui, egui::Id::new("ff-transition-open"), "Transitions")
+                .on_hover_text("Browse video and audio transitions and apply one at the selected edit")
+                .clicked()
+        {
+            crate::transitions::open(app);
+        }
+
         let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
         ui.menu_button("In / Out", |ui| {
             if ui.button("Mark In").clicked() {

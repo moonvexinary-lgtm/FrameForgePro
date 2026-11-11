@@ -162,6 +162,8 @@ pub struct App {
     pub marker_list: Option<crate::edit::MarkerList>,
     /// The floating Speed / Duration dialog, when one is open.
     pub speed: Option<crate::speed::SpeedDialog>,
+    /// The floating Transition browser, when one is open.
+    pub transitions: Option<crate::transitions::TransitionBrowser>,
     /// The graphic clip selected in the Text & Graphics workspace.
     pub graphics_clip: Option<ClipId>,
     /// The layer index selected inside that graphic clip.
@@ -278,6 +280,7 @@ impl App {
             relink: None,
             marker_list: None,
             speed: None,
+            transitions: None,
             graphics_clip: None,
             graphics_layer: 0,
             text_draft: String::new(),
@@ -1152,6 +1155,9 @@ impl App {
             // Speed / Duration edits the selected clip, so it floats over the
             // timeline it changes.
             crate::speed::show(self, ui);
+            // The Transition browser applies at the selected edit, so it floats
+            // over the timeline the same way.
+            crate::transitions::show(self, ui);
         }));
         if result.is_err() {
             self.status = "A UI error occurred. The project is intact — save it now.".to_string();
@@ -1262,6 +1268,10 @@ impl App {
                 ui.separator();
                 if ui.add_enabled(self.selection.is_some(), egui::Button::new("Speed/Duration...")).clicked() {
                     crate::speed::open(self);
+                    ui.close();
+                }
+                if ui.add_enabled(self.selection.is_some(), egui::Button::new("Transitions...")).clicked() {
+                    crate::transitions::open(self);
                     ui.close();
                 }
                 ui.separator();
