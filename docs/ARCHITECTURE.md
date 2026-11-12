@@ -602,6 +602,47 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T25 - transitions on the timeline (CI-verified, run 43138585328)
+
+T24's browser could name a transition and set its length from a field, but the
+timeline painted nothing between the two clips a transition joins: it could not
+be seen, clicked or dragged.
+
+- **Drawing** (`edit.rs`): every transition paints as a band over the cut it
+  joins - the clips' own `timeline_clip_rect` mapping, a dark fill, the accent
+  stroke and a bowtie - and the band of the engine's `transition_selection`
+  paints selected. Bands are hit before clips, because a transition sits on top
+  of what it joins, which is where a person looks for it.
+- **Click**: selecting a band runs `timeline.select` with the transition and the
+  clip it lands on. That is a query, so there is no history step and no
+  dirtying: it makes the transition the engine's `transition_selection` (Effect
+  Controls, Clear Transition) and selects the incoming clip, so the browser's
+  heading agrees with what was clicked.
+- **Drag**: an edge (within 8 pt) resizes it and the body slides it over the
+  cut; either is written on release as one `sequence.setTransition`, so a whole
+  drag is one Ctrl+Z. The span comes from
+  `filmcraft_edit::transitions::drag_span`, the engine's own clamp, so it cannot
+  leave the two clips, cannot go below one frame and, between two clips, cannot
+  leave their cut; the app takes a direct `filmcraft-edit` dependency at the
+  same pinned revision (already in the graph) for that one function rather than
+  re-deriving the rules. The ghost preview calls the same function, so a drag
+  shows exactly what it commits, and a drag the clamp leaves where it was writes
+  nothing at all.
+- **Tests**:
+  `edit::tests::dragging_a_transition_edge_sets_its_length_and_one_undo_restores_it`
+  (at 40 px/s one second of drag extends the out edge from 24 to 48 frames while
+  the start holds, a 10 000 px drag clamps at the clips' 2.5 s, and two undos
+  return to the applied dissolve) and
+  `ui_tests::clicking_a_timeline_transition_selects_it_and_dragging_its_edge_sets_its_length`
+  (a 24-frame dissolve at a cut the test makes with Ctrl+K: the click selects
+  the transition and the clip it lands on, the right-edge drag makes it 48
+  frames, and one Ctrl+Z restores 24).
+- **Limitations**: changing an applied transition's effect still means removing
+  and re-applying it (`sequence.setTransition` edits settings and the span, not
+  the effect id), and a transition cannot be dragged to another cut.
+- **CI**: run `43138585328` - fmt, clippy `-D warnings`, check, **130 tests**,
+  release build and the binary self-test.
+
 ## T24 - transition browser (CI-verified, run 43090989519)
 
 The transitions row could apply the default dissolve / crossfade and edit the
@@ -1512,6 +1553,7 @@ with a real, user-installed runtime.
 | T22 | Sequence marker EDL import: `* LOC:` locator lines from a CMX 3600 list become markers at their record timecodes (hour-relative), with the Avid colour words mapped and one undoable edit for the whole file | CI-verified, run 42834979022 |
 | T23 | Speed / Duration: a floating dialog drives the engine's rate, reverse, ripple and time interpolation, and Freeze Frame holds a source frame at the clip's in point, out point or the Program playhead | CI-verified, run 42949817569 |
 | T24 | Transition browser: a floating window over the engine's own `effects.list` catalog, with video/audio tabs, folder paths and a filter, applying the chosen effect, length and alignment at the selected edit and selecting or removing the transition there | CI-verified, run 43090989519 |
+| T25 | Transitions on the timeline: each transition paints as a band over its cut with the selection state from the engine, a click makes it the engine's transition selection and selects the incoming clip, and an edge or body drag writes the engine-clamped span in one undo | CI-verified, run 43138585328 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
