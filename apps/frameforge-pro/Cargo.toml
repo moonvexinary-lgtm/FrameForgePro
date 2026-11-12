@@ -17,6 +17,7 @@ frameforge-roto = { workspace = true }
 filmcraft-time = { workspace = true }
 filmcraft-media = { workspace = true }
 filmcraft-project = { workspace = true }
+filmcraft-edit = { workspace = true }
 filmcraft-render = { workspace = true }
 filmcraft-export = { workspace = true }
 filmcraft-codecs = { workspace = true }

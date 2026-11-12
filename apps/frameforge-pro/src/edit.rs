@@ -1845,6 +1845,70 @@ pub(crate) fn apply_dissolve(app: &mut App, video: bool) {
     }
 }
 
+/// Points at the timeline's zoom as engine ticks.
+fn tick_from_points(dx: f32, zoom: f32) -> Tick {
+    Tick((dx as f64 / zoom.max(0.01) as f64 * TICKS_PER_SECOND as f64).round() as i64)
+}
+
+/// The span a transition drag would produce. The engine's own `drag_span`
+/// decides it: the result is clamped to the two clips it joins, stays at least
+/// a frame long and, between two clips, stays over their cut (`edge` is
+/// `Some("in")` / `Some("out")` for an edge drag, `None` for the body, which
+/// slides it over the cut). The ghost preview and the release use the same
+/// function, so a drag shows exactly what it commits.
+fn dragged_transition_span(app: &App, id: u64, edge: Option<&str>, dx: f32, zoom: f32) -> Option<(Tick, Tick)> {
+    let q = app.sequence()?;
+    let (track, transition) = q.all_tracks().find_map(|t| t.transitions.iter().find(|x| x.id.0 == id).map(|x| (t, x)))?;
+    let edge = match edge {
+        Some("in") => Some(filmcraft_edit::Edge::In),
+        Some("out") => Some(filmcraft_edit::Edge::Out),
+        _ => None,
+    };
+    let frame = app.session.sequence_rate().frame_duration();
+    filmcraft_edit::transitions::drag_span(track, transition, edge, tick_from_points(dx, zoom), frame)
+}
+
+/// Drag a transition by `dx` points on the timeline: `sequence.setTransition`
+/// with the span `dragged_transition_span` clamped, so a whole drag is one
+/// Ctrl+Z and a drag the clamp leaves where it was adds no undo step at all.
+pub(crate) fn drag_transition_edge(app: &mut App, id: u64, edge: Option<&str>, dx: f32, zoom: f32) {
+    let Some((start, duration)) = dragged_transition_span(app, id, edge, dx, zoom) else { return };
+    let unchanged =
+        app.sequence().is_some_and(|q| q.all_tracks().any(|t| t.transitions.iter().any(|x| x.id.0 == id && (x.start, x.duration) == (start, duration))));
+    if unchanged {
+        return;
+    }
+    let frames = app.session.sequence_rate().frame_at(duration).max(1);
+    let params = serde_json::json!({"transition": id, "start": start.0, "duration": duration.0});
+    match app.execute("sequence.setTransition", params) {
+        Ok(_) => app.status = format!("Transition {frames} frames"),
+        Err(e) => app.status = e,
+    }
+}
+
+/// Make a transition the engine's selection and select the clip it lands on, so
+/// the browser's heading, Effect Controls and Clear Transition all follow the
+/// one a person clicked on the track. A query: no history step, no dirtying.
+pub(crate) fn select_transition(app: &mut App, id: u64) {
+    let found = app.sequence().and_then(|q| {
+        q.all_tracks().find_map(|t| {
+            t.transitions.iter().find(|x| x.id.0 == id).map(|x| (x.to, x.effect.def().map_or_else(|| x.effect.effect.clone(), |d| d.name.to_string())))
+        })
+    });
+    let Some((to, name)) = found else {
+        app.status = "That transition is gone".to_string();
+        return;
+    };
+    let clips: Vec<u64> = to.map(|clip| clip.0).into_iter().collect();
+    match app.session.execute("timeline.select", serde_json::json!({"clips": clips, "transitions": [id]})) {
+        Ok(_) => {
+            app.selection = to;
+            app.status = format!("Selected {name} (transition {id})");
+        }
+        Err(error) => app.status = error.to_string(),
+    }
+}
+
 /// Set the frames and alignment of the transition at the selected clip's In
 /// edge through `sequence.setTransition` (one engine edit, one undo step).
 /// Applying a transition only takes frames, so alignment is chosen here.
@@ -2893,6 +2957,11 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     }
 
     let mut hit_rects: Vec<(egui::Rect, filmcraft_project::ClipId)> = Vec::new();
+    // A transition's painted band over the cut, with the engine id the commands
+    // take. Transitions are hit before clips: they sit on top of what they
+    // join, exactly where a person looks for them.
+    let mut transition_rects: Vec<(egui::Rect, u64)> = Vec::new();
+    let selected_transitions: Vec<u64> = app.session.state.transition_selection.iter().map(|t| t.0).collect();
     let mut actions: Vec<TrackAction> = Vec::new();
     let tg = app.session.targeting();
     // Corner above the headers, then one header per track. The target square
@@ -3008,6 +3077,23 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             );
             hit_rects.push((clip_rect, item.id));
         }
+        for tr in &track.transitions {
+            // A transition paints over the cut it joins: a dark band with the
+            // accent stroke and a bowtie, so a dissolve is visible between its
+            // two clips instead of only in the Effects row.
+            let rect = timeline_clip_rect(alloc, row, tr.start, tr.duration, zoom);
+            let selected = selected_transitions.contains(&tr.id.0);
+            painter.rect_filled(rect, 3.0, if selected { ui::ACCENT_SEL } else { egui::Color32::from_rgba_unmultiplied(18, 22, 28, 200) });
+            painter.rect_stroke(
+                rect,
+                3.0,
+                egui::Stroke::new(if selected { 1.6 } else { 1.0 }, if selected { ui::ACCENT_HI } else { ui::ACCENT_DIM }),
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment([rect.left_top(), egui::pos2(rect.right(), rect.bottom())], egui::Stroke::new(1.0, ui::ACCENT_DIM));
+            painter.line_segment([egui::pos2(rect.right(), rect.top()), egui::pos2(rect.left(), rect.bottom())], egui::Stroke::new(1.0, ui::ACCENT_DIM));
+            transition_rects.push((rect, tr.id.0));
+        }
     }
 
     // Applying target/source changes after the drawing loop (the sequence was
@@ -3074,28 +3160,43 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     if response.drag_started()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        // Read-only phase: what clip, what track, what gesture.
-        let decision = hit_rects.iter().find(|(r, _)| r.contains(pos)).copied().and_then(|(rect, id)| {
-            let (track, start) = app.sequence().and_then(|s| s.find_item(id).map(|(t, i)| (t, i.start)))?;
-            let kind = if pos.x < rect.left() + EDGE {
-                0
+        // A transition wins the press over the clips under it: its body moves
+        // it over the cut, an edge resizes it. It also becomes the selection,
+        // like a clip drag does.
+        if let Some((rect, id)) = transition_rects.iter().find(|(r, _)| r.contains(pos)).copied() {
+            let edge = if pos.x < rect.left() + EDGE {
+                Some("in")
             } else if pos.x > rect.right() - EDGE {
-                1
+                Some("out")
             } else {
-                2
+                None
             };
-            Some((id, track, start, kind))
-        });
-        match decision {
-            Some((id, track, start, kind)) => {
-                app.selection = Some(id);
-                app.timeline_drag = match kind {
-                    0 => Some(TimelineDrag::Trim { clip: id, edge: "in", grab_x: pos.x, last_x: pos.x }),
-                    1 => Some(TimelineDrag::Trim { clip: id, edge: "out", grab_x: pos.x, last_x: pos.x }),
-                    _ => Some(TimelineDrag::Move { clip: id, track, grab_x: pos.x, origin: start, last_x: pos.x }),
+            select_transition(app, id);
+            app.timeline_drag = Some(TimelineDrag::Transition { transition: id, edge, grab_x: pos.x, last_x: pos.x });
+        } else {
+            // Read-only phase: what clip, what track, what gesture.
+            let decision = hit_rects.iter().find(|(r, _)| r.contains(pos)).copied().and_then(|(rect, id)| {
+                let (track, start) = app.sequence().and_then(|s| s.find_item(id).map(|(t, i)| (t, i.start)))?;
+                let kind = if pos.x < rect.left() + EDGE {
+                    0
+                } else if pos.x > rect.right() - EDGE {
+                    1
+                } else {
+                    2
                 };
+                Some((id, track, start, kind))
+            });
+            match decision {
+                Some((id, track, start, kind)) => {
+                    app.selection = Some(id);
+                    app.timeline_drag = match kind {
+                        0 => Some(TimelineDrag::Trim { clip: id, edge: "in", grab_x: pos.x, last_x: pos.x }),
+                        1 => Some(TimelineDrag::Trim { clip: id, edge: "out", grab_x: pos.x, last_x: pos.x }),
+                        _ => Some(TimelineDrag::Move { clip: id, track, grab_x: pos.x, origin: start, last_x: pos.x }),
+                    };
+                }
+                None => app.timeline_drag = None,
             }
-            None => app.timeline_drag = None,
         }
     }
 
@@ -3106,8 +3207,21 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         match &mut app.timeline_drag {
             Some(TimelineDrag::Move { last_x, .. }) => *last_x = pos.x,
             Some(TimelineDrag::Trim { last_x, .. }) => *last_x = pos.x,
+            Some(TimelineDrag::Transition { last_x, .. }) => *last_x = pos.x,
             None => {}
         }
+    }
+
+    // A transition drag previews through the engine's own clamp, so the ghost
+    // is exactly what release commits.
+    if let Some(TimelineDrag::Transition { transition, edge, grab_x, last_x }) = &app.timeline_drag
+        && let Some((preview_rect, _)) = transition_rects.iter().find(|(_, t)| t == transition).copied()
+        && let Some((start, duration)) = dragged_transition_span(app, *transition, *edge, last_x - grab_x, zoom)
+    {
+        let x = |t: Tick| alloc.left() + t.seconds() as f32 * zoom;
+        let ghost = egui::Rect::from_min_max(egui::pos2(x(start), preview_rect.top()), egui::pos2(x(start + duration), preview_rect.bottom()));
+        painter.rect_filled(ghost, 3.0, egui::Color32::from_rgba_unmultiplied(53, 194, 181, 70));
+        painter.rect_stroke(ghost, 3.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
     }
 
     // Ghost preview of the drag (the document only changes on release).
@@ -3123,6 +3237,9 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                     last_x - grab_x
                 }
             }
+            // Unreachable: a transition drag has no clip rect to find, and it
+            // previewed through its own ghost above.
+            TimelineDrag::Transition { .. } => 0.0,
         };
         let ghost = match drag {
             TimelineDrag::Move { .. } => rect.translate(egui::vec2(delta_x.max(-rect.left() + alloc.left()), 0.0)),
@@ -3133,6 +3250,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                     egui::Rect::from_min_max(rect.min, egui::pos2((rect.right() + delta_x).max(rect.left() + 4.0), rect.max.y))
                 }
             }
+            TimelineDrag::Transition { .. } => rect,
         };
         painter.rect_filled(ghost, 3.0, egui::Color32::from_rgba_unmultiplied(53, 194, 181, 70));
         painter.rect_stroke(ghost, 3.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
@@ -3162,6 +3280,9 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                     Err(e) => app.status = e,
                 }
             }
+            TimelineDrag::Transition { transition, edge, grab_x, last_x } => {
+                drag_transition_edge(app, transition, edge, last_x - grab_x, zoom);
+            }
         }
     }
 
@@ -3170,32 +3291,36 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         && app.timeline_drag.is_none()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        match hit_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
-            Some(id) if response.clicked() => app.selection = Some(id),
-            _ => {
-                // A click on a marker head jumps to it instead of scrubbing.
-                let mut marker_click: Option<(Tick, String)> = None;
-                if response.clicked() {
-                    let mut best = 7.0f32;
-                    for (x, t, name) in &marker_hits {
-                        let d = (pos.x - x).abs();
-                        if d < best {
-                            best = d;
-                            marker_click = Some((*t, name.clone()));
+        if let Some(id) = transition_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
+            select_transition(app, id);
+        } else {
+            match hit_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
+                Some(id) if response.clicked() => app.selection = Some(id),
+                _ => {
+                    // A click on a marker head jumps to it instead of scrubbing.
+                    let mut marker_click: Option<(Tick, String)> = None;
+                    if response.clicked() {
+                        let mut best = 7.0f32;
+                        for (x, t, name) in &marker_hits {
+                            let d = (pos.x - x).abs();
+                            if d < best {
+                                best = d;
+                                marker_click = Some((*t, name.clone()));
+                            }
                         }
                     }
-                }
-                match marker_click {
-                    Some((t, name)) => {
-                        app.playhead = t;
-                        app.status = format!("Marker: {name}");
+                    match marker_click {
+                        Some((t, name)) => {
+                            app.playhead = t;
+                            app.status = format!("Marker: {name}");
+                        }
+                        None => {
+                            let secs = ((pos.x - alloc.left()) / app.zoom).max(0.0) as f64;
+                            app.playhead = Tick((secs * TICKS_PER_SECOND as f64) as i64);
+                        }
                     }
-                    None => {
-                        let secs = ((pos.x - alloc.left()) / app.zoom).max(0.0) as f64;
-                        app.playhead = Tick((secs * TICKS_PER_SECOND as f64) as i64);
-                    }
+                    app.selection = None;
                 }
-                app.selection = None;
             }
         }
     }
@@ -3206,6 +3331,7 @@ fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
     match drag {
         TimelineDrag::Move { clip, .. } => Some(*clip),
         TimelineDrag::Trim { clip, .. } => Some(*clip),
+        TimelineDrag::Transition { .. } => None,
     }
 }
 
@@ -4556,6 +4682,41 @@ mod tests {
         app.selection = Some(clips[0]);
         super::update_transition(&mut app);
         assert!(app.status.contains("No transition"), "status says why: {}", app.status);
+    }
+
+    #[test]
+    fn dragging_a_transition_edge_sets_its_length_and_one_undo_restores_it() {
+        let (mut app, clips) = transition_app(true);
+        let frames = |n: i64| FrameRate::FPS_24.tick_of(n);
+        app.selection = Some(clips[1]);
+        app.transition_frames = 24;
+        super::apply_dissolve(&mut app, true);
+        let id = app.session.active_sequence().unwrap().video_tracks[0].transitions[0].id.0;
+
+        // 40 px/s for one second is 24 frames: the out edge moves a second
+        // later, so the transition holds its start and lasts 48 frames.
+        super::drag_transition_edge(&mut app, id, Some("out"), 40.0, 40.0);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let tr = &q.video_tracks[0].transitions[0];
+            assert_eq!(tr.duration, frames(48), "the dragged edge sets the length");
+            assert_eq!(tr.start, Tick(2 * TICKS_PER_SECOND) - frames(12), "the out edge moves, so the start holds");
+        }
+        assert_eq!(app.status, "Transition 48 frames");
+
+        // A drag past the clips it joins is clamped by the engine's own rules,
+        // not refused: from the start it holds, the two 2 s clips leave 2.5 s.
+        super::drag_transition_edge(&mut app, id, Some("out"), 10_000.0, 40.0);
+        {
+            let q = app.session.active_sequence().unwrap();
+            let tr = &q.video_tracks[0].transitions[0];
+            assert_eq!((tr.start, tr.duration), (Tick(2 * TICKS_PER_SECOND) - frames(12), frames(60)), "the clamp stops at the clips");
+        }
+
+        app.undo();
+        assert_eq!(app.session.active_sequence().unwrap().video_tracks[0].transitions[0].duration, frames(48), "one undo restores the previous length");
+        app.undo();
+        assert_eq!(app.session.active_sequence().unwrap().video_tracks[0].transitions[0].duration, frames(24), "and one more the dissolve that was applied");
     }
 
     #[test]

@@ -467,10 +467,13 @@ fn clicking_a_timeline_transition_selects_it_and_dragging_its_edge_sets_its_leng
     assert_eq!(h.app.selection, Some(second), "the click also selects the clip the transition lands on");
     assert!(h.app.status.contains("Cross Dissolve"), "the status names what was selected: {}", h.app.status);
 
-    // Dragging the right edge one second out (40 px at 40 px/s) doubles the
-    // centred transition: 24 frames becomes 48.
-    let grab = Pos2::new(rect.right() - 3.0, rect.center().y);
-    h.drag(grab, &[grab + Vec2::new(12.0, 0.0), grab + Vec2::new(40.0, 0.0)]);
+    // Dragging the right edge one second out (40 px at 40 px/s) extends the out
+    // edge: 24 frames becomes 48. The timeline reads the gesture from the first
+    // waypoint past egui's 6 px click tolerance, so that waypoint has to stay
+    // inside the 8 px edge band the press started in.
+    let press = Pos2::new(rect.right() - 1.0, rect.center().y);
+    let grab = Pos2::new(rect.right() - 7.9, rect.center().y);
+    h.drag(press, &[grab, grab + Vec2::new(40.0, 0.0)]);
     assert_eq!(
         h.app.sequence().expect("the fixture has a sequence").video_tracks[0].transitions[0].duration,
         FrameRate::FPS_24.tick_of(48),

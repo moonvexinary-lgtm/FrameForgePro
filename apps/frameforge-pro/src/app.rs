@@ -77,8 +77,27 @@ pub const SEQUENCE_H: u32 = 720;
 /// release (one undo step per gesture). `last_x` tracks the pointer during
 /// the drag for the ghost preview and the final delta.
 pub enum TimelineDrag {
-    Move { clip: ClipId, track: filmcraft_project::TrackId, grab_x: f32, origin: Tick, last_x: f32 },
-    Trim { clip: ClipId, edge: &'static str, grab_x: f32, last_x: f32 },
+    Move {
+        clip: ClipId,
+        track: filmcraft_project::TrackId,
+        grab_x: f32,
+        origin: Tick,
+        last_x: f32,
+    },
+    Trim {
+        clip: ClipId,
+        edge: &'static str,
+        grab_x: f32,
+        last_x: f32,
+    },
+    /// A transition being dragged by one edge (`Some("in")` / `Some("out")`)
+    /// or by its body (`None`, which moves it over the cut).
+    Transition {
+        transition: u64,
+        edge: Option<&'static str>,
+        grab_x: f32,
+        last_x: f32,
+    },
 }
 
 pub struct App {
