@@ -557,6 +557,45 @@ fn splitting_and_merging_the_caption_from_the_editor_are_undoable_steps() {
 }
 
 #[test]
+fn a_caption_cue_paints_on_its_own_timeline_row_and_a_click_selects_it() {
+    let (mut h, _) = seeded();
+    // A caption track with one 3 s cue from the 1 s mark, added through the
+    // engine so this test is only about the timeline.
+    let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
+    let track = created["track"].as_u64().expect("the track id comes back");
+    let added = h
+        .app
+        .execute("captions.add", serde_json::json!({"track": track, "text": "A caption", "time": TICKS_PER_SECOND, "durationSeconds": 3.0}))
+        .expect("the caption is added");
+    let cue = added["caption"].as_u64().expect("the caption id comes back");
+    h.app.zoom = 40.0;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    let q = h.app.sequence().expect("the fixture has a sequence");
+    let caption = q.caption_tracks.iter().flat_map(|t| t.captions.iter()).find(|c| c.id.0 == cue).expect("the cue is in the document");
+    let row = q.video_tracks.len() + q.audio_tracks.len();
+    let body = h.rect_of(egui::Id::new("ff-timeline-body")).expect("the timeline body registers");
+    let expected = edit::timeline_clip_rect(body, row, caption.start, caption.duration, h.app.zoom);
+    let id = egui::Id::new(("ff-timeline-caption", cue));
+    let rect = h.rect_of(id).expect("the cue paints a bar on its own row");
+    assert!((rect.left() - expected.left()).abs() < 1.0, "the bar starts at the cue's own time: {} vs {}", rect.left(), expected.left());
+    assert!((rect.width() - expected.width()).abs() < 1.0, "the bar is as long as the cue: {} vs {}", rect.width(), expected.width());
+    assert!((rect.top() - expected.top()).abs() < 1.0, "the bar sits on the caption row under the audio tracks: {} vs {}", rect.top(), expected.top());
+
+    // The click, not the Add, must be what names the cue in the engine.
+    h.app.session.state.caption_selection.clear();
+    h.frame(Vec::new());
+    h.click(id);
+    assert_eq!(
+        h.app.session.state.caption_selection.iter().map(|c| c.0).collect::<Vec<_>>(),
+        vec![cue],
+        "the click names the cue in the engine's caption selection"
+    );
+    assert_eq!(h.app.status, "Selected caption");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
