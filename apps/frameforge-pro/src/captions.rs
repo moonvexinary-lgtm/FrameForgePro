@@ -409,8 +409,10 @@ mod tests {
         let first = created["track"].as_u64().unwrap();
         let created = app.session.execute("captions.newTrack", json!({"name": "Notes"})).unwrap();
         let second = created["track"].as_u64().unwrap();
+        let mut added = Vec::new();
         for (track, text, seconds) in [(first, "later", 4.0), (first, "earlier", 1.0), (second, "on the other track", 2.0)] {
-            app.session.execute("captions.add", json!({"track": track, "text": text, "seconds": seconds, "durationSeconds": 1.5})).unwrap();
+            let value = app.session.execute("captions.add", json!({"track": track, "text": text, "seconds": seconds, "durationSeconds": 1.5})).unwrap();
+            added.push(value["caption"].as_u64().unwrap());
         }
         let list = app.session.execute("captions.list", json!({})).unwrap();
         let (tracks, rows, selection) = rows_from_list(&list);
@@ -423,7 +425,7 @@ mod tests {
         assert_eq!(rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["earlier", "on the other track", "later"], "captions read in timeline order");
         assert_eq!(rows[0].in_tc, "00:00:01:00", "the engine's own timecode at 24 fps");
         assert_eq!(rows[0].duration, "00:00:01:12", "a 1.5 s caption is 36 frames");
-        assert!(selection.is_empty(), "nothing is selected yet");
+        assert_eq!(selection, vec![added[2]], "each `captions.add` selects the caption it wrote, so the last one is selected");
     }
 
     #[test]

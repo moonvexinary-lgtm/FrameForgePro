@@ -495,6 +495,9 @@ fn the_captions_chip_opens_the_editor_and_adds_a_caption_at_the_playhead() {
     h.app.playhead = Tick(2 * TICKS_PER_SECOND);
     h.frame(Vec::new());
     h.click(egui::Id::new("ff-caption-open"));
+    // The anchored window positions itself from the previous frame's size and
+    // settles after a couple of frames, so its controls are addressable.
+    h.frame(Vec::new());
     h.frame(Vec::new());
     assert!(h.app.captions.is_some(), "the chip opens the editor (status {:?})", h.app.status);
     assert!(h.rect_of(egui::Id::new("ff-caption-add")).is_some(), "the editor's Add control is laid out");
