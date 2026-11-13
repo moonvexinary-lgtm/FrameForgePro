@@ -256,24 +256,72 @@ pub fn step(app: &mut App, editor: &mut CaptionEditor, forward: bool) -> Result<
 
 /// Import a caption file into the active sequence as a new track. The engine
 /// reads the file, detects its format and writes the track as one edit.
-pub fn import_file(_app: &mut App, _editor: &mut CaptionEditor, _path: &Path) -> Result<usize, String> {
-    Err("caption import is not wired yet".to_string())
+pub fn import_file(app: &mut App, editor: &mut CaptionEditor, path: &Path) -> Result<usize, String> {
+    let value = app.execute("captions.import", json!({"path": path.to_string_lossy()}))?;
+    let count = value.get("captions").and_then(Value::as_u64).unwrap_or_default() as usize;
+    refresh(app, editor);
+    // `refresh` keeps a still-valid old target; the import is the new target.
+    if let Some(track) = value.get("track").and_then(Value::as_u64) {
+        editor.track = Some(track);
+    }
+    let plural = if count == 1 { "" } else { "s" };
+    app.status = format!("Imported {count} caption{plural}");
+    Ok(count)
 }
 
 /// Export the window's track to `path` in the window's chosen format. An
 /// export writes a file but does not edit the project.
-pub fn export_file(_app: &mut App, _editor: &mut CaptionEditor, _path: PathBuf) -> Result<usize, String> {
-    Err("caption export is not wired yet".to_string())
+pub fn export_file(app: &mut App, editor: &mut CaptionEditor, path: PathBuf) -> Result<usize, String> {
+    let track = editor.track.ok_or_else(|| "add a caption track before exporting".to_string())?;
+    // An export is not an edit: run it on the session directly so the write
+    // adds no undo step and never dirties the project.
+    let value =
+        app.session.execute("captions.export", json!({"path": path.to_string_lossy(), "track": track, "format": editor.format})).map_err(|e| e.to_string())?;
+    let count = value.get("captions").and_then(Value::as_u64).unwrap_or_default() as usize;
+    let plural = if count == 1 { "" } else { "s" };
+    app.status = format!("Exported {count} caption{plural}");
+    Ok(count)
 }
 
 /// Split the selected caption at the playhead and select the right half.
-pub fn split_at_playhead(_app: &mut App, _editor: &mut CaptionEditor) -> Result<u64, String> {
-    Err("caption split is not wired yet".to_string())
+pub fn split_at_playhead(app: &mut App, editor: &mut CaptionEditor) -> Result<u64, String> {
+    let id = editor.selected.ok_or_else(|| "select a caption first".to_string())?;
+    let value = app.execute("captions.split", json!({"caption": id, "time": app.playhead.0}))?;
+    let right = value
+        .get("captions")
+        .and_then(Value::as_array)
+        .and_then(|captions| captions.first())
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "the engine did not report the new caption".to_string())?;
+    refresh(app, editor);
+    editor.selected = Some(right);
+    if let Some(row) = editor.captions.iter().find(|r| r.id == right).cloned() {
+        seed(editor, &row);
+    }
+    app.status = "Split caption at the playhead".to_string();
+    Ok(right)
 }
 
 /// Merge the selected caption into the one before it on the same track.
-pub fn merge_with_previous(_app: &mut App, _editor: &mut CaptionEditor) -> Result<u64, String> {
-    Err("caption merge is not wired yet".to_string())
+pub fn merge_with_previous(app: &mut App, editor: &mut CaptionEditor) -> Result<u64, String> {
+    let id = editor.selected.ok_or_else(|| "select a caption first".to_string())?;
+    let previous = previous_caption(editor, id).ok_or_else(|| "the first caption on its track has nothing to merge up into".to_string())?;
+    let value = app.execute("captions.merge", json!({"captions": [previous, id]}))?;
+    let kept = value.get("caption").and_then(Value::as_u64).unwrap_or(previous);
+    refresh(app, editor);
+    editor.selected = Some(kept);
+    if let Some(row) = editor.captions.iter().find(|r| r.id == kept).cloned() {
+        seed(editor, &row);
+    }
+    app.status = "Merged caption up".to_string();
+    Ok(kept)
+}
+
+/// The caption on the same track immediately before `id`, in timeline order.
+fn previous_caption(editor: &CaptionEditor, id: u64) -> Option<u64> {
+    let index = editor.captions.iter().position(|r| r.id == id)?;
+    let track = editor.captions[index].track;
+    editor.captions[..index].iter().rev().find(|r| r.track == track).map(|r| r.id)
 }
 
 fn action(ui: &mut egui::Ui, id: &str, label: &str, accent: bool) -> egui::Response {
