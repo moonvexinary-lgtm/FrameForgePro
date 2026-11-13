@@ -602,6 +602,67 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T27 - caption import/export, split and merge-up (CI-verified, run 43439895270)
+
+T26 could type a cue it had just added, but the sequence's caption files had no
+way in or out, and a cue that needed cutting or joining had to be deleted and
+retyped.
+
+- **Import** (`captions.rs`): Import opens a caption-file picker (`.srt`,
+  `.vtt`, `.scc`, `.mcc`, `.stl`, `.ttml`, `.dfxp`) and runs `captions.import`
+  on the chosen path. The engine reads the file through its services, detects
+  the format from the bytes and the extension, snaps every cue to the
+  sequence's frame grid and inserts the parsed track at the top as one
+  undoable edit. The window re-reads `captions.list`, targets the imported
+  track and follows the engine's cleared caption selection.
+- **Export**: the format choice (SubRip or WebVTT) sets both the save filter
+  and the `format` handed to `captions.export`, which writes the window's
+  target track in that format. The export runs on the session directly, so it
+  adds no undo step and never dirties the project, and the reply's cue count
+  becomes the status line.
+- **Split**: Split at Playhead runs `captions.split` with the selected cue and
+  the App playhead as an explicit tick, then selects the new right-hand cue
+  from the engine's selection. The engine refuses a cut that would leave
+  either half under its minimum duration.
+- **Merge Up**: the window keeps its rows in `(start, id)` order, so the row
+  before the selected one on the same track is the track's previous cue.
+  Merge Up runs `captions.merge` with that pair; the engine spans the kept cue
+  to the last end and joins the trimmed texts with a newline.
+- **Tests**:
+  `captions::tests::importing_an_srt_adds_a_track_named_for_the_file_and_one_undo_removes_it`
+  writes a two-cue SRT to the temp directory, imports it and gets frames
+  24..60 and 72..96 with their own text, a track named for the file stem, one
+  undo step, a cleared engine selection and the imported track as the window's
+  target; one undo removes the track and its cues.
+  `...::exporting_webvtt_writes_the_cues_without_dirtying_the_project_and_reimports`
+  exports a 3 s cue as WebVTT and reads back the `WEBVTT` signature,
+  `00:00:00.000 --> 00:00:03.000` and the text, with the undo length and the
+  clean flag unchanged, then re-imports the file into a fresh sequence and
+  gets the same cue back.
+  `...::a_file_that_is_not_a_caption_errors_with_its_name_and_leaves_the_sequence_alone`
+  imports a `.txt` and gets an error naming the file, no track and no undo
+  step. `...::splitting_the_selected_caption_at_the_playhead_is_one_undo` cuts
+  a 3 s cue at 1 s into 0..24 and 24..72 with the right half selected, and one
+  undo restores the whole cue.
+  `...::merging_the_selected_caption_up_folds_it_into_the_earlier_cue_as_one_undo`
+  merges 0..36 "one" with 36..72 "two" into 0..72 "one\ntwo" and one undo
+  restores both.
+  `ui_tests::splitting_and_merging_the_caption_from_the_editor_are_undoable_steps`
+  clicks the chip, Add, then Split at Playhead at the 2 s playhead on the 1 s
+  to 4 s cue and gets two cues, clicks Merge Up and gets the single cue back,
+  and one Ctrl+Z restores the split.
+- **Limitations**: caption tracks are still not painted on the timeline and
+  cannot be dragged; there is no style editor and no burned-in preview. Import
+  always adds a new track rather than folding a file into an existing one,
+  Split only cuts the selected cue (the engine's listen-under-the-playhead
+  variant is not exposed), and Merge Up only joins the previous cue on the
+  same track, not an arbitrary selection.
+- **Red evidence**: red commit `4fc8173` (run `43372950488`) stubbed the four
+  writes and failed exactly the six new paths: **136 passed; 6 failed**, with
+  fmt, clippy `-D warnings`, check and the release build all green.
+- **CI**: run 43439895270 - fmt, clippy `-D warnings`, check, **142 tests**, release
+  build and the binary self-test.
+
 ## T26 - caption editor (CI-verified, run 43369355615)
 
 Row 87 said FilmCraft has captions and the shell does not expose them: the
@@ -648,9 +709,8 @@ typed.
   a 3 s "New caption" at the 2 s playhead, selected in the engine; Ctrl+Z
   removes the cue and the next one the track.
 - **Limitations**: caption tracks are not painted on the timeline and cannot be
-  dragged; there is no style editor, no import/export button, no split/merge
-  control and no monitor preview toggle. The engine commands for all of those
-  exist and are not wired here yet.
+  dragged; there is no style editor and no burned-in preview. Import/export,
+  split and merge-up arrived with T27.
 - **Red evidence**: the original red commit (`6487605`) never compiled - the
   window's row loop borrowed the editor immutably while the row handler called
   `select` with `&mut editor` - so run `43360963172` reported E0502 instead of
@@ -1614,6 +1674,7 @@ with a real, user-installed runtime.
 | T24 | Transition browser: a floating window over the engine's own `effects.list` catalog, with video/audio tabs, folder paths and a filter, applying the chosen effect, length and alignment at the selected edit and selecting or removing the transition there | CI-verified, run 43090989519 |
 | T25 | Transitions on the timeline: each transition paints as a band over its cut with the selection state from the engine, a click makes it the engine's transition selection and selects the incoming clip, and an edge or body drag writes the engine-clamped span in one undo | CI-verified, run 43138585328 |
 | T26 | Caption editor: a floating window over the engine's own `captions.list` that adds a track and a cue at the playhead, selects a cue through the engine's caption selection, edits its text and timing and deletes it, each write its own undo step | CI-verified, run 43369355615 |
+| T27 | Caption import/export, split and merge-up: Import reads a picked caption file into a frame-snapped track as one undoable edit, Export writes the target track as SubRip or WebVTT without dirtying the project, Split at Playhead cuts the selected cue at the App playhead and Merge Up folds it into the previous cue on its track | CI-verified, run 43439895270 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
