@@ -2876,7 +2876,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         body.label("No sequence");
         return;
     };
-    let rows = s.video_tracks.len() + s.audio_tracks.len();
+    let rows = s.video_tracks.len() + s.audio_tracks.len() + s.caption_tracks.len();
     let strip = egui::Rect::from_min_max(rect.min + egui::vec2(0.0, TIMELINE_HEADER_H), rect.max);
     let head_w = TRACK_HEAD_W.min((strip.width() * 0.4).max(0.0));
     let head = egui::Rect::from_min_max(strip.min, egui::pos2(strip.min.x + head_w, strip.max.y));
@@ -3097,6 +3097,71 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             painter.line_segment([rect.left_top(), egui::pos2(rect.right(), rect.bottom())], egui::Stroke::new(1.0, ui::ACCENT_DIM));
             painter.line_segment([egui::pos2(rect.right(), rect.top()), egui::pos2(rect.left(), rect.bottom())], egui::Stroke::new(1.0, ui::ACCENT_DIM));
             transition_rects.push((rect, tr.id.0));
+        }
+    }
+
+    // Caption tracks paint under the audio rows: one row per track, each cue a
+    // bar at its own time, its first line for a label. A cue click names the
+    // cue in the engine's caption selection - selection is editor state, so it
+    // adds no undo step and never dirties the project.
+    let caption_base = s.video_tracks.len() + s.audio_tracks.len();
+    let selected_captions: Vec<u64> = app.session.state.caption_selection.iter().map(|c| c.0).collect();
+    let mut caption_click: Option<u64> = None;
+    for (index, track) in s.caption_tracks.iter().enumerate() {
+        let row = caption_base + index;
+        let y = alloc.top() + RULER_H + row as f32 * ROW_H;
+        let row_rect = egui::Rect::from_min_max(egui::pos2(alloc.left(), y), egui::pos2(alloc.right(), y + ROW_H));
+        painter.rect_filled(row_rect, 0.0, if row % 2 == 0 { ui::BG_PANEL } else { ui::BG_INSET });
+        let head_rect = egui::Rect::from_min_size(egui::pos2(head.left(), y), egui::vec2(head.width(), ROW_H));
+        header_painter.rect_filled(head_rect, 0.0, ui::BG_HEADER);
+        header_painter.line_segment(
+            [egui::pos2(head.right(), y), egui::pos2(head.right(), y + ROW_H)],
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        );
+        // Enabled is the track's output switch (monitor and burn-in); the row
+        // still paints when it is off so the cues stay editable here.
+        let label_color = if track.enabled { ui::TEXT_MID } else { ui::TEXT_LO };
+        header_painter.text(
+            egui::pos2(head_rect.left() + 8.0, y + ROW_H / 2.0),
+            egui::Align2::LEFT_CENTER,
+            format!("C{} {}", index + 1, track.name),
+            egui::FontId::proportional(11.0),
+            label_color,
+        );
+        for cue in &track.captions {
+            let rect = timeline_clip_rect(alloc, row, cue.start, cue.duration, zoom);
+            let selected = selected_captions.contains(&cue.id.0);
+            let fill = if selected { ui::ACCENT_SEL } else { egui::Color32::from_rgba_unmultiplied(53, 194, 181, 60) };
+            painter.rect_filled(rect, 3.0, fill);
+            painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, if selected { ui::ACCENT_HI } else { ui::ACCENT_DIM }), egui::StrokeKind::Inside);
+            let text = cue.text.lines().next().unwrap_or_default().to_string();
+            painter.with_clip_rect(rect.shrink(3.0)).text(
+                rect.left_top() + egui::vec2(6.0, 4.0),
+                egui::Align2::LEFT_TOP,
+                text,
+                egui::FontId::proportional(10.0),
+                if track.enabled { ui::TEXT_HI } else { ui::TEXT_LO },
+            );
+            let hit = ui.interact(rect, egui::Id::new(("ff-timeline-caption", cue.id.0)), egui::Sense::click());
+            if hit.clicked() {
+                caption_click = Some(cue.id.0);
+            }
+            if hit.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+        }
+    }
+    if let Some(id) = caption_click {
+        match app.session.execute("captions.select", serde_json::json!({"captions": [id]})) {
+            Ok(_) => {
+                // Keep an open Caption window in step with the new selection.
+                if let Some(mut editor) = app.captions.take() {
+                    crate::captions::refresh(app, &mut editor);
+                    app.captions = Some(editor);
+                }
+                app.status = "Selected caption".to_string();
+            }
+            Err(error) => app.status = error.to_string(),
         }
     }
 
