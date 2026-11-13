@@ -11,7 +11,7 @@
 //! The list itself is a query (`captions.list` is journal-free), so opening the
 //! window or refreshing it never dirties the project or adds an undo step.
 
-use filmcraft_time::TICKS_PER_SECOND;
+use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
 
 use crate::app::App;
@@ -146,14 +146,42 @@ pub fn rows_from_list(value: &Value) -> (Vec<TrackRow>, Vec<CaptionRow>, Vec<u64
 
 /// Add a subtitle-format caption track and make it the window's target.
 pub fn add_track(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
-    let _ = (app, editor);
-    Err("the caption editor is not implemented yet".to_string())
+    let value = app.execute("captions.newTrack", json!({"format": "Subtitle"}))?;
+    let id = value.get("track").and_then(Value::as_u64);
+    refresh(app, editor);
+    if let Some(id) = id {
+        editor.track = Some(id);
+    }
+    app.status = "Added caption track".to_string();
+    Ok(())
 }
 
 /// Add a caption at the playhead on the window's track, using the drafts.
 pub fn add_caption(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
-    let _ = (app, editor);
-    Err("the caption editor is not implemented yet".to_string())
+    // The engine creates a track on demand; do it here instead so the track is
+    // its own undo step and the window can list it before the caption lands.
+    if editor.tracks.is_empty() {
+        add_track(app, editor)?;
+    }
+    let mut params = json!({"time": app.playhead.0, "durationSeconds": editor.seconds});
+    if let Some(track) = editor.track {
+        params["track"] = json!(track);
+    }
+    let text = editor.text.trim().to_string();
+    if !text.is_empty() {
+        params["text"] = json!(text);
+    }
+    let value = app.execute("captions.add", params)?;
+    let id = value.get("caption").and_then(Value::as_u64);
+    refresh(app, editor);
+    if let Some(id) = id {
+        editor.selected = Some(id);
+        if let Some(row) = editor.captions.iter().find(|r| r.id == id).cloned() {
+            seed(editor, &row);
+        }
+    }
+    app.status = "Added caption".to_string();
+    Ok(())
 }
 
 /// Make `id` the engine's caption selection and seed the drafts from its row.
@@ -169,26 +197,41 @@ pub fn select(app: &mut App, editor: &mut CaptionEditor, id: u64) -> Result<(), 
 
 /// Write the text draft to the selected caption.
 pub fn apply_text(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
-    let _ = (app, editor);
-    Err("the caption editor is not implemented yet".to_string())
+    let id = editor.selected.ok_or_else(|| "select a caption first".to_string())?;
+    app.execute("captions.setText", json!({"caption": id, "text": editor.text}))?;
+    app.status = "Edited caption text".to_string();
+    Ok(())
 }
 
 /// Write the start/length drafts to the selected caption as one edit.
 pub fn apply_times(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
-    let _ = (app, editor);
-    Err("the caption editor is not implemented yet".to_string())
+    let id = editor.selected.ok_or_else(|| "select a caption first".to_string())?;
+    let end = (editor.start + editor.length).max(editor.start);
+    app.execute("captions.setTimes", json!({"caption": id, "startSeconds": editor.start, "endSeconds": end}))?;
+    app.status = format!("Caption at {:.2} s for {:.2} s", editor.start, editor.length);
+    Ok(())
 }
 
 /// Delete the selected caption.
 pub fn delete(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
-    let _ = (app, editor);
-    Err("the caption editor is not implemented yet".to_string())
+    let id = editor.selected.ok_or_else(|| "select a caption first".to_string())?;
+    app.execute("captions.delete", json!({"captions": [id]}))?;
+    editor.selected = None;
+    refresh(app, editor);
+    app.status = "Deleted caption".to_string();
+    Ok(())
 }
 
 /// Step the playhead to the next or previous caption start.
 pub fn step(app: &mut App, editor: &mut CaptionEditor, forward: bool) -> Result<(), String> {
-    let _ = (app, editor, forward);
-    Err("the caption editor is not implemented yet".to_string())
+    let command = if forward { "captions.next" } else { "captions.previous" };
+    let value = app.execute(command, json!({}))?;
+    if let Some(time) = value.get("time").and_then(Value::as_i64) {
+        app.playhead = Tick(time);
+    }
+    refresh(app, editor);
+    app.status = if forward { "Next caption".to_string() } else { "Previous caption".to_string() };
+    Ok(())
 }
 
 fn action(ui: &mut egui::Ui, id: &str, label: &str, accent: bool) -> egui::Response {
@@ -268,6 +311,9 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
             if editor.captions.is_empty() {
                 ui.label(ui::hint("No captions yet. Add a track, then a caption at the playhead."));
             } else {
+                // The row handler runs after the scroll area: a click needs
+                // `&mut editor`, which the row list is borrowing to draw.
+                let mut clicked = None;
                 egui::ScrollArea::vertical().id_salt("caption-list").max_height(240.0).auto_shrink([false, false]).show(ui, |ui| {
                     for row in &editor.captions {
                         let width = ui.available_width();
@@ -291,10 +337,13 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                             ui::TEXT_MID,
                         );
                         if hit.clicked() {
-                            command = Some(select(app, &mut editor, row.id));
+                            clicked = Some(row.id);
                         }
                     }
                 });
+                if let Some(id) = clicked {
+                    command = Some(select(app, &mut editor, id));
+                }
             }
             ui.separator();
             ui.horizontal(|ui| {
