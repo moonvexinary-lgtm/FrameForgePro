@@ -2735,6 +2735,10 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             crate::transitions::open(app);
         }
 
+        if chip(ui, egui::Id::new("ff-caption-open"), "Captions").on_hover_text("List, add and edit the sequence's captions").clicked() {
+            crate::captions::open(app);
+        }
+
         let marked = app.sequence().is_some_and(|q| q.mark_in.is_some() || q.mark_out.is_some());
         ui.menu_button("In / Out", |ui| {
             if ui.button("Mark In").clicked() {

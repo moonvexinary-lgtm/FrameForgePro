@@ -183,6 +183,8 @@ pub struct App {
     pub speed: Option<crate::speed::SpeedDialog>,
     /// The floating Transition browser, when one is open.
     pub transitions: Option<crate::transitions::TransitionBrowser>,
+    /// The floating Caption editor, when one is open.
+    pub captions: Option<crate::captions::CaptionEditor>,
     /// The graphic clip selected in the Text & Graphics workspace.
     pub graphics_clip: Option<ClipId>,
     /// The layer index selected inside that graphic clip.
@@ -300,6 +302,7 @@ impl App {
             marker_list: None,
             speed: None,
             transitions: None,
+            captions: None,
             graphics_clip: None,
             graphics_layer: 0,
             text_draft: String::new(),
@@ -1177,6 +1180,9 @@ impl App {
             // The Transition browser applies at the selected edit, so it floats
             // over the timeline the same way.
             crate::transitions::show(self, ui);
+            // The Caption editor edits the sequence's captions, which sit on
+            // their own tracks beside the timeline.
+            crate::captions::show(self, ui);
         }));
         if result.is_err() {
             self.status = "A UI error occurred. The project is intact — save it now.".to_string();

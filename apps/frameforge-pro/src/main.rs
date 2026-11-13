@@ -14,6 +14,7 @@
 
 mod app;
 mod audio;
+mod captions;
 mod color;
 mod compositing;
 mod edit;

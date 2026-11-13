@@ -489,6 +489,39 @@ fn clicking_a_timeline_transition_selects_it_and_dragging_its_edge_sets_its_leng
 }
 
 #[test]
+fn the_captions_chip_opens_the_editor_and_adds_a_caption_at_the_playhead() {
+    let (mut h, _) = seeded();
+    // A caption goes at the Program playhead, two seconds in.
+    h.app.playhead = Tick(2 * TICKS_PER_SECOND);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    assert!(h.app.captions.is_some(), "the chip opens the editor (status {:?})", h.app.status);
+    assert!(h.rect_of(egui::Id::new("ff-caption-add")).is_some(), "the editor's Add control is laid out");
+
+    h.click(egui::Id::new("ff-caption-add"));
+    let q = h.app.sequence().expect("the fixture has a sequence");
+    assert_eq!(q.caption_tracks.len(), 1, "the first caption creates the sequence's caption track (status {:?})", h.app.status);
+    let caption = q.caption_tracks[0].captions.first().expect("the caption was added");
+    assert_eq!(caption.start, FrameRate::FPS_24.tick_of(48), "the caption starts at the 2 s playhead, on the frame grid");
+    assert_eq!(caption.duration, FrameRate::FPS_24.tick_of(72), "the default length is 3 s");
+    assert_eq!(caption.text, "New caption", "the editor's default text");
+    assert_eq!(
+        h.app.session.state.caption_selection.iter().map(|c| c.0).collect::<Vec<_>>(),
+        vec![caption.id.0],
+        "the new caption is the engine's caption selection"
+    );
+    assert_eq!(h.app.captions.as_ref().map(|e| e.captions.len()), Some(1), "the editor lists it");
+
+    h.press(Key::Z, command(false));
+    let q = h.app.sequence().expect("the fixture has a sequence");
+    assert!(q.caption_tracks[0].captions.is_empty(), "one Ctrl+Z removes the caption");
+    assert_eq!(q.caption_tracks.len(), 1, "the track is its own undo step and stays");
+    h.press(Key::Z, command(false));
+    assert!(h.app.sequence().expect("the fixture has a sequence").caption_tracks.is_empty(), "a second Ctrl+Z removes the track");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
