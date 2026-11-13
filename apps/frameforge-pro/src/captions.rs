@@ -10,6 +10,13 @@
 //!
 //! The list itself is a query (`captions.list` is journal-free), so opening the
 //! window or refreshing it never dirties the project or adds an undo step.
+//!
+//! Import and export read and write a real caption file through the engine
+//! (`captions.import` / `captions.export`): an import is one undoable edit, an
+//! export is not an edit at all. Split cuts the selected cue at the playhead
+//! and Merge Up folds it into the cue before it on the same track.
+
+use std::path::{Path, PathBuf};
 
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
@@ -61,13 +68,26 @@ pub struct CaptionEditor {
     /// Draft start and length in seconds for the selected caption.
     pub start: f64,
     pub length: f64,
+    /// The caption format an export writes: `srt` or `vtt`.
+    pub format: String,
     /// Why the list could not be read, when it could not.
     pub error: Option<String>,
 }
 
 impl CaptionEditor {
     fn new() -> Self {
-        Self { tracks: Vec::new(), captions: Vec::new(), track: None, selected: None, text: String::new(), seconds: 3.0, start: 0.0, length: 3.0, error: None }
+        Self {
+            tracks: Vec::new(),
+            captions: Vec::new(),
+            track: None,
+            selected: None,
+            text: String::new(),
+            seconds: 3.0,
+            start: 0.0,
+            length: 3.0,
+            format: "srt".to_string(),
+            error: None,
+        }
     }
 }
 
@@ -234,6 +254,28 @@ pub fn step(app: &mut App, editor: &mut CaptionEditor, forward: bool) -> Result<
     Ok(())
 }
 
+/// Import a caption file into the active sequence as a new track. The engine
+/// reads the file, detects its format and writes the track as one edit.
+pub fn import_file(_app: &mut App, _editor: &mut CaptionEditor, _path: &Path) -> Result<usize, String> {
+    Err("caption import is not wired yet".to_string())
+}
+
+/// Export the window's track to `path` in the window's chosen format. An
+/// export writes a file but does not edit the project.
+pub fn export_file(_app: &mut App, _editor: &mut CaptionEditor, _path: PathBuf) -> Result<usize, String> {
+    Err("caption export is not wired yet".to_string())
+}
+
+/// Split the selected caption at the playhead and select the right half.
+pub fn split_at_playhead(_app: &mut App, _editor: &mut CaptionEditor) -> Result<u64, String> {
+    Err("caption split is not wired yet".to_string())
+}
+
+/// Merge the selected caption into the one before it on the same track.
+pub fn merge_with_previous(_app: &mut App, _editor: &mut CaptionEditor) -> Result<u64, String> {
+    Err("caption merge is not wired yet".to_string())
+}
+
 fn action(ui: &mut egui::Ui, id: &str, label: &str, accent: bool) -> egui::Response {
     let font = egui::FontId::proportional(11.0);
     let width = ui.painter().layout_no_wrap(label.to_string(), font.clone(), ui::TEXT_HI).size().x + 20.0;
@@ -305,6 +347,25 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                     command = Some(add_caption(app, &mut editor));
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label(ui::hint("Format"));
+                let label = if editor.format == "vtt" { "WebVTT" } else { "SubRip (SRT)" };
+                egui::ComboBox::from_id_salt("ff-caption-format").selected_text(label).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut editor.format, "srt".to_string(), "SubRip (SRT)");
+                    ui.selectable_value(&mut editor.format, "vtt".to_string(), "WebVTT");
+                });
+                if action(ui, "ff-caption-import", "Import...", false).clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("Captions", &["srt", "vtt", "scc", "mcc", "stl", "ttml", "dfxp"]).pick_file()
+                {
+                    command = Some(import_file(app, &mut editor, &path).map(|_| ()));
+                }
+                if action(ui, "ff-caption-export", "Export...", false).clicked() {
+                    let extension = editor.format.clone();
+                    if let Some(path) = rfd::FileDialog::new().add_filter(extension.to_uppercase(), &[extension.as_str()]).save_file() {
+                        command = Some(export_file(app, &mut editor, path).map(|_| ()));
+                    }
+                }
+            });
             if let Some(error) = editor.error.clone() {
                 ui.label(egui::RichText::new(error).size(10.0).color(ui::TEXT_LO));
             }
@@ -346,6 +407,14 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 }
             }
             ui.separator();
+            ui.horizontal(|ui| {
+                if action(ui, "ff-caption-split", "Split at Playhead", false).clicked() {
+                    command = Some(split_at_playhead(app, &mut editor).map(|_| ()));
+                }
+                if action(ui, "ff-caption-merge", "Merge Up", false).clicked() {
+                    command = Some(merge_with_previous(app, &mut editor).map(|_| ()));
+                }
+            });
             ui.horizontal(|ui| {
                 let enabled = editor.selected.is_some();
                 ui.label(ui::hint("Start"));
@@ -400,6 +469,14 @@ mod tests {
 
     fn frames(n: i64) -> i64 {
         FrameRate::FPS_24.tick_of(n).0
+    }
+
+    /// A uniquely named file in the system temp directory, with `text` in it.
+    fn temp_file(name: &str, text: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let path = std::env::temp_dir().join(format!("ff-caption-{stamp}-{name}"));
+        std::fs::write(&path, text).expect("the fixture file is written");
+        path
     }
 
     #[test]
@@ -520,5 +597,135 @@ mod tests {
 
         app.undo();
         assert_eq!(caption_list(&app).len(), 1, "one undo restores it");
+    }
+
+    #[test]
+    fn importing_an_srt_adds_a_track_named_for_the_file_and_one_undo_removes_it() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        let path = temp_file("import.srt", "1\n00:00:01,000 --> 00:00:02,500\nFirst line\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond line\n");
+        let undo_before = app.session.history.undo.len();
+
+        let imported = import_file(&mut app, &mut editor, &path).expect("the caption file imports");
+        assert_eq!(imported, 2, "the reply counts the cues that landed");
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        assert_eq!(track_count(&app), 1, "the import adds one caption track");
+        assert_eq!(editor.tracks.len(), 1, "the editor lists it");
+        assert_eq!(editor.tracks[0].name, stem, "the track is named for the file");
+        assert_eq!(
+            caption_list(&app),
+            vec![(frames(24), frames(60), "First line".to_string()), (frames(72), frames(96), "Second line".to_string()),],
+            "the cues land on the frame grid with their own times and text"
+        );
+        assert_eq!(app.session.history.undo.len(), undo_before + 1, "the whole import is one undo step");
+        assert!(app.session.state.caption_selection.is_empty(), "the engine clears the caption selection on import");
+        assert_eq!(editor.selected, None, "so the window shows nothing selected");
+        assert_eq!(editor.track, Some(editor.tracks[0].id), "the imported track is the window's target");
+
+        app.undo();
+        assert_eq!(track_count(&app), 0, "one undo removes the imported track and its cues");
+    }
+
+    #[test]
+    fn exporting_webvtt_writes_the_cues_without_dirtying_the_project_and_reimports() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        add_track(&mut app, &mut editor).expect("the track is added");
+        add_caption(&mut app, &mut editor).expect("the caption is added");
+        editor.format = "vtt".to_string();
+        // The caption edit dirtied the project; the export must not set it
+        // again (and must not add a step either).
+        app.dirty = false;
+        let undo_before = app.session.history.undo.len();
+        let path = temp_file("export.vtt", "");
+        let exported = export_file(&mut app, &mut editor, path.clone()).expect("the track exports");
+
+        assert_eq!(exported, 1, "the reply counts the cues written");
+        let text = std::fs::read_to_string(&path).expect("the export wrote a file");
+        assert!(text.starts_with("WEBVTT\n\n"), "a WebVTT file begins with its signature: {text:?}");
+        assert!(text.contains("00:00:00.000 --> 00:00:03.000"), "the cue's own times, in WebVTT's clock: {text:?}");
+        assert!(text.contains("New caption"), "the cue's text: {text:?}");
+        assert_eq!(app.session.history.undo.len(), undo_before, "an export is not an edit");
+        assert!(!app.dirty, "an export does not dirty the project");
+
+        // The file the engine wrote is a caption file the engine reads back.
+        let mut other = caption_app();
+        open(&mut other);
+        let mut other_editor = other.captions.clone().expect("the editor opens");
+        let reimported = import_file(&mut other, &mut other_editor, &path).expect("the exported file imports");
+        assert_eq!(reimported, 1, "one cue round-trips");
+        assert_eq!(caption_list(&other), vec![(0, frames(72), "New caption".to_string())], "the same cue, back on the frame grid");
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_caption_errors_with_its_name_and_leaves_the_sequence_alone() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        let path = temp_file("notes.txt", "this is not a caption file\n");
+        let undo_before = app.session.history.undo.len();
+
+        let error = import_file(&mut app, &mut editor, &path).expect_err("a text file is not a caption file");
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        assert!(error.contains(&name), "the error names the file: {error}");
+        assert_eq!(track_count(&app), 0, "a bad file adds no track");
+        assert_eq!(app.session.history.undo.len(), undo_before, "a bad file adds no undo step");
+    }
+
+    #[test]
+    fn splitting_the_selected_caption_at_the_playhead_is_one_undo() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        add_track(&mut app, &mut editor).expect("the track is added");
+        add_caption(&mut app, &mut editor).expect("the caption is added");
+        let id = editor.selected.expect("the new caption is selected");
+        app.playhead = Tick(TICKS_PER_SECOND);
+
+        let right = split_at_playhead(&mut app, &mut editor).expect("the caption splits at the playhead");
+        assert_ne!(right, id, "the reply names the new right-hand cue");
+        assert_eq!(
+            caption_list(&app),
+            vec![(0, frames(24), "New caption".to_string()), (frames(24), frames(72), "New caption".to_string())],
+            "the 3 s cue is cut at the 1 s playhead, both halves on the frame grid"
+        );
+        assert_eq!(editor.selected, Some(right), "the window follows the engine and selects the right half");
+        assert_eq!(
+            app.session.state.caption_selection.iter().map(|c| c.0).collect::<Vec<_>>(),
+            vec![right],
+            "the engine's caption selection names the right half"
+        );
+
+        app.undo();
+        assert_eq!(caption_list(&app), vec![(0, frames(72), "New caption".to_string())], "one undo restores the whole cue");
+    }
+
+    #[test]
+    fn merging_the_selected_caption_up_folds_it_into_the_earlier_cue_as_one_undo() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        add_track(&mut app, &mut editor).expect("the track is added");
+        let track = editor.track.expect("the new track is the target");
+        app.execute("captions.add", json!({"track": track, "text": "one", "time": 0, "durationSeconds": 1.5})).expect("the first cue is added");
+        app.execute("captions.add", json!({"track": track, "text": "two", "time": frames(36), "durationSeconds": 1.5})).expect("the second cue is added");
+        refresh(&mut app, &mut editor);
+        let first = editor.captions[0].id;
+        let second = editor.captions[1].id;
+        select(&mut app, &mut editor, second).expect("the second cue is selected");
+
+        let kept = merge_with_previous(&mut app, &mut editor).expect("the cue merges into the one before it");
+        assert_eq!(kept, first, "the earlier cue keeps the merged result");
+        assert_eq!(caption_list(&app), vec![(0, frames(72), "one\ntwo".to_string())], "the merged cue spans both cues and joins the texts with a line break");
+        assert_eq!(
+            app.session.state.caption_selection.iter().map(|c| c.0).collect::<Vec<_>>(),
+            vec![kept],
+            "the engine's caption selection names the merged cue"
+        );
+
+        app.undo();
+        assert_eq!(caption_list(&app), vec![(0, frames(36), "one".to_string()), (frames(36), frames(72), "two".to_string())], "one undo restores both cues");
     }
 }

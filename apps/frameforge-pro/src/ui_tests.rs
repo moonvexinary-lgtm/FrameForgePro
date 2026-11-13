@@ -525,6 +525,38 @@ fn the_captions_chip_opens_the_editor_and_adds_a_caption_at_the_playhead() {
 }
 
 #[test]
+fn splitting_and_merging_the_caption_from_the_editor_are_undoable_steps() {
+    let (mut h, _) = seeded();
+    let spans = |h: &Harness| -> Vec<(i64, i64)> {
+        h.app.sequence().map(|q| q.caption_tracks.iter().flat_map(|t| t.captions.iter().map(|c| (c.start.0, c.end().0))).collect()).unwrap_or_default()
+    };
+    let tick = |frames: i64| FrameRate::FPS_24.tick_of(frames).0;
+
+    // A default 3 s caption from the 1 s playhead, so its middle is 2 s.
+    h.app.playhead = Tick(TICKS_PER_SECOND);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add"));
+    assert_eq!(spans(&h), vec![(tick(24), tick(96))], "one 1 s to 4 s caption (status {:?})", h.app.status);
+    // The caption list grew by a row, so the controls under it moved down:
+    // let the window lay out again before reading the split control's rect.
+    h.frame(Vec::new());
+    h.app.playhead = Tick(2 * TICKS_PER_SECOND);
+    h.frame(Vec::new());
+
+    h.click(egui::Id::new("ff-caption-split"));
+    assert_eq!(spans(&h), vec![(tick(24), tick(48)), (tick(48), tick(96))], "Split at Playhead cuts the cue at 2 s (status {:?})", h.app.status);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-merge"));
+    assert_eq!(spans(&h), vec![(tick(24), tick(96))], "Merge Up folds the right half into the left (status {:?})", h.app.status);
+
+    h.press(Key::Z, command(false));
+    assert_eq!(spans(&h), vec![(tick(24), tick(48)), (tick(48), tick(96))], "one Ctrl+Z restores the split");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
