@@ -602,6 +602,65 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T26 - caption editor (CI-verified, run 43369355615)
+
+Row 87 said FilmCraft has captions and the shell does not expose them: the
+sequence's caption tracks and cues were real in the document, but nothing
+listed them, nothing could add one at the playhead and no cue's text could be
+typed.
+
+- **List** (`captions.rs`): the window reads `captions.list` - journal-free, so
+  opening or refreshing it never dirties the project and never adds an undo
+  step - and keeps the engine's own `C1`/`C2` slot labels, the engine's
+  timecodes at the sequence rate, its duration timecodes and its caption order.
+  Each track is a chip; its hover text carries the engine's format and count.
+- **Add**: Add Track runs `captions.newTrack` with the Subtitle format. Add runs
+  `captions.add` with the App playhead passed as an explicit `time` and the
+  length draft (3 s by default), so the cue snaps to the sequence's frame grid.
+  The engine would create a missing track inside that same command; the app
+  creates it first instead, so the track is its own undo step and the first Add
+  is one Ctrl+Z for the cue and a second for the track rather than an untracked
+  side effect.
+- **Select**: a row click runs `captions.select` - the engine's caption
+  selection, which clears the clip selection the way the engine does - and
+  seeds the text, start and length drafts from that cue's own start and end
+  ticks, so Apply edits exactly the cue that was clicked.
+- **Edit**: Apply writes the text (`captions.setText`) and then the timing
+  (`captions.setTimes`, start plus length in seconds, frame-snapped by the
+  engine) as their own undo steps; Delete runs `captions.delete` on the
+  selected cue and refreshes through the engine's cleared selection; Prev and
+  Next step the playhead to a real cue start through `captions.previous` /
+  `captions.next`.
+- **Tests**:
+  `captions::tests::the_editor_lists_the_engines_own_tracks_and_captions_in_time_order`
+  (two tracks and three cues added out of order: the engine's `C1`/`C2` labels
+  top-first because `newTrack` inserts at the top, the per-track counts, the
+  timeline order, and a 1.5 s cue reported as `00:00:01:12` = 36 frames),
+  `...::adding_a_track_and_a_caption_at_the_playhead_snaps_to_frames_and_undoes`
+  (a 1 s playhead and a 2.5 s draft land on frames 24..84, one undo removes the
+  cue and a second the track),
+  `...::editing_the_selected_captions_text_and_times_is_one_undo_each` (text,
+  then a 2 s start and 2.5 s length = frames 48..108, one undo each, and the
+  second undo restores the text), and
+  `...::deleting_the_selected_caption_removes_it_and_undo_restores_it`.
+  `ui_tests::the_captions_chip_opens_the_editor_and_adds_a_caption_at_the_playhead`
+  clicks the toolbar chip, then Add, and gets the sequence's caption track plus
+  a 3 s "New caption" at the 2 s playhead, selected in the engine; Ctrl+Z
+  removes the cue and the next one the track.
+- **Limitations**: caption tracks are not painted on the timeline and cannot be
+  dragged; there is no style editor, no import/export button, no split/merge
+  control and no monitor preview toggle. The engine commands for all of those
+  exist and are not wired here yet.
+- **Red evidence**: the original red commit (`6487605`) never compiled - the
+  window's row loop borrowed the editor immutably while the row handler called
+  `select` with `&mut editor` - so run `43360963172` reported E0502 instead of
+  failing tests. A diagnostic commit (`c4b9478`, run `43367130015`) re-stubbed
+  the five writes on the compiling tree and failed exactly the five behavioural
+  paths: **131 passed; 5 failed**, with the list test passing. The writes were
+  then restored (`5b9b294`).
+- **CI**: run `43369355615` - fmt, clippy `-D warnings`, check, **136 tests**, release
+  build and the binary self-test.
+
 ## T25 - transitions on the timeline (CI-verified, run 43138585328)
 
 T24's browser could name a transition and set its length from a field, but the
@@ -1554,6 +1613,7 @@ with a real, user-installed runtime.
 | T23 | Speed / Duration: a floating dialog drives the engine's rate, reverse, ripple and time interpolation, and Freeze Frame holds a source frame at the clip's in point, out point or the Program playhead | CI-verified, run 42949817569 |
 | T24 | Transition browser: a floating window over the engine's own `effects.list` catalog, with video/audio tabs, folder paths and a filter, applying the chosen effect, length and alignment at the selected edit and selecting or removing the transition there | CI-verified, run 43090989519 |
 | T25 | Transitions on the timeline: each transition paints as a band over its cut with the selection state from the engine, a click makes it the engine's transition selection and selects the incoming clip, and an edge or body drag writes the engine-clamped span in one undo | CI-verified, run 43138585328 |
+| T26 | Caption editor: a floating window over the engine's own `captions.list` that adds a track and a cue at the playhead, selects a cue through the engine's caption selection, edits its text and timing and deletes it, each write its own undo step | CI-verified, run 43369355615 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
