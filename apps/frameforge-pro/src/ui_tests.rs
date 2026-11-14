@@ -719,17 +719,17 @@ fn a_caption_track_header_toggles_output_and_lock_each_as_one_undo() {
     // The caption header carries the same real document switches the video and
     // audio headers do: output (the engine's per-track `enabled`) and lock.
     h.click(egui::Id::new(("ff-caption-visible", track)));
-    assert_eq!(flags(&h).0, false, "the eye turns the track's output off");
+    assert!(!flags(&h).0, "the eye turns the track's output off");
     assert_eq!(h.app.status, "Visibility updated");
     h.press(Key::Z, command(false));
-    assert_eq!(flags(&h).0, true, "one Ctrl+Z restores the output");
+    assert!(flags(&h).0, "one Ctrl+Z restores the output");
 
     h.frame(Vec::new());
     h.click(egui::Id::new(("ff-caption-lock", track)));
-    assert_eq!(flags(&h).1, true, "the lock closes the track");
+    assert!(flags(&h).1, "the lock closes the track");
     assert_eq!(h.app.status, "Lock updated");
     h.press(Key::Z, command(false));
-    assert_eq!(flags(&h).1, false, "one Ctrl+Z unlocks it");
+    assert!(!flags(&h).1, "one Ctrl+Z unlocks it");
 }
 
 #[test]
