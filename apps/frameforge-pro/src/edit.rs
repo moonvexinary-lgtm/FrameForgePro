@@ -1069,6 +1069,58 @@ fn snap_trim(app: &App, clip: filmcraft_project::ClipId, edge: &str, delta: Tick
     Tick(snap_tick(raw_edge, &targets, snap_tolerance(zoom)).0 - base.0)
 }
 
+/// Snap targets for a caption cue gesture: zero, the playhead, every sequence
+/// marker and every other cue's edges. The dragged cue is left out so it
+/// cannot snap to itself.
+fn caption_snap_targets(seq: &Sequence, exclude: Option<u64>, playhead: Tick) -> Vec<Tick> {
+    let mut targets = vec![Tick::ZERO, playhead.max(Tick::ZERO)];
+    targets.extend(seq.markers.iter().map(|marker| marker.start));
+    for track in &seq.caption_tracks {
+        for cue in &track.captions {
+            if Some(cue.id.0) == exclude {
+                continue;
+            }
+            targets.push(cue.start);
+            targets.push(cue.start + cue.duration);
+        }
+    }
+    targets
+}
+
+/// A caption's start and duration in the active sequence.
+fn caption_span(seq: &Sequence, id: u64) -> Option<(Tick, Tick)> {
+    seq.caption_tracks.iter().flat_map(|track| track.captions.iter()).find(|cue| cue.id.0 == id).map(|cue| (cue.start, cue.duration))
+}
+
+/// Snap a moved caption: whichever of its start or end is closer to a target
+/// wins, exactly like a clip move.
+fn snap_caption_move(app: &App, caption: u64, raw: Tick, zoom: f32) -> Tick {
+    if !app.session.state.snapping {
+        return raw;
+    }
+    let Some(seq) = app.sequence() else { return raw };
+    let Some((_, duration)) = caption_span(seq, caption) else { return raw };
+    let targets = caption_snap_targets(seq, Some(caption), app.playhead);
+    let tol = snap_tolerance(zoom);
+    let by_start = snap_tick(raw, &targets, tol);
+    let by_end = Tick(snap_tick(raw + duration, &targets, tol).0 - duration.0);
+    choose_snap(raw, by_start, by_end)
+}
+
+/// Snap a trimmed caption edge to a nearby target, adjusting the delta so the
+/// edge lands there.
+fn snap_caption_trim(app: &App, caption: u64, edge: &str, delta: Tick, zoom: f32) -> Tick {
+    if !app.session.state.snapping {
+        return delta;
+    }
+    let Some(seq) = app.sequence() else { return delta };
+    let Some((start, duration)) = caption_span(seq, caption) else { return delta };
+    let base = if edge == "in" { start } else { start + duration };
+    let raw_edge = Tick((base.0 + delta.0).max(0));
+    let targets = caption_snap_targets(seq, Some(caption), app.playhead);
+    Tick(snap_tick(raw_edge, &targets, snap_tolerance(zoom)).0 - base.0)
+}
+
 /// Where a placement will go: one time (kept A/V together), the patched
 /// destination tracks and their names for the status line.
 struct Placement {
@@ -3377,10 +3429,21 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 drag_transition_edge(app, transition, edge, last_x - grab_x, zoom);
             }
             TimelineDrag::Caption { caption, edge, grab_x, last_x } => {
-                let delta = Tick((((last_x - grab_x) / zoom) as f64 * TICKS_PER_SECOND as f64) as i64);
-                let (command, params, status) = match edge {
-                    Some(edge) => ("captions.trim", serde_json::json!({"caption": caption, "edge": edge, "delta": delta.0}), "Trimmed caption"),
-                    None => ("captions.move", serde_json::json!({"captions": [caption], "delta": delta.0}), "Moved caption"),
+                let raw = Tick((((last_x - grab_x) / zoom) as f64 * TICKS_PER_SECOND as f64) as i64);
+                let (command, delta, status) = match edge {
+                    Some(edge) => {
+                        let snapped = snap_caption_trim(app, caption, edge, raw, zoom);
+                        ("captions.trim", snapped, if snapped == raw { "Trimmed caption" } else { "Trimmed caption (snapped)" })
+                    }
+                    None => {
+                        let start = app.sequence().and_then(|q| caption_span(q, caption)).map(|(start, _)| start).unwrap_or_default();
+                        let snapped = Tick(snap_caption_move(app, caption, start + raw, zoom).0 - start.0);
+                        ("captions.move", snapped, if snapped == raw { "Moved caption" } else { "Moved caption (snapped)" })
+                    }
+                };
+                let params = match edge {
+                    Some(edge) => serde_json::json!({"caption": caption, "edge": edge, "delta": delta.0}),
+                    None => serde_json::json!({"captions": [caption], "delta": delta.0}),
                 };
                 match app.execute(command, params) {
                     Ok(_) => {
@@ -4298,6 +4361,26 @@ mod tests {
         let seq = s.active_sequence().unwrap();
         let targets = super::snap_targets(seq, None, Tick(777));
         assert!(targets.contains(&Tick(4 * TICKS_PER_SECOND)), "a sequence marker is a snap target");
+    }
+
+    #[test]
+    fn caption_snap_targets_include_markers_the_playhead_and_other_cue_edges() {
+        let mut s = demo_session();
+        let track = s.execute("captions.newTrack", json!({"name": "Dialogue"})).unwrap()["track"].as_u64().unwrap();
+        let dragged = s.execute("captions.add", json!({"track": track, "text": "one", "time": TICKS_PER_SECOND, "durationSeconds": 1.0})).unwrap()["caption"]
+            .as_u64()
+            .unwrap();
+        s.execute("captions.add", json!({"track": track, "text": "two", "time": 5 * TICKS_PER_SECOND, "durationSeconds": 2.0})).unwrap();
+        s.execute("markers.add", json!({"time": 3 * TICKS_PER_SECOND, "name": "cue"})).unwrap();
+
+        let seq = s.active_sequence().unwrap();
+        let targets = super::caption_snap_targets(seq, Some(dragged), Tick(9 * TICKS_PER_SECOND));
+        assert!(targets.contains(&Tick(3 * TICKS_PER_SECOND)), "a sequence marker is a target");
+        assert!(targets.contains(&Tick(9 * TICKS_PER_SECOND)), "the playhead is a target");
+        assert!(targets.contains(&Tick(5 * TICKS_PER_SECOND)), "another cue's start is a target");
+        assert!(targets.contains(&Tick(7 * TICKS_PER_SECOND)), "another cue's end is a target");
+        assert!(!targets.contains(&Tick(TICKS_PER_SECOND)), "the dragged cue's own start is not");
+        assert!(!targets.contains(&Tick(2 * TICKS_PER_SECOND)), "nor its own end");
     }
 
     #[test]
