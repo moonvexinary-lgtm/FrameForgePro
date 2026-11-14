@@ -733,6 +733,43 @@ fn a_caption_track_header_toggles_output_and_lock_each_as_one_undo() {
 }
 
 #[test]
+fn caption_style_buttons_change_the_track_style_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    h.click(egui::Id::new("ff-caption-open"));
+    h.click(egui::Id::new("ff-caption-add-track"));
+    let style = |h: &Harness| -> (bool, f32) {
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| (t.style.background, t.style.size)).unwrap_or((true, 54.0))
+    };
+    assert_eq!(style(&h), (true, 54.0), "a new track takes the engine's default style");
+
+    // The style row drives the engine's own `captions.setStyle`: the BG switch
+    // flips the box behind the text, A- / A+ step the size, and Reset returns
+    // that track to the engine defaults. Each click is one undoable edit.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-bg"));
+    assert!(!style(&h).0, "the background box switches off");
+    assert_eq!(h.app.status, "Caption style updated");
+    h.press(Key::Z, command(false));
+    assert!(style(&h).0, "one Ctrl+Z restores the background");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-size-up"));
+    assert!((style(&h).1 - 58.0).abs() < 0.01, "A+ steps the size up by 4 px: {} px", style(&h).1);
+    h.press(Key::Z, command(false));
+    assert!((style(&h).1 - 54.0).abs() < 0.01, "one Ctrl+Z restores the size");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-size-down"));
+    assert!((style(&h).1 - 50.0).abs() < 0.01, "A- steps the size down by 4 px: {} px", style(&h).1);
+    h.click(egui::Id::new("ff-caption-bg"));
+    assert!(!style(&h).0, "the background is still off after the size change");
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-style-reset"));
+    assert_eq!(style(&h), (true, 54.0), "Reset returns the engine defaults");
+    assert_eq!(h.app.status, "Reset caption style");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
