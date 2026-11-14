@@ -98,6 +98,15 @@ pub enum TimelineDrag {
         grab_x: f32,
         last_x: f32,
     },
+    /// A caption cue being dragged: its body (`None`) moves it, an edge
+    /// (`Some("in")` / `Some("out")`) trims it. The engine's `captions.move`
+    /// and `captions.trim` commit it on release, one undo step per gesture.
+    Caption {
+        caption: u64,
+        edge: Option<&'static str>,
+        grab_x: f32,
+        last_x: f32,
+    },
 }
 
 pub struct App {

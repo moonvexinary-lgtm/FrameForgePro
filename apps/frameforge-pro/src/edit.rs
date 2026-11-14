@@ -2965,6 +2965,10 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     // take. Transitions are hit before clips: they sit on top of what they
     // join, exactly where a person looks for them.
     let mut transition_rects: Vec<(egui::Rect, u64)> = Vec::new();
+    // Caption cues on their own rows, with the engine caption id. The paint
+    // loop fills this and the body's press/click reads it, so a cue is grabbed
+    // by the same rectangle that paints it.
+    let mut caption_rects: Vec<(egui::Rect, u64)> = Vec::new();
     let selected_transitions: Vec<u64> = app.session.state.transition_selection.iter().map(|t| t.0).collect();
     let mut actions: Vec<TrackAction> = Vec::new();
     let tg = app.session.targeting();
@@ -3101,12 +3105,13 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     }
 
     // Caption tracks paint under the audio rows: one row per track, each cue a
-    // bar at its own time, its first line for a label. A cue click names the
-    // cue in the engine's caption selection - selection is editor state, so it
-    // adds no undo step and never dirties the project.
+    // bar at its own time, its first line for a label. The timeline body owns
+    // the cue gestures: a press on the body moves it and a press on an edge
+    // trims it, both committed by the engine on release, and a click names the
+    // cue in the engine's caption selection - editor state, so no undo step and
+    // no dirty flag.
     let caption_base = s.video_tracks.len() + s.audio_tracks.len();
     let selected_captions: Vec<u64> = app.session.state.caption_selection.iter().map(|c| c.0).collect();
-    let mut caption_click: Option<u64> = None;
     for (index, track) in s.caption_tracks.iter().enumerate() {
         let row = caption_base + index;
         let y = alloc.top() + RULER_H + row as f32 * ROW_H;
@@ -3142,26 +3147,16 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 egui::FontId::proportional(10.0),
                 if track.enabled { ui::TEXT_HI } else { ui::TEXT_LO },
             );
-            let hit = ui.interact(rect, egui::Id::new(("ff-timeline-caption", cue.id.0)), egui::Sense::click());
-            if hit.clicked() {
-                caption_click = Some(cue.id.0);
-            }
+            caption_rects.push((rect, cue.id.0));
+            // The bar registers its rectangle under a stable id (the tests read
+            // it, and hover shows the gesture), but it does not sense the
+            // press: the timeline body owns press, drag and click, so a cue
+            // gesture reads exactly like a clip one.
+            let hit = ui.interact(rect, egui::Id::new(("ff-timeline-caption", cue.id.0)), egui::Sense::hover());
             if hit.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                let near_edge = ui.ctx().pointer_hover_pos().is_some_and(|p| p.x < rect.left() + 8.0 || p.x > rect.right() - 8.0);
+                ui.ctx().set_cursor_icon(if near_edge { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Grab });
             }
-        }
-    }
-    if let Some(id) = caption_click {
-        match app.session.execute("captions.select", serde_json::json!({"captions": [id]})) {
-            Ok(_) => {
-                // Keep an open Caption window in step with the new selection.
-                if let Some(mut editor) = app.captions.take() {
-                    crate::captions::refresh(app, &mut editor);
-                    app.captions = Some(editor);
-                }
-                app.status = "Selected caption".to_string();
-            }
-            Err(error) => app.status = error.to_string(),
         }
     }
 
@@ -3229,10 +3224,20 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     if response.drag_started()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        // A transition wins the press over the clips under it: its body moves
-        // it over the cut, an edge resizes it. It also becomes the selection,
-        // like a clip drag does.
-        if let Some((rect, id)) = transition_rects.iter().find(|(r, _)| r.contains(pos)).copied() {
+        // A caption cue owns its row: its body moves it, its edges trim it, and
+        // the cue becomes the engine's caption selection (journal-free) like a
+        // clip press does.
+        if let Some((rect, cue)) = caption_rects.iter().find(|(r, _)| r.contains(pos)).copied() {
+            let edge = if pos.x < rect.left() + EDGE {
+                Some("in")
+            } else if pos.x > rect.right() - EDGE {
+                Some("out")
+            } else {
+                None
+            };
+            select_caption(app, cue);
+            app.timeline_drag = Some(TimelineDrag::Caption { caption: cue, edge, grab_x: pos.x, last_x: pos.x });
+        } else if let Some((rect, id)) = transition_rects.iter().find(|(r, _)| r.contains(pos)).copied() {
             let edge = if pos.x < rect.left() + EDGE {
                 Some("in")
             } else if pos.x > rect.right() - EDGE {
@@ -3277,6 +3282,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             Some(TimelineDrag::Move { last_x, .. }) => *last_x = pos.x,
             Some(TimelineDrag::Trim { last_x, .. }) => *last_x = pos.x,
             Some(TimelineDrag::Transition { last_x, .. }) => *last_x = pos.x,
+            Some(TimelineDrag::Caption { last_x, .. }) => *last_x = pos.x,
             None => {}
         }
     }
@@ -3289,6 +3295,21 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     {
         let x = |t: Tick| alloc.left() + t.seconds() as f32 * zoom;
         let ghost = egui::Rect::from_min_max(egui::pos2(x(start), preview_rect.top()), egui::pos2(x(start + duration), preview_rect.bottom()));
+        painter.rect_filled(ghost, 3.0, egui::Color32::from_rgba_unmultiplied(53, 194, 181, 70));
+        painter.rect_stroke(ghost, 3.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
+    }
+
+    // A caption drag previews the geometry release commits: the body slides,
+    // an edge keeps the other end fixed.
+    if let Some(TimelineDrag::Caption { caption, edge, grab_x, last_x }) = &app.timeline_drag
+        && let Some((rect, _)) = caption_rects.iter().find(|(_, id)| id == caption).copied()
+    {
+        let dx = last_x - grab_x;
+        let ghost = match edge {
+            Some("in") => egui::Rect::from_min_max(egui::pos2((rect.left() + dx).min(rect.right() - 4.0), rect.top()), rect.max),
+            Some(_) => egui::Rect::from_min_max(rect.min, egui::pos2((rect.right() + dx).max(rect.left() + 4.0), rect.bottom())),
+            None => rect.translate(egui::vec2(dx.max(-rect.left() + alloc.left()), 0.0)),
+        };
         painter.rect_filled(ghost, 3.0, egui::Color32::from_rgba_unmultiplied(53, 194, 181, 70));
         painter.rect_stroke(ghost, 3.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
     }
@@ -3309,6 +3330,8 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             // Unreachable: a transition drag has no clip rect to find, and it
             // previewed through its own ghost above.
             TimelineDrag::Transition { .. } => 0.0,
+            // Likewise a caption drag previews above, from its own row.
+            TimelineDrag::Caption { .. } => 0.0,
         };
         let ghost = match drag {
             TimelineDrag::Move { .. } => rect.translate(egui::vec2(delta_x.max(-rect.left() + alloc.left()), 0.0)),
@@ -3320,6 +3343,7 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 }
             }
             TimelineDrag::Transition { .. } => rect,
+            TimelineDrag::Caption { .. } => rect,
         };
         painter.rect_filled(ghost, 3.0, egui::Color32::from_rgba_unmultiplied(53, 194, 181, 70));
         painter.rect_stroke(ghost, 3.0, egui::Stroke::new(1.5, ui::ACCENT), egui::StrokeKind::Inside);
@@ -3352,6 +3376,24 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             TimelineDrag::Transition { transition, edge, grab_x, last_x } => {
                 drag_transition_edge(app, transition, edge, last_x - grab_x, zoom);
             }
+            TimelineDrag::Caption { caption, edge, grab_x, last_x } => {
+                let delta = Tick((((last_x - grab_x) / zoom) as f64 * TICKS_PER_SECOND as f64) as i64);
+                let (command, params, status) = match edge {
+                    Some(edge) => ("captions.trim", serde_json::json!({"caption": caption, "edge": edge, "delta": delta.0}), "Trimmed caption"),
+                    None => ("captions.move", serde_json::json!({"captions": [caption], "delta": delta.0}), "Moved caption"),
+                };
+                match app.execute(command, params) {
+                    Ok(_) => {
+                        // Keep an open Caption window in step with the cue's new times.
+                        if let Some(mut editor) = app.captions.take() {
+                            crate::captions::refresh(app, &mut editor);
+                            app.captions = Some(editor);
+                        }
+                        app.status = status.to_string();
+                    }
+                    Err(e) => app.status = e,
+                }
+            }
         }
     }
 
@@ -3360,7 +3402,9 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
         && app.timeline_drag.is_none()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        if let Some(id) = transition_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
+        if let Some(cue) = caption_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
+            select_caption(app, cue);
+        } else if let Some(id) = transition_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
             select_transition(app, id);
         } else {
             match hit_rects.iter().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id) {
@@ -3401,6 +3445,23 @@ fn drag_clip(drag: &TimelineDrag) -> Option<filmcraft_project::ClipId> {
         TimelineDrag::Move { clip, .. } => Some(*clip),
         TimelineDrag::Trim { clip, .. } => Some(*clip),
         TimelineDrag::Transition { .. } => None,
+        TimelineDrag::Caption { .. } => None,
+    }
+}
+
+/// Name a caption cue in the engine's caption selection. Selection is editor
+/// state (journal-free), so this never adds an undo step or dirties the
+/// project; an open Caption window follows it.
+fn select_caption(app: &mut App, id: u64) {
+    match app.session.execute("captions.select", serde_json::json!({"captions": [id]})) {
+        Ok(_) => {
+            if let Some(mut editor) = app.captions.take() {
+                crate::captions::refresh(app, &mut editor);
+                app.captions = Some(editor);
+            }
+            app.status = "Selected caption".to_string();
+        }
+        Err(error) => app.status = error.to_string(),
     }
 }
 
