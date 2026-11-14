@@ -602,6 +602,44 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T29 - caption cue drag and trim on the timeline (CI-verified, run 43537808604)
+
+T28 painted the cues but they were only click targets: a cue out of place had
+to be retyped in the Caption window, and one that ran too long could only be
+shortened through numeric Start / Length fields.
+
+- **Gestures**: the timeline body owns presses on a caption row. A press on a
+  cue's body starts a move; a press within 8 px of either end starts a trim of
+  that end. The pressed cue becomes the engine's caption selection through the
+  same journal-free `captions.select`, so the bar lights up while it drags.
+  The gesture is read from the first waypoint past egui's drag threshold,
+  exactly like a clip drag, and a ghost bar previews the geometry release will
+  commit.
+- **Commit**: release runs `captions.move` with the one cue and the drag's tick
+  delta, or `captions.trim` with the cue, the edge and that delta, through
+  `App::execute`, so each gesture is one undo step and dirties the project
+  once. The engine clamps a move at zero and at its neighbours, and a trim at
+  the engine's minimum cue duration; a zero-delta drag is the engine's
+  `Nothing`, so it changes nothing. An open Caption window refreshes from the
+  new times, and the status line reads "Moved caption" or "Trimmed caption".
+- **Cue widgets**: the painted bar still registers its rectangle under
+  `("ff-timeline-caption", id)` for tests and hover, but it now senses only
+  hover: the body's press starts the gesture, so a cue drag and a clip drag
+  read the same way.
+- **Test**:
+  `ui_tests::dragging_a_caption_cue_moves_it_and_its_out_edge_trims_it_each_as_one_undo`
+  adds a 1 s to 4 s cue on a `Dialogue` track, drags the body 40 px right at
+  40 px/s and gets 2 s to 5 s with "Moved caption" and one Ctrl+Z back to
+  1 s to 4 s, then drags the out edge 40 px left from inside the 8 px band and
+  gets 1 s to 3 s with "Trimmed caption" and one Ctrl+Z back to the full cue.
+- **Limitations**: a caption gesture does not snap to markers or other cues
+  (the clip drags do), an in-edge trim moves the start without a ripple, and a
+  multi-cue selection cannot be dragged as a group from the timeline.
+- **Red evidence**: red commit `22f363d` added the UI test against cue bars
+  that only clicked and failed exactly that path: **143 passed; 1 failed**.
+- **CI**: run 43537808604 - fmt, clippy `-D warnings`, check, **144 tests**, release
+  build and the binary self-test.
+
 ## T28 - caption tracks on the timeline (CI-verified, run 43495417982)
 
 T26 and T27 edited captions in a floating window, but the timeline painted
@@ -627,9 +665,8 @@ only video and audio rows: a cue was invisible where it actually plays.
   cue's bar on the row after V2/A2, checks its left edge, width and top
   against `timeline_clip_rect`, clears the engine's caption selection, clicks
   the bar and gets the cue back as the only selection with the status line.
-- **Limitations**: caption cues cannot be dragged or trimmed on the timeline
-  yet (the engine's `captions.move`/`captions.trim` are not wired), there is
-  no per-track show/hide control (the engine only has `captions.showAll` /
+- **Limitations**: cue drag and trim arrived with T29; there is no per-track
+  show/hide control (the engine only has `captions.showAll` /
   `captions.hideAll`), and the bar has no speaker or cue-id badge.
 - **Red evidence**: red commit `b612df0` added the UI test against the
   unpainted timeline and failed exactly that path: **142 passed; 1 failed**.
@@ -685,8 +722,8 @@ retyped.
   clicks the chip, Add, then Split at Playhead at the 2 s playhead on the 1 s
   to 4 s cue and gets two cues, clicks Merge Up and gets the single cue back,
   and one Ctrl+Z restores the split.
-- **Limitations**: caption tracks are still not painted on the timeline and
-  cannot be dragged; there is no style editor and no burned-in preview. Import
+- **Limitations**: caption tracks paint on the timeline from T28 and their cues
+  drag from T29; there is no style editor and no burned-in preview. Import
   always adds a new track rather than folding a file into an existing one,
   Split only cuts the selected cue (the engine's listen-under-the-playhead
   variant is not exposed), and Merge Up only joins the previous cue on the
@@ -742,9 +779,9 @@ typed.
   clicks the toolbar chip, then Add, and gets the sequence's caption track plus
   a 3 s "New caption" at the 2 s playhead, selected in the engine; Ctrl+Z
   removes the cue and the next one the track.
-- **Limitations**: caption tracks are not painted on the timeline and cannot be
-  dragged; there is no style editor and no burned-in preview. Import/export,
-  split and merge-up arrived with T27.
+- **Limitations**: caption tracks paint on the timeline from T28 and their cues
+  drag from T29; there is no style editor and no burned-in preview.
+  Import/export, split and merge-up arrived with T27.
 - **Red evidence**: the original red commit (`6487605`) never compiled - the
   window's row loop borrowed the editor immutably while the row handler called
   `select` with `&mut editor` - so run `43360963172` reported E0502 instead of
@@ -1710,6 +1747,7 @@ with a real, user-installed runtime.
 | T26 | Caption editor: a floating window over the engine's own `captions.list` that adds a track and a cue at the playhead, selects a cue through the engine's caption selection, edits its text and timing and deletes it, each write its own undo step | CI-verified, run 43369355615 |
 | T27 | Caption import/export, split and merge-up: Import reads a picked caption file into a frame-snapped track as one undoable edit, Export writes the target track as SubRip or WebVTT without dirtying the project, Split at Playhead cuts the selected cue at the App playhead and Merge Up folds it into the previous cue on its track | CI-verified, run 43439895270 |
 | T28 | Caption tracks on the timeline: every caption track paints a row under the audio rows with its cues as bars at their own times, selected through the engine's caption selection; a cue click is a journal-free selection that keeps an open Caption window in step | CI-verified, run 43495417982 |
+| T29 | Caption cue drag and trim: a press on a cue's body moves it and a press on either 8 px edge trims it, committed by `captions.move` / `captions.trim` on release as one undo step, with a ghost preview and the cue as the journal-free caption selection | CI-verified, run 43537808604 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
