@@ -596,6 +596,53 @@ fn a_caption_cue_paints_on_its_own_timeline_row_and_a_click_selects_it() {
 }
 
 #[test]
+fn dragging_a_caption_cue_moves_it_and_its_out_edge_trims_it_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
+    let track = created["track"].as_u64().expect("the track id comes back");
+    let added = h
+        .app
+        .execute("captions.add", serde_json::json!({"track": track, "text": "A caption", "time": TICKS_PER_SECOND, "durationSeconds": 3.0}))
+        .expect("the caption is added");
+    let cue = added["caption"].as_u64().expect("the caption id comes back");
+    let spans = |h: &Harness| -> Vec<(i64, i64)> {
+        h.app.sequence().map(|q| q.caption_tracks.iter().flat_map(|t| t.captions.iter().map(|c| (c.start.0, c.end().0))).collect()).unwrap_or_default()
+    };
+    let tick = |frames: i64| FrameRate::FPS_24.tick_of(frames).0;
+    h.app.zoom = 40.0;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    // A 1 s to 4 s cue. Dragging its body 40 px right is one second later at
+    // this zoom; the drag-start waypoint is 10 px in, so the move is 40 px, and
+    // release is what commits it.
+    let id = egui::Id::new(("ff-timeline-caption", cue));
+    let rect = h.rect_of(id).expect("the cue paints a bar");
+    let grab = rect.center();
+    h.drag(grab, &[grab + Vec2::new(10.0, 0.0), grab + Vec2::new(50.0, 0.0)]);
+    assert_eq!(spans(&h), vec![(tick(48), tick(120))], "the cue moved 1 s later (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Moved caption");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(spans(&h), vec![(tick(24), tick(96))], "one Ctrl+Z restores the cue's time");
+
+    // Trimming the tail: the press and the drag-start waypoint both stay inside
+    // the 8 px edge band, and the drag is 40 px = one second shorter.
+    h.frame(Vec::new());
+    let rect = h.rect_of(id).expect("the cue still paints");
+    let y = rect.center().y;
+    let press = Pos2::new(rect.right() - 1.0, y);
+    let grab = Pos2::new(rect.right() - 7.9, y);
+    let end = Pos2::new(rect.right() - 47.9, y);
+    h.drag(press, &[grab, end]);
+    assert_eq!(spans(&h), vec![(tick(24), tick(72))], "the tail lost 1 s (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Trimmed caption");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(spans(&h), vec![(tick(24), tick(96))], "one Ctrl+Z restores the cue's length");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
