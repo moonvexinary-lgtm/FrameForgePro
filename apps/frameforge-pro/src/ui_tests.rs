@@ -702,6 +702,37 @@ fn a_caption_move_and_trim_snap_to_a_marker_and_one_undo_restores_each() {
 }
 
 #[test]
+fn a_caption_track_header_toggles_output_and_lock_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
+    let track = created["track"].as_u64().expect("the track id comes back");
+    h.app
+        .execute("captions.add", serde_json::json!({"track": track, "text": "A caption", "time": TICKS_PER_SECOND, "durationSeconds": 2.0}))
+        .expect("the caption is added");
+    let flags =
+        |h: &Harness| -> (bool, bool) { h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| (t.enabled, t.locked)).unwrap_or((true, false)) };
+    h.app.zoom = 40.0;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert_eq!(flags(&h), (true, false), "a new caption track outputs and starts unlocked");
+
+    // The caption header carries the same real document switches the video and
+    // audio headers do: output (the engine's per-track `enabled`) and lock.
+    h.click(egui::Id::new(("ff-caption-visible", track)));
+    assert_eq!(flags(&h).0, false, "the eye turns the track's output off");
+    assert_eq!(h.app.status, "Visibility updated");
+    h.press(Key::Z, command(false));
+    assert_eq!(flags(&h).0, true, "one Ctrl+Z restores the output");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new(("ff-caption-lock", track)));
+    assert_eq!(flags(&h).1, true, "the lock closes the track");
+    assert_eq!(h.app.status, "Lock updated");
+    h.press(Key::Z, command(false));
+    assert_eq!(flags(&h).1, false, "one Ctrl+Z unlocks it");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
