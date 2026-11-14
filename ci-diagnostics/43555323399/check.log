@@ -1,0 +1,22 @@
+    Checking frameforge-core v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\core)
+   Compiling frameforge-pro v0.1.0 (D:\a\FrameForgePro\FrameForgePro\apps\frameforge-pro)
+    Checking frameforge-bridge v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\bridge)
+    Checking frameforge-roto v0.1.0 (D:\a\FrameForgePro\FrameForgePro\crates\roto)
+warning: unused dependency `filmcraft-export`
+  --> crates\bridge\Cargo.toml:17:1
+   |
+17 | filmcraft-export = { workspace = true }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `filmcraft-export`
+help: to still use for development builds, move to `dev-dependencies`
+warning: unused dependency `frameforge-core`
+  --> crates\bridge\Cargo.toml:11:1
+   |
+11 | frameforge-core = { workspace = true }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: consider removing the dependency on `frameforge-core`
+warning: `frameforge-bridge` (manifest) generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.46s
