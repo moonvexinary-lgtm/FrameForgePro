@@ -602,6 +602,40 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T28 - caption tracks on the timeline (CI-verified, run 43495417982)
+
+T26 and T27 edited captions in a floating window, but the timeline painted
+only video and audio rows: a cue was invisible where it actually plays.
+
+- **Rows**: every caption track paints as a row under the audio rows, in the
+  sequence's own track order (`C1` is the topmost track, because
+  `captions.newTrack` inserts at the top). The header names the engine's slot
+  and the track's name, dimmed when the track's output (`enabled`) is off; the
+  cues stay editable either way. Caption rows are appended after V/A rows, so
+  every existing row index and clip geometry is unchanged.
+- **Cues**: each caption paints as a bar at its own start and duration through
+  the same `timeline_clip_rect` the clips use, filled in the accent's teal,
+  stroked in the accent when it is the engine's caption selection, and
+  labelled with its first line.
+- **Click**: a cue is its own click target (`ff-timeline-caption-<id>`); the
+  click runs `captions.select` on the session - selection is editor state, so
+  it adds no undo step and never dirties the project - refreshes an open
+  Caption window and reports "Selected caption".
+- **Tests**:
+  `ui_tests::a_caption_cue_paints_on_its_own_timeline_row_and_a_click_selects_it`
+  adds a `Dialogue` track and a 1 s to 4 s cue through the engine, finds the
+  cue's bar on the row after V2/A2, checks its left edge, width and top
+  against `timeline_clip_rect`, clears the engine's caption selection, clicks
+  the bar and gets the cue back as the only selection with the status line.
+- **Limitations**: caption cues cannot be dragged or trimmed on the timeline
+  yet (the engine's `captions.move`/`captions.trim` are not wired), there is
+  no per-track show/hide control (the engine only has `captions.showAll` /
+  `captions.hideAll`), and the bar has no speaker or cue-id badge.
+- **Red evidence**: red commit `b612df0` added the UI test against the
+  unpainted timeline and failed exactly that path: **142 passed; 1 failed**.
+- **CI**: run 43495417982 - fmt, clippy `-D warnings`, check, **143 tests**, release
+  build and the binary self-test.
+
 ## T27 - caption import/export, split and merge-up (CI-verified, run 43439895270)
 
 T26 could type a cue it had just added, but the sequence's caption files had no
@@ -1675,6 +1709,7 @@ with a real, user-installed runtime.
 | T25 | Transitions on the timeline: each transition paints as a band over its cut with the selection state from the engine, a click makes it the engine's transition selection and selects the incoming clip, and an edge or body drag writes the engine-clamped span in one undo | CI-verified, run 43138585328 |
 | T26 | Caption editor: a floating window over the engine's own `captions.list` that adds a track and a cue at the playhead, selects a cue through the engine's caption selection, edits its text and timing and deletes it, each write its own undo step | CI-verified, run 43369355615 |
 | T27 | Caption import/export, split and merge-up: Import reads a picked caption file into a frame-snapped track as one undoable edit, Export writes the target track as SubRip or WebVTT without dirtying the project, Split at Playhead cuts the selected cue at the App playhead and Merge Up folds it into the previous cue on its track | CI-verified, run 43439895270 |
+| T28 | Caption tracks on the timeline: every caption track paints a row under the audio rows with its cues as bars at their own times, selected through the engine's caption selection; a cue click is a journal-free selection that keeps an open Caption window in step | CI-verified, run 43495417982 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
