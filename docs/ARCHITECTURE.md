@@ -602,6 +602,50 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T30 - snapping for caption cue gestures (CI-verified, run 43544459466)
+
+T29 moved and trimmed cues freely, so a cue dragged to "about" a beat missed
+it by a few frames while the clip gestures landed exactly on markers.
+
+- **Targets**: a caption gesture snaps to the same family the clip gestures
+  use - zero, the App playhead, every sequence marker and every other cue's
+  start and end. `caption_snap_targets` builds that list and leaves the
+  dragged cue out, so a cue can never snap to its own edges and a move never
+  collapses onto itself.
+- **Move**: `snap_caption_move` tries the candidate start and the candidate end
+  against the targets, takes whichever actually snapped through `choose_snap`
+  (a definitely-unchanged edge loses), and returns the start the engine should
+  move to. The release converts it back to a delta for `captions.move`, so the
+  undo step is still one engine edit.
+- **Trim**: `snap_caption_trim` pushes the dragged edge to the nearest target
+  inside the 8 px radius and adjusts the delta so `captions.trim` lands the
+  edge there. The other edge is pinned by the engine's trim, not by the snap.
+- **Radius**: the same `SNAP_PX = 8.0` and `snap_tolerance(zoom)` as the clips,
+  so at 40 px/s the radius is 0.2 s; snapping honours the editor's snapping
+  toggle and does nothing when it is off.
+- **Status**: the release reads "Moved caption (snapped)" or "Trimmed caption
+  (snapped)" only when the snap changed the delta, matching the clip wording.
+- **Tests**:
+  `ui_tests::a_caption_move_and_trim_snap_to_a_marker_and_one_undo_restores_each`
+  marks 2.5 s and 8.5 s, drags the 1 s to 4 s cue 1.45 s later so the raw start
+  is 2.45 s and the cue lands 2.5 s to 5.5 s, then drags the 6 s to 8 s cue's
+  out edge 0.45 s later so the raw end is 8.45 s and the tail lands on 8.5 s,
+  with one Ctrl+Z restoring each gesture. The unit test
+  `caption_snap_targets_include_markers_the_playhead_and_other_cue_edges`
+  proves the target list keeps markers, the playhead and another cue's edges
+  while dropping the dragged cue's own two. The demo sequence's 23.976 rate
+  puts a cue asked for at 5 s on 5.005 s, so the test reads the cues' snapped
+  edges rather than raw seconds; the first green attempt (run `43541963090`)
+  failed only that assumption and `9939c81` corrected it.
+- **Limitations**: caption gestures snap to sequence markers, the playhead and
+  other cues only - not to clip edges, sequence In/Out or the grid - and a
+  multi-cue selection still cannot be dragged as a group.
+- **Red evidence**: red commit `f19baef` added the UI test against unsnapped
+  gestures and failed exactly that path: **144 passed; 1 failed**, with fmt,
+  clippy `-D warnings`, check and the release build all green.
+- **CI**: run 43544459466 - fmt, clippy `-D warnings`, check, **146 tests**, release
+  build and the binary self-test.
+
 ## T29 - caption cue drag and trim on the timeline (CI-verified, run 43537808604)
 
 T28 painted the cues but they were only click targets: a cue out of place had
@@ -632,9 +676,9 @@ shortened through numeric Start / Length fields.
   40 px/s and gets 2 s to 5 s with "Moved caption" and one Ctrl+Z back to
   1 s to 4 s, then drags the out edge 40 px left from inside the 8 px band and
   gets 1 s to 3 s with "Trimmed caption" and one Ctrl+Z back to the full cue.
-- **Limitations**: a caption gesture does not snap to markers or other cues
-  (the clip drags do), an in-edge trim moves the start without a ripple, and a
-  multi-cue selection cannot be dragged as a group from the timeline.
+- **Limitations**: an in-edge trim moves the start without a ripple, and a
+  multi-cue selection cannot be dragged as a group from the timeline. Snapping
+  arrived with T30.
 - **Red evidence**: red commit `22f363d` added the UI test against cue bars
   that only clicked and failed exactly that path: **143 passed; 1 failed**.
 - **CI**: run 43537808604 - fmt, clippy `-D warnings`, check, **144 tests**, release
@@ -1748,6 +1792,7 @@ with a real, user-installed runtime.
 | T27 | Caption import/export, split and merge-up: Import reads a picked caption file into a frame-snapped track as one undoable edit, Export writes the target track as SubRip or WebVTT without dirtying the project, Split at Playhead cuts the selected cue at the App playhead and Merge Up folds it into the previous cue on its track | CI-verified, run 43439895270 |
 | T28 | Caption tracks on the timeline: every caption track paints a row under the audio rows with its cues as bars at their own times, selected through the engine's caption selection; a cue click is a journal-free selection that keeps an open Caption window in step | CI-verified, run 43495417982 |
 | T29 | Caption cue drag and trim: a press on a cue's body moves it and a press on either 8 px edge trims it, committed by `captions.move` / `captions.trim` on release as one undo step, with a ghost preview and the cue as the journal-free caption selection | CI-verified, run 43537808604 |
+| T30 | Snapping for caption gestures: caption moves try both their start and end and caption trims push the dragged edge to the nearest sequence marker, playhead or other cue edge inside the 8 px radius, reported as "(snapped)" only when the delta changed | CI-verified, run 43544459466 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
