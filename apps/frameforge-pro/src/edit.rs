@@ -35,9 +35,26 @@ const TRACK_LOCKED: &str = "locked";
 
 /// A track-header click, applied after the read-only drawing pass.
 enum TrackAction {
-    Target { track: TrackId, on: bool },
-    Patch { track: TrackId, on: bool },
-    Setting { track: TrackId, key: &'static str, on: bool },
+    Target {
+        track: TrackId,
+        on: bool,
+    },
+    Patch {
+        track: TrackId,
+        on: bool,
+    },
+    Setting {
+        track: TrackId,
+        key: &'static str,
+        on: bool,
+    },
+    /// A caption track's own switches. The engine keeps them on the caption
+    /// track (`captions.setTrack`), apart from the video/audio `timeline.setTrack`.
+    Caption {
+        track: u64,
+        key: &'static str,
+        on: bool,
+    },
 }
 
 /// The command a header click runs. Targeting/source patching are editor state;
@@ -59,6 +76,10 @@ fn track_action_command(action: TrackAction) -> (&'static str, serde_json::Value
                 "Track setting"
             };
             ("timeline.setTrack", serde_json::json!({"track": track.0, key: on}), what)
+        }
+        TrackAction::Caption { track, key, on } => {
+            let what = if key == TRACK_ENABLED { "Visibility" } else { "Lock" };
+            ("captions.setTrack", serde_json::json!({"track": track, key: on}), what)
         }
     }
 }
@@ -3176,10 +3197,30 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
         );
         // Enabled is the track's output switch (monitor and burn-in); the row
-        // still paints when it is off so the cues stay editable here.
+        // still paints when it is off so the cues stay editable here. Both
+        // switches are real caption-track document state through
+        // `captions.setTrack`, so each click is one undoable engine edit.
+        let off = ui::BG_CONTROL;
+        let button_rect = |x: f32| egui::Rect::from_min_size(egui::pos2(head_rect.left() + x, y + ROW_H / 2.0 - 7.0), egui::vec2(15.0, 15.0));
+        let visible = track.enabled;
+        let visibility_rect = button_rect(6.0);
+        header_painter.rect_filled(visibility_rect, 2.0, if visible { egui::Color32::from_rgb(64, 128, 80) } else { off });
+        header_painter.text(visibility_rect.center(), egui::Align2::CENTER_CENTER, "O", egui::FontId::monospace(9.0), egui::Color32::WHITE);
+        let hint = if visible { "Hide this caption track (output)" } else { "Show this caption track" };
+        if ui.interact(visibility_rect, egui::Id::new(("ff-caption-visible", track.id.0)), egui::Sense::click()).on_hover_text(hint).clicked() {
+            actions.push(TrackAction::Caption { track: track.id.0, key: TRACK_ENABLED, on: !visible });
+        }
+        let locked = track.locked;
+        let lock_rect = button_rect(25.0);
+        header_painter.rect_filled(lock_rect, 2.0, if locked { egui::Color32::from_rgb(185, 70, 55) } else { off });
+        header_painter.text(lock_rect.center(), egui::Align2::CENTER_CENTER, "L", egui::FontId::monospace(9.0), egui::Color32::WHITE);
+        let hint = if locked { "Unlock this caption track" } else { "Lock this caption track (edits rejected)" };
+        if ui.interact(lock_rect, egui::Id::new(("ff-caption-lock", track.id.0)), egui::Sense::click()).on_hover_text(hint).clicked() {
+            actions.push(TrackAction::Caption { track: track.id.0, key: TRACK_LOCKED, on: !locked });
+        }
         let label_color = if track.enabled { ui::TEXT_MID } else { ui::TEXT_LO };
         header_painter.text(
-            egui::pos2(head_rect.left() + 8.0, y + ROW_H / 2.0),
+            egui::pos2(head_rect.left() + 46.0, y + ROW_H / 2.0),
             egui::Align2::LEFT_CENTER,
             format!("C{} {}", index + 1, track.name),
             egui::FontId::proportional(11.0),
@@ -3219,8 +3260,11 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     // combined undo history and invalidate the monitor.
     for action in actions {
         let (command, params, what) = track_action_command(action);
-        let result =
-            if command == "timeline.setTrack" { app.execute(command, params) } else { app.session.execute(command, params).map_err(|e| e.to_string()) };
+        let result = if command == "timeline.setTrack" || command == "captions.setTrack" {
+            app.execute(command, params)
+        } else {
+            app.session.execute(command, params).map_err(|e| e.to_string())
+        };
         match result {
             Ok(_) => app.status = format!("{what} updated"),
             Err(e) => app.status = e,
