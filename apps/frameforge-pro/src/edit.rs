@@ -4373,14 +4373,29 @@ mod tests {
         s.execute("captions.add", json!({"track": track, "text": "two", "time": 5 * TICKS_PER_SECOND, "durationSeconds": 2.0})).unwrap();
         s.execute("markers.add", json!({"time": 3 * TICKS_PER_SECOND, "name": "cue"})).unwrap();
 
+        // The demo sequence runs at 23.976, so `captions.add` snaps a cue's
+        // times to that rate's frames: compare against what the cue actually
+        // holds rather than the raw seconds asked for.
         let seq = s.active_sequence().unwrap();
+        let (mut own, mut other) = (None, None);
+        for cue in seq.caption_tracks.iter().flat_map(|t| t.captions.iter()) {
+            let span = (cue.start, cue.end());
+            if cue.id.0 == dragged {
+                own = Some(span);
+            } else {
+                other = Some(span);
+            }
+        }
+        let (own_start, own_end) = own.expect("the dragged cue");
+        let (other_start, other_end) = other.expect("the second cue");
+
         let targets = super::caption_snap_targets(seq, Some(dragged), Tick(9 * TICKS_PER_SECOND));
         assert!(targets.contains(&Tick(3 * TICKS_PER_SECOND)), "a sequence marker is a target");
         assert!(targets.contains(&Tick(9 * TICKS_PER_SECOND)), "the playhead is a target");
-        assert!(targets.contains(&Tick(5 * TICKS_PER_SECOND)), "another cue's start is a target");
-        assert!(targets.contains(&Tick(7 * TICKS_PER_SECOND)), "another cue's end is a target");
-        assert!(!targets.contains(&Tick(TICKS_PER_SECOND)), "the dragged cue's own start is not");
-        assert!(!targets.contains(&Tick(2 * TICKS_PER_SECOND)), "nor its own end");
+        assert!(targets.contains(&other_start), "another cue's start is a target");
+        assert!(targets.contains(&other_end), "another cue's end is a target");
+        assert!(!targets.contains(&own_start), "the dragged cue's own start is not");
+        assert!(!targets.contains(&own_end), "nor its own end");
     }
 
     #[test]
