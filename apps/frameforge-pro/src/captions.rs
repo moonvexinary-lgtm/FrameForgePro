@@ -242,6 +242,44 @@ pub fn delete(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
     Ok(())
 }
 
+/// The window's target track, or an error when it has none.
+fn target_track(editor: &CaptionEditor) -> Result<u64, String> {
+    editor.track.ok_or_else(|| "select a caption track first".to_string())
+}
+
+/// The engine's current style for `track`: the background switch and the size.
+fn style_of(app: &App, track: u64) -> Result<(bool, f32), String> {
+    let item =
+        app.sequence().and_then(|sequence| sequence.caption_track(filmcraft_project::TrackId(track))).ok_or_else(|| "no such caption track".to_string())?;
+    Ok((item.style.background, item.style.size))
+}
+
+/// Toggle the background box behind the target track's text.
+pub fn toggle_background(app: &mut App, editor: &CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let (background, _) = style_of(app, track)?;
+    app.execute("captions.setStyle", json!({"track": track, "background": !background}))?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
+}
+
+/// Step the target track's font size by `delta` pixels (the engine clamps it).
+pub fn step_size(app: &mut App, editor: &CaptionEditor, delta: f32) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let (_, size) = style_of(app, track)?;
+    app.execute("captions.setStyle", json!({"track": track, "size": (size + delta) as f64}))?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
+}
+
+/// Return the target track to the engine's default caption style.
+pub fn reset_style(app: &mut App, editor: &CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    app.execute("captions.setStyle", json!({"track": track, "reset": true}))?;
+    app.status = "Reset caption style".to_string();
+    Ok(())
+}
+
 /// Step the playhead to the next or previous caption start.
 pub fn step(app: &mut App, editor: &mut CaptionEditor, forward: bool) -> Result<(), String> {
     let command = if forward { "captions.next" } else { "captions.previous" };
@@ -387,6 +425,21 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                     editor.track = Some(track.id);
                 }
             }
+            ui.horizontal(|ui| {
+                ui.label(ui::hint("Style"));
+                if action(ui, "ff-caption-bg", "BG", false).on_hover_text("Toggle the background box").clicked() {
+                    command = Some(toggle_background(app, &editor));
+                }
+                if action(ui, "ff-caption-size-down", "A-", false).on_hover_text("Smaller caption text").clicked() {
+                    command = Some(step_size(app, &editor, -4.0));
+                }
+                if action(ui, "ff-caption-size-up", "A+", false).on_hover_text("Larger caption text").clicked() {
+                    command = Some(step_size(app, &editor, 4.0));
+                }
+                if action(ui, "ff-caption-style-reset", "Reset", false).on_hover_text("Back to the engine's default style").clicked() {
+                    command = Some(reset_style(app, &editor));
+                }
+            });
             ui.separator();
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut editor.text).desired_width(220.0).hint_text("Caption text"));
