@@ -602,6 +602,43 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T31 - caption track output and lock in the header (CI-verified, run 43550784244)
+
+T28 painted each caption track's header as a label and dimmed the row when
+the track's output was off, but nothing could switch it: per-track output and
+lock had no control, and the engine's only bulk commands are
+`captions.showAll` / `captions.hideAll`.
+
+- **Switches**: the header now carries `O` - the track's `enabled`, which
+  decides the Program monitor and burn-in - and `L` for `locked`, painted like
+  the video `V` and audio `M`/`S` switches under stable ids
+  `("ff-caption-visible", id)` and `("ff-caption-lock", id)`.
+- **Command**: both run `captions.setTrack` with the caption track id and
+  `enabled` / `locked` through `App::execute`, so each click is one undoable
+  engine edit and dirties the project once. `TrackAction::Caption` carries the
+  caption track id because it is not a video/audio `timeline.setTrack` track;
+  the action loop routes both commands through `App::execute`, and the status
+  line reads "Visibility updated" or "Lock updated".
+- **Row**: output is display-only, so the row and its cues keep painting
+  (dimmed) while the output is off, and a locked track still paints. The
+  engine rejects edits to a locked track; the widget is never hidden.
+- **Test**:
+  `ui_tests::a_caption_track_header_toggles_output_and_lock_each_as_one_undo`
+  adds a `Dialogue` track and a cue, clicks the output switch and gets
+  `enabled` false with "Visibility updated", undoes it, clicks the lock and
+  gets `locked` true with "Lock updated", and undoes that.
+- **Limitations**: there is no per-cue or bulk show/hide from the timeline
+  (the engine's `captions.showAll` / `hideAll` are not exposed), the header
+  still does not edit the name, format or language that `captions.setTrack`
+  also carries, and the style editor and burned-in preview remain open.
+- **Red evidence**: red commit `e59ebc7` added the test against a
+  label-only header and failed exactly that path: **146 passed; 1 failed**.
+  Clippy also failed that commit and the first green one (`51df3f8`) on
+  `bool_assert_comparison` for the test's four `assert_eq!(flag, false/true)`
+  lines; `9172280` turned them into `assert!` / `assert!(!..)`.
+- **CI**: run 43550784244 - fmt, clippy `-D warnings`, check, **147
+  tests**, release build and the binary self-test.
+
 ## T30 - snapping for caption cue gestures (CI-verified, run 43544459466)
 
 T29 moved and trimmed cues freely, so a cue dragged to "about" a beat missed
@@ -709,9 +746,8 @@ only video and audio rows: a cue was invisible where it actually plays.
   cue's bar on the row after V2/A2, checks its left edge, width and top
   against `timeline_clip_rect`, clears the engine's caption selection, clicks
   the bar and gets the cue back as the only selection with the status line.
-- **Limitations**: cue drag and trim arrived with T29; there is no per-track
-  show/hide control (the engine only has `captions.showAll` /
-  `captions.hideAll`), and the bar has no speaker or cue-id badge.
+- **Limitations**: cue drag and trim arrived with T29; per-track output and
+  lock arrived with T31; the bar has no speaker or cue-id badge.
 - **Red evidence**: red commit `b612df0` added the UI test against the
   unpainted timeline and failed exactly that path: **142 passed; 1 failed**.
 - **CI**: run 43495417982 - fmt, clippy `-D warnings`, check, **143 tests**, release
@@ -1793,6 +1829,7 @@ with a real, user-installed runtime.
 | T28 | Caption tracks on the timeline: every caption track paints a row under the audio rows with its cues as bars at their own times, selected through the engine's caption selection; a cue click is a journal-free selection that keeps an open Caption window in step | CI-verified, run 43495417982 |
 | T29 | Caption cue drag and trim: a press on a cue's body moves it and a press on either 8 px edge trims it, committed by `captions.move` / `captions.trim` on release as one undo step, with a ghost preview and the cue as the journal-free caption selection | CI-verified, run 43537808604 |
 | T30 | Snapping for caption gestures: caption moves try both their start and end and caption trims push the dragged edge to the nearest sequence marker, playhead or other cue edge inside the 8 px radius, reported as "(snapped)" only when the delta changed | CI-verified, run 43544459466 |
+| T31 | Caption track header output and lock: each caption row carries the track's own `enabled` (Program monitor and burn-in) and `locked` switches through `captions.setTrack` on `App::execute`, one undo each, with the row still editable and dimmed while its output is off | CI-verified, run 43550784244 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
