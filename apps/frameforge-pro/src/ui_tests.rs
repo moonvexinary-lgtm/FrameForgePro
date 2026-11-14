@@ -643,6 +643,65 @@ fn dragging_a_caption_cue_moves_it_and_its_out_edge_trims_it_each_as_one_undo() 
 }
 
 #[test]
+fn a_caption_move_and_trim_snap_to_a_marker_and_one_undo_restores_each() {
+    let (mut h, _) = seeded();
+    let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
+    let track = created["track"].as_u64().expect("the track id comes back");
+    let first = h
+        .app
+        .execute("captions.add", serde_json::json!({"track": track, "text": "one", "time": TICKS_PER_SECOND, "durationSeconds": 3.0}))
+        .expect("the first cue is added")["caption"]
+        .as_u64()
+        .expect("the first cue id comes back");
+    let second = h
+        .app
+        .execute("captions.add", serde_json::json!({"track": track, "text": "two", "time": 6 * TICKS_PER_SECOND, "durationSeconds": 2.0}))
+        .expect("the second cue is added")["caption"]
+        .as_u64()
+        .expect("the second cue id comes back");
+    // Markers the two gestures are meant to land on: one after the first cue's
+    // start, one after the second cue's end.
+    h.app.execute("markers.add", serde_json::json!({"time": TICKS_PER_SECOND * 5 / 2, "name": "start"})).expect("the first marker is added");
+    h.app.execute("markers.add", serde_json::json!({"time": TICKS_PER_SECOND * 17 / 2, "name": "end"})).expect("the second marker is added");
+    let spans = |h: &Harness| -> Vec<(i64, i64)> {
+        h.app.sequence().map(|q| q.caption_tracks.iter().flat_map(|t| t.captions.iter().map(|c| (c.start.0, c.end().0))).collect()).unwrap_or_default()
+    };
+    let tick = |frames: i64| FrameRate::FPS_24.tick_of(frames).0;
+    h.app.zoom = 40.0;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    // The first cue (1 s to 4 s) dragged 1.45 s later would start at 2.45 s;
+    // the 2.5 s marker is inside the 8 px snap radius (0.2 s at this zoom), so
+    // the move lands on 2.5 s to 5.5 s instead.
+    let first_id = egui::Id::new(("ff-timeline-caption", first));
+    let rect = h.rect_of(first_id).expect("the first cue paints a bar");
+    let grab = rect.center();
+    h.drag(grab, &[grab + Vec2::new(10.0, 0.0), grab + Vec2::new(68.0, 0.0)]);
+    assert_eq!(spans(&h), vec![(tick(60), tick(132)), (tick(144), tick(192))], "the cue's start snapped to the 2.5 s marker (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Moved caption (snapped)");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(spans(&h), vec![(tick(24), tick(96)), (tick(144), tick(192))], "one Ctrl+Z restores the cue's time");
+
+    // The second cue's out edge dragged 0.45 s later would end at 8.45 s; the
+    // 8.5 s marker pulls it to 8.5 s.
+    h.frame(Vec::new());
+    let second_id = egui::Id::new(("ff-timeline-caption", second));
+    let rect = h.rect_of(second_id).expect("the second cue paints a bar");
+    let y = rect.center().y;
+    let press = Pos2::new(rect.right() - 1.0, y);
+    let grab = Pos2::new(rect.right() - 7.9, y);
+    let end = Pos2::new(rect.right() - 7.9 + 18.0, y);
+    h.drag(press, &[grab, end]);
+    assert_eq!(spans(&h), vec![(tick(24), tick(96)), (tick(144), tick(204))], "the tail snapped to the 8.5 s marker (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Trimmed caption (snapped)");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(spans(&h), vec![(tick(24), tick(96)), (tick(144), tick(192))], "one Ctrl+Z restores the tail");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
