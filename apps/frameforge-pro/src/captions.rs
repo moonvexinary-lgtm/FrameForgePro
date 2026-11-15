@@ -280,6 +280,15 @@ pub fn reset_style(app: &mut App, editor: &CaptionEditor) -> Result<(), String> 
     Ok(())
 }
 
+/// Turn every caption track's output on or off through the engine's bulk edit.
+pub fn show_all(app: &mut App, editor: &mut CaptionEditor, on: bool) -> Result<(), String> {
+    let command = if on { "captions.showAll" } else { "captions.hideAll" };
+    app.execute(command, json!({}))?;
+    refresh(app, editor);
+    app.status = if on { "All caption tracks shown".to_string() } else { "All caption tracks hidden".to_string() };
+    Ok(())
+}
+
 /// Step the playhead to the next or previous caption start.
 pub fn step(app: &mut App, editor: &mut CaptionEditor, forward: bool) -> Result<(), String> {
     let command = if forward { "captions.next" } else { "captions.previous" };
@@ -409,6 +418,12 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
             ui.horizontal(|ui| {
                 if action(ui, "ff-caption-add-track", "Add Track", false).clicked() {
                     command = Some(add_track(app, &mut editor));
+                }
+                if action(ui, "ff-caption-show-all", "Show All", false).on_hover_text("Turn every caption track's output on").clicked() {
+                    command = Some(show_all(app, &mut editor, true));
+                }
+                if action(ui, "ff-caption-hide-all", "Hide All", false).on_hover_text("Turn every caption track's output off").clicked() {
+                    command = Some(show_all(app, &mut editor, false));
                 }
                 if action(ui, "ff-caption-previous", "Prev", false).clicked() {
                     command = Some(step(app, &mut editor, false));
