@@ -110,6 +110,20 @@ impl Harness {
         self.click_at(pos);
     }
 
+    /// Move keyboard focus to a widget egui has already laid out, then run a
+    /// frame so the widget sees the focus and its text cursor is live.
+    fn focus(&mut self, id: egui::Id) {
+        self.context.memory_mut(|memory| memory.request_focus(id));
+        self.frame(Vec::new());
+    }
+
+    /// Replace a focused text field's contents: select all, then type over the
+    /// selection, the way a person does.
+    fn retype(&mut self, text: &str) {
+        self.press(Key::A, command(false));
+        self.frame(vec![Event::Text(text.to_string())]);
+    }
+
     /// A drag: hover, press at `from`, move through each waypoint, release at
     /// the last one. The timeline decides the gesture on the frame egui first
     /// calls it a drag, which is the first waypoint past egui's 6 px click
@@ -805,6 +819,37 @@ fn the_caption_window_bulk_hides_and_shows_tracks_each_as_one_undo() {
     assert_eq!(h.app.status, "All caption tracks shown");
     h.press(Key::Z, command(false));
     assert_eq!(flags(&h), vec![false, true], "one Ctrl+Z restores the previous output state");
+}
+
+#[test]
+fn the_caption_window_renames_a_track_and_cycles_its_format_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    let track = |h: &Harness| -> (String, String) {
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| (t.name.clone(), t.format.label().to_string())).unwrap_or_default()
+    };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    assert_eq!(track(&h), ("Subtitle".to_string(), "Subtitle".to_string()), "Add Track names the track after its format (status {:?})", h.app.status);
+
+    // `captions.setTrack` carries the track's identity, not just its output:
+    // the window's name field commits a rename and the format control steps to
+    // the next engine format. Each click is one undoable edit.
+    h.focus(egui::Id::new("ff-caption-name"));
+    h.retype("Interview");
+    h.click(egui::Id::new("ff-caption-rename"));
+    assert_eq!(track(&h).0, "Interview", "the name field renames the track (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Renamed caption track");
+    h.press(Key::Z, command(false));
+    assert_eq!(track(&h).0, "Subtitle", "one Ctrl+Z restores the name");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-format-cycle"));
+    assert_eq!(track(&h).1, "CEA-608", "the format control steps to the next engine format (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Caption format: CEA-608");
+    h.press(Key::Z, command(false));
+    assert_eq!(track(&h).1, "Subtitle", "one Ctrl+Z restores the format");
 }
 
 #[test]
