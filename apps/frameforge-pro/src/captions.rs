@@ -275,17 +275,75 @@ fn target_track(editor: &CaptionEditor) -> Result<u64, String> {
     editor.track.ok_or_else(|| "select a caption track first".to_string())
 }
 
-/// The engine's current style for `track`: the background switch and the size.
-fn style_of(app: &App, track: u64) -> Result<(bool, f32), String> {
+/// The engine's current style for `track`.
+fn style_of(app: &App, track: u64) -> Result<filmcraft_project::CaptionStyle, String> {
     let item =
         app.sequence().and_then(|sequence| sequence.caption_track(filmcraft_project::TrackId(track))).ok_or_else(|| "no such caption track".to_string())?;
-    Ok((item.style.background, item.style.size))
+    Ok(item.style.clone())
+}
+
+/// The engine's own name for an alignment.
+fn align_name(align: filmcraft_project::CaptionAlign) -> &'static str {
+    match align {
+        filmcraft_project::CaptionAlign::Left => "left",
+        filmcraft_project::CaptionAlign::Center => "center",
+        filmcraft_project::CaptionAlign::Right => "right",
+    }
+}
+
+/// The engine's own name for an anchor.
+fn anchor_name(anchor: filmcraft_project::CaptionAnchor) -> &'static str {
+    match anchor {
+        filmcraft_project::CaptionAnchor::Top => "top",
+        filmcraft_project::CaptionAnchor::Middle => "middle",
+        filmcraft_project::CaptionAnchor::Bottom => "bottom",
+    }
+}
+
+/// Step the target track's text alignment through the engine's three values.
+pub fn cycle_align(app: &mut App, editor: &CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let current = style_of(app, track)?.align;
+    let all = [filmcraft_project::CaptionAlign::Left, filmcraft_project::CaptionAlign::Center, filmcraft_project::CaptionAlign::Right];
+    let next = all.iter().position(|align| *align == current).map_or(all[0], |index| all[(index + 1) % all.len()]);
+    app.execute("captions.setStyle", json!({"track": track, "align": align_name(next)}))?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
+}
+
+/// Step the target track's anchor through top, middle and bottom.
+pub fn cycle_anchor(app: &mut App, editor: &CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let current = style_of(app, track)?.anchor;
+    let all = [filmcraft_project::CaptionAnchor::Top, filmcraft_project::CaptionAnchor::Middle, filmcraft_project::CaptionAnchor::Bottom];
+    let next = all.iter().position(|anchor| *anchor == current).map_or(all[0], |index| all[(index + 1) % all.len()]);
+    app.execute("captions.setStyle", json!({"track": track, "anchor": anchor_name(next)}))?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
+}
+
+/// Move the target track's text `delta` of the frame height from its edge.
+pub fn step_margin(app: &mut App, editor: &CaptionEditor, delta: f32) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let margin = style_of(app, track)?.margin;
+    app.execute("captions.setStyle", json!({"track": track, "margin": (margin + delta) as f64}))?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
+}
+
+/// Thicken or thin the target track's text outline by `delta` pixels.
+pub fn step_outline(app: &mut App, editor: &CaptionEditor, delta: f32) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let outline = style_of(app, track)?.outline;
+    app.execute("captions.setStyle", json!({"track": track, "outline": (outline + delta) as f64}))?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
 }
 
 /// Toggle the background box behind the target track's text.
 pub fn toggle_background(app: &mut App, editor: &CaptionEditor) -> Result<(), String> {
     let track = target_track(editor)?;
-    let (background, _) = style_of(app, track)?;
+    let background = style_of(app, track)?.background;
     app.execute("captions.setStyle", json!({"track": track, "background": !background}))?;
     app.status = "Caption style updated".to_string();
     Ok(())
@@ -294,7 +352,7 @@ pub fn toggle_background(app: &mut App, editor: &CaptionEditor) -> Result<(), St
 /// Step the target track's font size by `delta` pixels (the engine clamps it).
 pub fn step_size(app: &mut App, editor: &CaptionEditor, delta: f32) -> Result<(), String> {
     let track = target_track(editor)?;
-    let (_, size) = style_of(app, track)?;
+    let size = style_of(app, track)?.size;
     app.execute("captions.setStyle", json!({"track": track, "size": (size + delta) as f64}))?;
     app.status = "Caption style updated".to_string();
     Ok(())
@@ -458,6 +516,8 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
     let Some(mut editor) = app.captions.take() else { return };
     let mut close = false;
     let mut command: Option<Result<(), String>> = None;
+    // The place row's labels read the document, like the style commands do.
+    let style = editor.track.and_then(|id| style_of(app, id).ok());
     egui::Window::new("Captions")
         .id(egui::Id::new("ff-caption-window"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-24.0, 84.0))
@@ -535,6 +595,35 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 }
                 if action(ui, "ff-caption-style-reset", "Reset", false).on_hover_text("Back to the engine's default style").clicked() {
                     command = Some(reset_style(app, &editor));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(ui::hint("Place"));
+                if let Some(style) = &style {
+                    if action(ui, "ff-caption-align", &format!("Align: {}", align_name(style.align)), false).on_hover_text("Left, centre, right").clicked() {
+                        command = Some(cycle_align(app, &editor));
+                    }
+                    if action(ui, "ff-caption-anchor", &format!("Anchor: {}", anchor_name(style.anchor)), false).on_hover_text("Top, middle, bottom").clicked()
+                    {
+                        command = Some(cycle_anchor(app, &editor));
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(ui::hint("Edge"));
+                if style.is_some() {
+                    if action(ui, "ff-caption-margin-down", "M-", false).on_hover_text("Move the text closer to the anchored edge").clicked() {
+                        command = Some(step_margin(app, &editor, -0.02));
+                    }
+                    if action(ui, "ff-caption-margin-up", "M+", false).on_hover_text("Move the text further from the anchored edge").clicked() {
+                        command = Some(step_margin(app, &editor, 0.02));
+                    }
+                    if action(ui, "ff-caption-outline-down", "O-", false).on_hover_text("Thinner text outline").clicked() {
+                        command = Some(step_outline(app, &editor, -2.0));
+                    }
+                    if action(ui, "ff-caption-outline-up", "O+", false).on_hover_text("Thicker text outline").clicked() {
+                        command = Some(step_outline(app, &editor, 2.0));
+                    }
                 }
             });
             ui.separator();
