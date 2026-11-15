@@ -602,6 +602,42 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T32 - caption style controls in the editor (CI-verified, run 43661136320)
+
+T26-T31 made a track's cues and its output/lock real, but its own
+`CaptionStyle` - font, size, colour, box, alignment - was still only reachable
+by running `captions.setStyle` by hand.
+
+- **Controls**: a style row under the track list acts on the window's target
+  track. `BG` flips `background` (the box behind the text), `A-` / `A+` step
+  `size` by 4 px with the engine's own 4..400 clamp, and `Reset` sends
+  `reset`, returning the track to `CaptionStyle::default()`.
+- **Command**: each control runs `captions.setStyle` with the target track
+  through `App::execute`, so one click is one undoable engine edit and dirties
+  the project once. The status line reads "Caption style updated" for the
+  switches and "Reset caption style" for the reset.
+- **No draft copy**: `style_of` reads the current background and size from the
+  sequence document, so the window cannot drift from the engine between a
+  click and the next `captions.list` refresh.
+- **Test**:
+  `ui_tests::caption_style_buttons_change_the_track_style_each_as_one_undo`
+  opens the editor, settles the anchored window, adds a track and checks the
+  engine defaults (background on, 54 px), turns the background off and back
+  with one Ctrl+Z, steps A+ to 58 px and back with one Ctrl+Z, steps A- to
+  50 px, turns the background off, then resets to the defaults.
+- **Limitations**: the row exposes only the box switch and a numeric size;
+  font family, colour, alignment, anchor, margin, line spacing and outline are
+  still command-only, per-cue overrides (`caption.settings`) are not edited,
+  and there is no live or burned-in preview of the style.
+- **Red evidence**: red commit `5692cec` added the test against a window with
+  no style row: **147 passed; 1 failed**, with no widget registered for
+  `ff-caption-bg`. The first green attempt `feb6ded` (run `43555323399`)
+  failed its own fixture - an anchored window's first frame has stale control
+  rects, so Add Track missed and the style row had no target; `cdc308d`
+  settles two frames and asserts the track exists first.
+- **CI**: run 43661136320 - fmt, clippy `-D warnings`, check, **148 tests**, release
+  build and the binary self-test.
+
 ## T31 - caption track output and lock in the header (CI-verified, run 43550784244)
 
 T28 painted each caption track's header as a label and dimmed the row when
@@ -630,7 +666,8 @@ lock had no control, and the engine's only bulk commands are
 - **Limitations**: there is no per-cue or bulk show/hide from the timeline
   (the engine's `captions.showAll` / `hideAll` are not exposed), the header
   still does not edit the name, format or language that `captions.setTrack`
-  also carries, and the style editor and burned-in preview remain open.
+  also carries, and a full style editor (font, colour, alignment) and the
+  burned-in preview remain open.
 - **Red evidence**: red commit `e59ebc7` added the test against a
   label-only header and failed exactly that path: **146 passed; 1 failed**.
   Clippy also failed that commit and the first green one (`51df3f8`) on
@@ -1830,6 +1867,7 @@ with a real, user-installed runtime.
 | T29 | Caption cue drag and trim: a press on a cue's body moves it and a press on either 8 px edge trims it, committed by `captions.move` / `captions.trim` on release as one undo step, with a ghost preview and the cue as the journal-free caption selection | CI-verified, run 43537808604 |
 | T30 | Snapping for caption gestures: caption moves try both their start and end and caption trims push the dragged edge to the nearest sequence marker, playhead or other cue edge inside the 8 px radius, reported as "(snapped)" only when the delta changed | CI-verified, run 43544459466 |
 | T31 | Caption track header output and lock: each caption row carries the track's own `enabled` (Program monitor and burn-in) and `locked` switches through `captions.setTrack` on `App::execute`, one undo each, with the row still editable and dimmed while its output is off | CI-verified, run 43550784244 |
+| T32 | Caption style controls in the editor: the Caption window's style row switches the background box, steps the font size by 4 px and resets the track, each through `captions.setStyle` on `App::execute` as one undoable edit, reading the live style from the sequence document | CI-verified, run 43661136320 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
