@@ -602,6 +602,44 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T35 - caption alignment, anchor, margin and outline (CI-verified, run 43677712997)
+
+T32 reached the background box and the font size; the rest of
+`CaptionStyle` - where the text sits and how it is weighted - was still
+command-only.
+
+- **Controls**: a `Place` row cycles the text alignment through the engine's
+  three values (`left`, `center`, `right`) and the anchor through
+  `top`, `middle`, `bottom`, each labelled with the track's live value. An
+  `Edge` row steps the margin by 0.02 of the frame height (`M-` / `M+`) and
+  the outline width by 2 px (`O-` / `O+`), left to the engine's own clamps
+  (margin 0..0.45, outline 0..40).
+- **Command**: each control runs `captions.setStyle` on the window's target
+  track through `App::execute`, one undoable engine edit per click under the
+  engine's "Caption Style" label, and every one of them reads the current style
+  from the sequence document first, so a step right after an undo starts from
+  what the document holds. `style_of` now returns the whole `CaptionStyle`, and
+  the background and size controls read their own field from it.
+- **Two rows, not one**: the place row alone plus four edge buttons would
+  overflow the window's fixed 440 px width and put the last button outside the
+  clip rect, where a click no longer registers. Splitting the rows keeps every
+  control inside the window.
+- **Test**:
+  `ui_tests::caption_style_row_sets_alignment_anchor_margin_and_outline_each_as_one_undo`
+  adds a track, checks the engine's default place (centre / bottom / margin
+  0.08 / no outline), steps the alignment centre to right, the anchor bottom to
+  top, the margin 0.08 to 0.10 and the outline 0 to 2 px, then steps the
+  outline down twice to prove the engine's 0 px floor holds. Each Ctrl+Z
+  restores the previous value.
+- **Limitations**: font family, text and box colours, line spacing and outline
+  colour are still command-only, and there is still no burned-in preview of any
+  of this.
+- **Red evidence**: red commit `0d6cee0` added the test against a window with no
+  place or edge rows: **150 passed; 1 failed**, with no widget registered for
+  `ff-caption-align`.
+- **CI**: run 43677712997 - fmt, clippy `-D warnings`, check, **151 tests**, release
+  build and the binary self-test.
+
 ## T34 - caption track name and format in the editor (CI-verified, run 43669709018)
 
 T31 sent `enabled` and `locked` to `captions.setTrack`, but a track's identity -
@@ -1939,6 +1977,7 @@ with a real, user-installed runtime.
 | T32 | Caption style controls in the editor: the Caption window's style row switches the background box, steps the font size by 4 px and resets the track, each through `captions.setStyle` on `App::execute` as one undoable edit, reading the live style from the sequence document | CI-verified, run 43661136320 |
 | T33 | Bulk caption output: Show All / Hide All in the Caption window drive the engine's `captions.showAll` / `hideAll` through `App::execute`, one undoable edit for every track at once, with the window and timeline headers refreshed afterwards | CI-verified, run 43665697098 |
 | T34 | Caption track identity in the editor: a name field and Rename, plus a format control that steps Subtitle / CEA-608 / CEA-708 / Teletext, both through `captions.setTrack` on `App::execute` as one undoable edit each, with the format read from the sequence document and the name draft kept across refreshes | CI-verified, run 43669709018 |
+| T35 | Caption place and weight: a Place row cycles alignment and anchor and an Edge row steps margin and outline, all through `captions.setStyle` on `App::execute` as one undoable edit each, reading the live `CaptionStyle` from the sequence document | CI-verified, run 43677712997 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
