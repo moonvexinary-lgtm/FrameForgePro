@@ -63,6 +63,11 @@ pub struct CaptionEditor {
     pub selected: Option<u64>,
     /// Draft text for the selected caption (and the next Add).
     pub text: String,
+    /// Draft name for the window's target track.
+    pub name: String,
+    /// The track `name` was seeded from, so a target change re-reads the name
+    /// without clobbering a name the user is in the middle of typing.
+    name_track: Option<u64>,
     /// Draft length in seconds for the next Add.
     pub seconds: f64,
     /// Draft start and length in seconds for the selected caption.
@@ -82,6 +87,8 @@ impl CaptionEditor {
             track: None,
             selected: None,
             text: String::new(),
+            name: String::new(),
+            name_track: None,
             seconds: 3.0,
             start: 0.0,
             length: 3.0,
@@ -111,6 +118,7 @@ pub fn refresh(app: &mut App, editor: &mut CaptionEditor) {
             if editor.track.is_none_or(|id| !editor.tracks.iter().any(|t| t.id == id)) {
                 editor.track = editor.tracks.first().map(|t| t.id);
             }
+            seed_name(editor);
             if let Some(row) = editor.selected.and_then(|id| editor.captions.iter().find(|r| r.id == id)).cloned() {
                 seed(editor, &row);
             }
@@ -121,6 +129,24 @@ pub fn refresh(app: &mut App, editor: &mut CaptionEditor) {
             editor.selected = None;
             editor.error = Some(error.to_string());
         }
+    }
+}
+
+/// Seed the name draft from the target track. Only a target change re-reads
+/// it, so a name the user is typing survives the refreshes the other commands
+/// run (an undo does not refresh the window, so the draft keeps the last edit).
+fn seed_name(editor: &mut CaptionEditor) {
+    let Some(id) = editor.track else {
+        editor.name.clear();
+        editor.name_track = None;
+        return;
+    };
+    if editor.name_track == Some(id) {
+        return;
+    }
+    if let Some(row) = editor.tracks.iter().find(|t| t.id == id) {
+        editor.name = row.name.clone();
+        editor.name_track = Some(id);
     }
 }
 
@@ -171,6 +197,8 @@ pub fn add_track(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String
     refresh(app, editor);
     if let Some(id) = id {
         editor.track = Some(id);
+        // `refresh` seeded the old target; the new track's name is its own.
+        seed_name(editor);
     }
     app.status = "Added caption track".to_string();
     Ok(())
@@ -280,6 +308,40 @@ pub fn reset_style(app: &mut App, editor: &CaptionEditor) -> Result<(), String> 
     Ok(())
 }
 
+/// The engine's current format label for `track`.
+fn format_of(app: &App, track: u64) -> Result<String, String> {
+    let item =
+        app.sequence().and_then(|sequence| sequence.caption_track(filmcraft_project::TrackId(track))).ok_or_else(|| "no such caption track".to_string())?;
+    Ok(item.format.label().to_string())
+}
+
+/// Rename the window's target track through `captions.setTrack`.
+pub fn rename(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let name = editor.name.trim().to_string();
+    if name.is_empty() {
+        return Err("a caption track needs a name".to_string());
+    }
+    app.execute("captions.setTrack", json!({"track": track, "name": name}))?;
+    editor.name = name;
+    refresh(app, editor);
+    app.status = "Renamed caption track".to_string();
+    Ok(())
+}
+
+/// Step the target track to the next engine caption format. The format is read
+/// from the sequence document, so a cycle right after an undo is not stale.
+pub fn cycle_format(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let current = format_of(app, track)?;
+    let formats = filmcraft_project::CaptionFormat::ALL;
+    let next = formats.iter().position(|format| format.label() == current.as_str()).map_or(formats[0], |index| formats[(index + 1) % formats.len()]);
+    app.execute("captions.setTrack", json!({"track": track, "format": next.label()}))?;
+    refresh(app, editor);
+    app.status = format!("Caption format: {}", next.label());
+    Ok(())
+}
+
 /// Turn every caption track's output on or off through the engine's bulk edit.
 pub fn show_all(app: &mut App, editor: &mut CaptionEditor, on: bool) -> Result<(), String> {
     let command = if on { "captions.showAll" } else { "captions.hideAll" };
@@ -310,6 +372,7 @@ pub fn import_file(app: &mut App, editor: &mut CaptionEditor, path: &Path) -> Re
     // `refresh` keeps a still-valid old target; the import is the new target.
     if let Some(track) = value.get("track").and_then(Value::as_u64) {
         editor.track = Some(track);
+        seed_name(editor);
     }
     let plural = if count == 1 { "" } else { "s" };
     app.status = format!("Imported {count} caption{plural}");
@@ -439,6 +502,25 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 if action(ui, &format!("ff-caption-track-{}", track.id), &label, selected).on_hover_text(hover).clicked() {
                     editor.track = Some(track.id);
                 }
+            }
+            if editor.track.is_some() {
+                let format = editor.tracks.iter().find(|track| Some(track.id) == editor.track).map(|track| track.format.clone()).unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(ui::hint("Track"));
+                    ui.add(egui::TextEdit::singleline(&mut editor.name).id(egui::Id::new("ff-caption-name")).desired_width(150.0).hint_text("Track name"));
+                    if action(ui, "ff-caption-rename", "Rename", false).clicked() {
+                        command = Some(rename(app, &mut editor));
+                        // A commit ends the edit, so hand focus back: otherwise
+                        // the field's own Ctrl+Z would swallow the app's undo.
+                        ui.ctx().memory_mut(|memory| memory.surrender_focus(egui::Id::new("ff-caption-name")));
+                    }
+                    if action(ui, "ff-caption-format-cycle", &format!("Format: {format}"), false)
+                        .on_hover_text("Cycle Subtitle, CEA-608, CEA-708, Teletext")
+                        .clicked()
+                    {
+                        command = Some(cycle_format(app, &mut editor));
+                    }
+                });
             }
             ui.horizontal(|ui| {
                 ui.label(ui::hint("Style"));
