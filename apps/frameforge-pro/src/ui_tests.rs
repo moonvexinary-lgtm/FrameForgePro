@@ -736,10 +736,15 @@ fn a_caption_track_header_toggles_output_and_lock_each_as_one_undo() {
 fn caption_style_buttons_change_the_track_style_each_as_one_undo() {
     let (mut h, _) = seeded();
     h.click(egui::Id::new("ff-caption-open"));
+    // The anchored window positions itself from the previous frame's size and
+    // settles after a couple of frames, so its controls are addressable.
+    h.frame(Vec::new());
+    h.frame(Vec::new());
     h.click(egui::Id::new("ff-caption-add-track"));
     let style = |h: &Harness| -> (bool, f32) {
         h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| (t.style.background, t.style.size)).unwrap_or((true, 54.0))
     };
+    assert_eq!(h.app.sequence().map(|q| q.caption_tracks.len()), Some(1), "Add Track creates the window's target track");
     assert_eq!(style(&h), (true, 54.0), "a new track takes the engine's default style");
 
     // The style row drives the engine's own `captions.setStyle`: the BG switch
@@ -747,7 +752,7 @@ fn caption_style_buttons_change_the_track_style_each_as_one_undo() {
     // that track to the engine defaults. Each click is one undoable edit.
     h.frame(Vec::new());
     h.click(egui::Id::new("ff-caption-bg"));
-    assert!(!style(&h).0, "the background box switches off");
+    assert!(!style(&h).0, "the background box switches off (status {:?})", h.app.status);
     assert_eq!(h.app.status, "Caption style updated");
     h.press(Key::Z, command(false));
     assert!(style(&h).0, "one Ctrl+Z restores the background");
