@@ -822,6 +822,53 @@ fn the_caption_window_bulk_hides_and_shows_tracks_each_as_one_undo() {
 }
 
 #[test]
+fn caption_style_row_sets_alignment_anchor_margin_and_outline_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    let style = |h: &Harness| -> filmcraft_project::CaptionStyle {
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| t.style.clone()).unwrap_or_default()
+    };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    let start = style(&h);
+    assert_eq!(
+        (start.align, start.anchor),
+        (filmcraft_project::CaptionAlign::Center, filmcraft_project::CaptionAnchor::Bottom),
+        "a new track takes the engine's default place"
+    );
+
+    // The rest of `captions.setStyle`: alignment and anchor cycle through the
+    // engine's own three values, and margin / outline step by a fixed amount
+    // inside the engine's clamps. Each click is one undoable edit.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-align"));
+    assert_eq!(style(&h).align, filmcraft_project::CaptionAlign::Right, "center steps to right (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Caption style updated");
+    h.press(Key::Z, command(false));
+    assert_eq!(style(&h).align, filmcraft_project::CaptionAlign::Center, "one Ctrl+Z restores the alignment");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-anchor"));
+    assert_eq!(style(&h).anchor, filmcraft_project::CaptionAnchor::Top, "bottom wraps to top (status {:?})", h.app.status);
+    h.press(Key::Z, command(false));
+    assert_eq!(style(&h).anchor, filmcraft_project::CaptionAnchor::Bottom, "one Ctrl+Z restores the anchor");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-margin-up"));
+    assert!((style(&h).margin - 0.10).abs() < 1e-6, "margin steps up from 0.08 to 0.10 (got {})", style(&h).margin);
+    h.press(Key::Z, command(false));
+    assert!((style(&h).margin - 0.08).abs() < 1e-6, "one Ctrl+Z restores the margin");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-outline-up"));
+    assert!((style(&h).outline - 2.0).abs() < 1e-6, "outline steps up from 0 to 2 px (got {})", style(&h).outline);
+    h.click(egui::Id::new("ff-caption-outline-down"));
+    h.click(egui::Id::new("ff-caption-outline-down"));
+    assert!((style(&h).outline - 0.0).abs() < 1e-6, "outline never goes below the engine's floor");
+}
+
+#[test]
 fn the_caption_window_renames_a_track_and_cycles_its_format_each_as_one_undo() {
     let (mut h, _) = seeded();
     let track = |h: &Harness| -> (String, String) {
