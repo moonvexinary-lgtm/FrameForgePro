@@ -602,6 +602,35 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T33 - bulk show and hide caption tracks (CI-verified, run 43665697098)
+
+T31 gave every caption header its own output switch, but turning the whole
+caption set off (or back on) meant one click per track even though the engine
+already has `captions.showAll` / `captions.hideAll`.
+
+- **Controls**: the Caption window's header row now carries `Show All` and
+  `Hide All` beside Add Track, under the stable ids
+  `ff-caption-show-all` / `ff-caption-hide-all`.
+- **Command**: each runs the engine's bulk edit through `App::execute`, so one
+  click turns every caption track's `enabled` on or off as one undoable engine
+  edit and dirties the project once. The window refreshes from
+  `captions.list` afterwards, so the track rows and the timeline headers show
+  the new output state. The status line reads "All caption tracks shown" or
+  "All caption tracks hidden".
+- **Test**:
+  `ui_tests::the_caption_window_bulk_hides_and_shows_tracks_each_as_one_undo`
+  adds two tracks, clicks Hide All and gets both `enabled` flags off, undoes
+  it with one Ctrl+Z, hides one track through `captions.setTrack`, clicks Show
+  All and gets both on, then undoes back to that one-off mix.
+- **Limitations**: the bulk switches act on every caption track - there is no
+  selection-scoped bulk - and per-cue show/hide still does not exist (output is
+  a track property, and `caption.settings` is not edited).
+- **Red evidence**: red commit `88e02de` added the test against a header row
+  with no bulk controls: **148 passed; 1 failed**, with no widget registered
+  for `ff-caption-hide-all`.
+- **CI**: run 43665697098 - fmt, clippy `-D warnings`, check, **149 tests**, release
+  build and the binary self-test.
+
 ## T32 - caption style controls in the editor (CI-verified, run 43661136320)
 
 T26-T31 made a track's cues and its output/lock real, but its own
@@ -1868,6 +1897,7 @@ with a real, user-installed runtime.
 | T30 | Snapping for caption gestures: caption moves try both their start and end and caption trims push the dragged edge to the nearest sequence marker, playhead or other cue edge inside the 8 px radius, reported as "(snapped)" only when the delta changed | CI-verified, run 43544459466 |
 | T31 | Caption track header output and lock: each caption row carries the track's own `enabled` (Program monitor and burn-in) and `locked` switches through `captions.setTrack` on `App::execute`, one undo each, with the row still editable and dimmed while its output is off | CI-verified, run 43550784244 |
 | T32 | Caption style controls in the editor: the Caption window's style row switches the background box, steps the font size by 4 px and resets the track, each through `captions.setStyle` on `App::execute` as one undoable edit, reading the live style from the sequence document | CI-verified, run 43661136320 |
+| T33 | Bulk caption output: Show All / Hide All in the Caption window drive the engine's `captions.showAll` / `hideAll` through `App::execute`, one undoable edit for every track at once, with the window and timeline headers refreshed afterwards | CI-verified, run 43665697098 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
