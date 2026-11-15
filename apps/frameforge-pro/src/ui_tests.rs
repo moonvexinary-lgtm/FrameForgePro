@@ -822,6 +822,44 @@ fn the_caption_window_bulk_hides_and_shows_tracks_each_as_one_undo() {
 }
 
 #[test]
+fn the_caption_window_deletes_the_target_track_and_can_undo_it() {
+    let (mut h, _) = seeded();
+    let tracks = |h: &Harness| -> Vec<u64> { h.app.sequence().map(|q| q.caption_tracks.iter().map(|t| t.id.0).collect()).unwrap_or_default() };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    let before = tracks(&h);
+    assert_eq!(before.len(), 2, "two tracks to delete from (status {:?})", h.app.status);
+    let target = h.app.captions.as_ref().and_then(|editor| editor.track);
+    assert_eq!(target, before.first().copied(), "the newest track is the window's target");
+
+    // `captions.deleteTrack` drops a track and its cues as one undoable edit;
+    // the window then falls back to the track that is left.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-delete-track"));
+    let after = tracks(&h);
+    assert_eq!(after.len(), 1, "the target track is gone (status {:?})", h.app.status);
+    assert!(!after.contains(&target.unwrap()), "the deleted track is the one the window targeted");
+    assert_eq!(h.app.status, "Deleted caption track");
+    assert_eq!(h.app.captions.as_ref().and_then(|editor| editor.track), after.first().copied(), "the window retargets the remaining track");
+    h.press(Key::Z, command(false));
+    assert_eq!(tracks(&h), before, "one Ctrl+Z restores the track");
+
+    // Deleting the last track empties the list and the window's target.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-delete-track"));
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-delete-track"));
+    assert!(tracks(&h).is_empty(), "no tracks left (status {:?})", h.app.status);
+    assert!(h.app.captions.as_ref().and_then(|editor| editor.track).is_none(), "the window has no target left");
+    h.press(Key::Z, command(false));
+    assert_eq!(tracks(&h).len(), 1, "one Ctrl+Z restores the last track");
+}
+
+#[test]
 fn caption_style_row_sets_alignment_anchor_margin_and_outline_each_as_one_undo() {
     let (mut h, _) = seeded();
     let style = |h: &Harness| -> filmcraft_project::CaptionStyle {
