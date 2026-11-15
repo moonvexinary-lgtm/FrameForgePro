@@ -602,6 +602,38 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T36 - delete a caption track from the editor (CI-verified, run 43735970446)
+
+`captions.deleteTrack` was the one caption-track command the shell never
+reached: the window could add, rename, restyle and switch a track's output but
+never remove one.
+
+- **Control**: `Delete Track` sits in the window's header beside Add Track,
+  under `ff-caption-delete-track`, with a hover note that the delete is
+  undoable. The header now runs in two rows - track commands on the first, the
+  Prev / Next navigation on the second - so the header cannot overflow the
+  window's fixed 440 px width and leave a button outside the clip rect, where a
+  click no longer registers.
+- **Command**: it runs `captions.deleteTrack` on the window's target through
+  `App::execute`, so the track and every cue on it leave as one undoable engine
+  edit. The window then clears its target and refreshes, so it falls back to
+  the track that is left (or to no target when the sequence has no caption
+  tracks left), and the status line reads "Deleted caption track".
+- **Test**:
+  `ui_tests::the_caption_window_deletes_the_target_track_and_can_undo_it`
+  adds two tracks, deletes the newest (the window's target), checks the target
+  is the one that vanished, the window retargets the survivor and one Ctrl+Z
+  restores both, then deletes twice more down to no tracks and checks the
+  window has no target before undoing the last delete.
+- **Limitations**: a track with cues is deleted without a confirmation - the
+  undo step is the guard - and there is no per-caption delete from this
+  control (the list's own Delete removes the selected caption only).
+- **Red evidence**: red commit `ab9aab9` added the test against a header with no
+  delete control: **151 passed; 1 failed**, with no widget registered for
+  `ff-caption-delete-track`.
+- **CI**: run 43735970446 - fmt, clippy `-D warnings`, check, **152 tests**, release
+  build and the binary self-test.
+
 ## T35 - caption alignment, anchor, margin and outline (CI-verified, run 43677712997)
 
 T32 reached the background box and the font size; the rest of
@@ -1978,6 +2010,7 @@ with a real, user-installed runtime.
 | T33 | Bulk caption output: Show All / Hide All in the Caption window drive the engine's `captions.showAll` / `hideAll` through `App::execute`, one undoable edit for every track at once, with the window and timeline headers refreshed afterwards | CI-verified, run 43665697098 |
 | T34 | Caption track identity in the editor: a name field and Rename, plus a format control that steps Subtitle / CEA-608 / CEA-708 / Teletext, both through `captions.setTrack` on `App::execute` as one undoable edit each, with the format read from the sequence document and the name draft kept across refreshes | CI-verified, run 43669709018 |
 | T35 | Caption place and weight: a Place row cycles alignment and anchor and an Edge row steps margin and outline, all through `captions.setStyle` on `App::execute` as one undoable edit each, reading the live `CaptionStyle` from the sequence document | CI-verified, run 43677712997 |
+| T36 | Delete a caption track: Delete Track in the window header runs `captions.deleteTrack` on the target through `App::execute` as one undoable edit, then retargets the window to the track that is left, with the header split into track commands and Prev / Next so it cannot overflow the window | CI-verified, run 43735970446 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
