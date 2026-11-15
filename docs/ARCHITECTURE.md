@@ -602,6 +602,46 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T34 - caption track name and format in the editor (CI-verified, run 43669709018)
+
+T31 sent `enabled` and `locked` to `captions.setTrack`, but a track's identity -
+its name and its format - was still command-only, even though the engine spec
+carries `name`, `format` and `language` beside them.
+
+- **Controls**: a row under the track list, shown when the window has a target
+  track, carries a name field, `Rename` and a format control. The format
+  control's label is the track's current format and clicking it steps to the
+  next one in the engine's own `CaptionFormat::ALL` order: Subtitle, CEA-608,
+  CEA-708, Teletext.
+- **Command**: both controls run `captions.setTrack` on the target track through
+  `App::execute`, so a rename and a format step are each one undoable engine
+  edit under the engine's "Caption Track Settings" label. The status line reads
+  "Renamed caption track" or "Caption format: <label>". An empty name is
+  refused before the command runs.
+- **Live reads**: the format is read from the sequence document
+  (`format_of`), not from the window's cached rows, so a step right after an
+  undo cycles from what the document really holds.
+- **Draft name**: the field is seeded from the target track and re-seeded only
+  when the target changes, so a half-typed name survives the refreshes that the
+  window's other commands run. A successful rename surrenders the field's focus,
+  because a focused `TextEdit` consumes Ctrl+Z for its own local undo.
+- **Test**:
+  `ui_tests::the_caption_window_renames_a_track_and_cycles_its_format_each_as_one_undo`
+  adds a track (named "Subtitle" after its format), renames it by focusing the
+  field, selecting all and typing over it through real key and text events,
+  undoes the rename with one Ctrl+Z, then steps the format to CEA-608 and
+  undoes that too.
+- **Limitations**: the language tag (`en` by default), `syncLock`, and the
+  engine's per-format caption payloads (`CEA-608`/`CEA-708`/Teletext rows) are
+  still command-only; the name draft is not re-read when an undo changes the
+  name behind it, so the field keeps the last edit until the target changes or
+  the window reopens.
+- **Red evidence**: red commit `cc4e377` added the test against a window with no
+  identity row: **149 passed; 1 failed**, with no widget registered for
+  `ff-caption-rename`.
+- **CI**: run 43669709018 - fmt, clippy `-D warnings`, check, **150 tests**, release
+  build and the binary self-test.
+
 ## T33 - bulk show and hide caption tracks (CI-verified, run 43665697098)
 
 T31 gave every caption header its own output switch, but turning the whole
@@ -1898,6 +1938,7 @@ with a real, user-installed runtime.
 | T31 | Caption track header output and lock: each caption row carries the track's own `enabled` (Program monitor and burn-in) and `locked` switches through `captions.setTrack` on `App::execute`, one undo each, with the row still editable and dimmed while its output is off | CI-verified, run 43550784244 |
 | T32 | Caption style controls in the editor: the Caption window's style row switches the background box, steps the font size by 4 px and resets the track, each through `captions.setStyle` on `App::execute` as one undoable edit, reading the live style from the sequence document | CI-verified, run 43661136320 |
 | T33 | Bulk caption output: Show All / Hide All in the Caption window drive the engine's `captions.showAll` / `hideAll` through `App::execute`, one undoable edit for every track at once, with the window and timeline headers refreshed afterwards | CI-verified, run 43665697098 |
+| T34 | Caption track identity in the editor: a name field and Rename, plus a format control that steps Subtitle / CEA-608 / CEA-708 / Teletext, both through `captions.setTrack` on `App::execute` as one undoable edit each, with the format read from the sequence document and the name draft kept across refreshes | CI-verified, run 43669709018 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
