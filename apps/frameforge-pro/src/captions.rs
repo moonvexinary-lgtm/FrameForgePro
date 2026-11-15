@@ -190,6 +190,19 @@ pub fn rows_from_list(value: &Value) -> (Vec<TrackRow>, Vec<CaptionRow>, Vec<u64
     (tracks, rows, selection)
 }
 
+/// Delete the window's target track and its cues as one undoable edit.
+pub fn delete_track(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    app.execute("captions.deleteTrack", json!({"track": track}))?;
+    // The target is gone: let the window fall back to the track that is left
+    // rather than keep an id that no longer resolves.
+    editor.track = None;
+    editor.name_track = None;
+    refresh(app, editor);
+    app.status = "Deleted caption track".to_string();
+    Ok(())
+}
+
 /// Add a subtitle-format caption track and make it the window's target.
 pub fn add_track(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
     let value = app.execute("captions.newTrack", json!({"format": "Subtitle"}))?;
@@ -542,12 +555,17 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 if action(ui, "ff-caption-add-track", "Add Track", false).clicked() {
                     command = Some(add_track(app, &mut editor));
                 }
+                if action(ui, "ff-caption-delete-track", "Delete Track", false).on_hover_text("Delete the target track and its cues (undoable)").clicked() {
+                    command = Some(delete_track(app, &mut editor));
+                }
                 if action(ui, "ff-caption-show-all", "Show All", false).on_hover_text("Turn every caption track's output on").clicked() {
                     command = Some(show_all(app, &mut editor, true));
                 }
                 if action(ui, "ff-caption-hide-all", "Hide All", false).on_hover_text("Turn every caption track's output off").clicked() {
                     command = Some(show_all(app, &mut editor, false));
                 }
+            });
+            ui.horizontal(|ui| {
                 if action(ui, "ff-caption-previous", "Prev", false).clicked() {
                     command = Some(step(app, &mut editor, false));
                 }
