@@ -822,6 +822,30 @@ fn the_caption_window_bulk_hides_and_shows_tracks_each_as_one_undo() {
 }
 
 #[test]
+fn the_caption_editor_speaker_field_sets_the_selected_cue_voice_as_one_undo() {
+    let (mut h, _) = seeded();
+    let speaker = |h: &Harness| -> Option<String> {
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).and_then(|t| t.captions.first()).and_then(|c| c.speaker.clone())
+    };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add"));
+    assert_eq!(speaker(&h), None, "a new cue has no speaker (status {:?})", h.app.status);
+
+    // `captions.setText` also carries the WebVTT voice span, which the window
+    // never sent: its Apply only wrote the text. The speaker field writes it
+    // as part of the same undoable caption edit, and a blank field clears it.
+    h.focus(egui::Id::new("ff-caption-speaker"));
+    h.retype("Interviewer");
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-apply"));
+    assert_eq!(speaker(&h).as_deref(), Some("Interviewer"), "the speaker field writes the cue's voice (status {:?})", h.app.status);
+    h.press(Key::Z, command(false));
+    assert_eq!(speaker(&h), None, "one Ctrl+Z restores the cue's speaker");
+}
+
+#[test]
 fn the_caption_window_deletes_the_target_track_and_can_undo_it() {
     let (mut h, _) = seeded();
     let tracks = |h: &Harness| -> Vec<u64> { h.app.sequence().map(|q| q.caption_tracks.iter().map(|t| t.id.0).collect()).unwrap_or_default() };
