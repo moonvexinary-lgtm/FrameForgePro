@@ -775,6 +775,39 @@ fn caption_style_buttons_change_the_track_style_each_as_one_undo() {
 }
 
 #[test]
+fn the_caption_window_bulk_hides_and_shows_tracks_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    let flags = |h: &Harness| -> Vec<bool> { h.app.sequence().map(|q| q.caption_tracks.iter().map(|t| t.enabled).collect()).unwrap_or_default() };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    assert_eq!(flags(&h), vec![true, true], "two tracks start with their output on");
+
+    // The engine's bulk switches are otherwise unreachable from the shell:
+    // hide every caption track at once, then show them all again, each as one
+    // undoable edit.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-hide-all"));
+    assert_eq!(flags(&h), vec![false, false], "Hide All turns every track off (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "All caption tracks hidden");
+    h.press(Key::Z, command(false));
+    assert_eq!(flags(&h), vec![true, true], "one Ctrl+Z restores both outputs");
+
+    // Turn just one track off so Show All has something to change.
+    let first = h.app.sequence().expect("a sequence").caption_tracks[0].id.0;
+    h.app.execute("captions.setTrack", serde_json::json!({"track": first, "enabled": false})).expect("one track hidden");
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-show-all"));
+    assert_eq!(flags(&h), vec![true, true], "Show All turns every track on");
+    assert_eq!(h.app.status, "All caption tracks shown");
+    h.press(Key::Z, command(false));
+    assert_eq!(flags(&h), vec![false, true], "one Ctrl+Z restores the previous output state");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
