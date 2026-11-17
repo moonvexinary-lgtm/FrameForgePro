@@ -602,6 +602,44 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T40 - caption track language and sync lock (CI-verified, run 44103850125)
+
+`captions.setTrack` also carries a track's BCP-47 language tag and whether it
+follows inserts and extracts on other tracks, but the window's track row only
+reached the name and the format, so every track was stuck on the engine's
+defaults: `en`, sync-locked.
+
+- **Controls**: a `Lang` row under the name/format row with
+  `ff-caption-language` (a 70 px field) and `ff-caption-language-set` (`Set`),
+  plus `ff-caption-sync`, labelled with the document's live lock (`Sync on` /
+  `Sync off`).
+- **Tag**: the engine stores `language` verbatim, so the window trims the draft
+  and refuses an empty one with "a caption track needs a language tag" rather
+  than write a tag no BCP-47 reader would accept. Status "Caption language
+  set".
+- **Sync lock**: the toggle reads the lock from the sequence document, not from
+  the cached row, so a click right after an undo flips the real value. Status
+  "Caption sync lock on" or "Caption sync lock off".
+- **Command**: both run `captions.setTrack` on the window's target through
+  `App::execute`, one undoable edit per click under the engine's "Caption Track
+  Settings" label.
+- **Seeding**: `seed_track` (the old `seed_name`) seeds the name and the
+  language together, and only a target change re-reads them, so a value being
+  typed survives the refreshes the other commands run.
+- **Test**:
+  `ui_tests::caption_language_row_sets_the_tag_and_toggles_sync_lock_each_as_one_undo`
+  adds a track, checks the engine's `("en", true)` defaults, sets `fr-CA`,
+  toggles the lock off, and checks one Ctrl+Z restores the tag and one restores
+  the lock.
+- **Limitations**: the tag is free text with no picker and no validation beyond
+  non-empty; cue identifiers and WebVTT `settings` strings are still
+  command-only, and there is still no burned-in preview.
+- **Red evidence**: red commit `7732dd8` added the test against a window with no
+  language row: **155 passed; 1 failed**, with no widget registered for
+  `ff-caption-language-set`.
+- **CI**: run 44103850125 - fmt, clippy `-D warnings`, check, **156 tests**, release
+  build and the binary self-test.
+
 ## T39 - caption font family and line spacing (CI-verified, run 44016394634)
 
 The style rows reached the size, the place and the colours; the text's family
@@ -2133,6 +2171,7 @@ with a real, user-installed runtime.
 | T37 | Caption speaker: a Speaker field seeds from the selected cue's WebVTT voice and Apply writes it through the same undoable `captions.setText`, sending `null` for a blank field so the span is cleared; the editing rows moved above the cue list so Apply is no longer clipped out of the fixed panel | CI-verified, run 43999210590 |
 | T38 | Caption colours: a Colour row cycles the text, background-box and outline colours through small app palettes (each starting on the engine's default, custom colours restarting the cycle) and sends the chosen entry as `#rrggbbaa` through `captions.setStyle` on `App::execute`, one undoable edit per click | CI-verified, run 44007287240 |
 | T39 | Caption typography: a Type row cycles the family through the three faces the engine bundles (so nothing falls back silently) and steps line spacing by 0.05 inside the engine's 0.8-4.0 clamp, each through `captions.setStyle` on `App::execute` as one undoable edit | CI-verified, run 44016394634 |
+| T40 | Caption track identity: a Lang row sets the track's BCP-47 language tag (trimmed, refusing an empty one) and a sync control flips its lock read live from the document, each through `captions.setTrack` on `App::execute` as one undoable edit | CI-verified, run 44103850125 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
