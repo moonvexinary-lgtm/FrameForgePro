@@ -45,6 +45,8 @@ pub struct CaptionRow {
     pub in_tc: String,
     pub duration: String,
     pub text: String,
+    /// The WebVTT voice span the caption carries, if any.
+    pub speaker: Option<String>,
     /// The caption's own bounds, in ticks, for seeding the draft fields.
     pub start: i64,
     pub end: i64,
@@ -63,6 +65,8 @@ pub struct CaptionEditor {
     pub selected: Option<u64>,
     /// Draft text for the selected caption (and the next Add).
     pub text: String,
+    /// Draft WebVTT voice for the selected caption.
+    pub speaker: String,
     /// Draft name for the window's target track.
     pub name: String,
     /// The track `name` was seeded from, so a target change re-reads the name
@@ -87,6 +91,7 @@ impl CaptionEditor {
             track: None,
             selected: None,
             text: String::new(),
+            speaker: String::new(),
             name: String::new(),
             name_track: None,
             seconds: 3.0,
@@ -153,6 +158,7 @@ fn seed_name(editor: &mut CaptionEditor) {
 /// Point the draft fields at a row the document holds.
 fn seed(editor: &mut CaptionEditor, row: &CaptionRow) {
     editor.text = row.text.clone();
+    editor.speaker = row.speaker.clone().unwrap_or_default();
     editor.start = row.start as f64 / TICKS_PER_SECOND as f64;
     editor.length = (row.end - row.start) as f64 / TICKS_PER_SECOND as f64;
     editor.track = Some(row.track);
@@ -180,6 +186,7 @@ pub fn rows_from_list(value: &Value) -> (Vec<TrackRow>, Vec<CaptionRow>, Vec<u64
                 in_tc: caption.get("in").and_then(Value::as_str).unwrap_or_default().to_string(),
                 duration: caption.get("duration").and_then(Value::as_str).unwrap_or_default().to_string(),
                 text: caption.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+                speaker: caption.get("speaker").and_then(Value::as_str).map(str::to_string),
                 start: caption.get("start").and_then(Value::as_i64).unwrap_or_default(),
                 end: caption.get("end").and_then(Value::as_i64).unwrap_or_default(),
             });
@@ -259,7 +266,11 @@ pub fn select(app: &mut App, editor: &mut CaptionEditor, id: u64) -> Result<(), 
 /// Write the text draft to the selected caption.
 pub fn apply_text(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
     let id = editor.selected.ok_or_else(|| "select a caption first".to_string())?;
-    app.execute("captions.setText", json!({"caption": id, "text": editor.text}))?;
+    // The engine's `speaker` is `str|null`: a blank field clears the WebVTT
+    // voice span rather than writing an empty one.
+    let speaker = editor.speaker.trim();
+    let speaker = if speaker.is_empty() { Value::Null } else { json!(speaker) };
+    app.execute("captions.setText", json!({"caption": id, "text": editor.text, "speaker": speaker}))?;
     app.status = "Edited caption text".to_string();
     Ok(())
 }
@@ -523,6 +534,12 @@ fn action(ui: &mut egui::Ui, id: &str, label: &str, accent: bool) -> egui::Respo
     response
 }
 
+/// The same button as `action`, but greyed out (and unpickable) when the
+/// selected caption cannot take the edit yet.
+fn action_enabled(ui: &mut egui::Ui, id: &str, label: &str, accent: bool, enabled: bool) -> egui::Response {
+    ui.add_enabled_ui(enabled, |ui| action(ui, id, label, accent)).inner
+}
+
 /// Draw the editor when one is open. Called every frame from `App::ui_frame`,
 /// so it floats over the timeline whose document it edits.
 pub fn show(app: &mut App, ui: &egui::Ui) {
@@ -538,7 +555,7 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
         // scroll area inside an auto-sized window hands its own size back and
         // the window resizes every other frame, so a click would land where a
         // control was read rather than where it is.
-        .fixed_size(egui::vec2(460.0, 560.0))
+        .fixed_size(egui::vec2(460.0, 720.0))
         .collapsible(false)
         .resizable(false)
         .show(ui.ctx(), |ui| {
@@ -646,10 +663,46 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut editor.text).desired_width(220.0).hint_text("Caption text"));
+                ui.label(ui::hint("Speaker"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut editor.speaker)
+                        .id(egui::Id::new("ff-caption-speaker"))
+                        .desired_width(220.0)
+                        .hint_text("WebVTT voice (optional)"),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut editor.text).id(egui::Id::new("ff-caption-text")).desired_width(220.0).hint_text("Caption text"));
                 ui.add(egui::DragValue::new(&mut editor.seconds).speed(0.1).range(0.1..=60.0).suffix(" s"));
                 if action(ui, "ff-caption-add", "Add", true).clicked() {
                     command = Some(add_caption(app, &mut editor));
+                }
+            });
+            ui.horizontal(|ui| {
+                if action(ui, "ff-caption-split", "Split at Playhead", false).clicked() {
+                    command = Some(split_at_playhead(app, &mut editor).map(|_| ()));
+                }
+                if action(ui, "ff-caption-merge", "Merge Up", false).clicked() {
+                    command = Some(merge_with_previous(app, &mut editor).map(|_| ()));
+                }
+            });
+            ui.horizontal(|ui| {
+                let enabled = editor.selected.is_some();
+                ui.label(ui::hint("Start"));
+                ui.add_enabled(enabled, egui::DragValue::new(&mut editor.start).speed(0.1).range(0.0..=3600.0).suffix(" s"));
+                ui.label(ui::hint("Length"));
+                ui.add_enabled(enabled, egui::DragValue::new(&mut editor.length).speed(0.1).range(0.1..=60.0).suffix(" s"));
+                if action_enabled(ui, "ff-caption-apply", "Apply", false, enabled).clicked() {
+                    command = Some(apply_text(app, &mut editor).and_then(|()| apply_times(app, &mut editor)));
+                    // A commit ends the edit, so hand both fields' focus back:
+                    // otherwise the field's own Ctrl+Z would swallow the app's undo.
+                    ui.ctx().memory_mut(|memory| {
+                        memory.surrender_focus(egui::Id::new("ff-caption-text"));
+                        memory.surrender_focus(egui::Id::new("ff-caption-speaker"));
+                    });
+                }
+                if action_enabled(ui, "ff-caption-delete", "Delete", false, enabled).clicked() {
+                    command = Some(delete(app, &mut editor));
                 }
             });
             ui.horizontal(|ui| {
@@ -674,8 +727,9 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
             if let Some(error) = editor.error.clone() {
                 ui.label(egui::RichText::new(error).size(10.0).color(ui::TEXT_LO));
             }
+            ui.separator();
             if editor.captions.is_empty() {
-                ui.label(ui::hint("No captions yet. Add a track, then a caption at the playhead."));
+                ui.label(ui::hint("No captions yet."));
             } else {
                 // The row handler runs after the scroll area: a click needs
                 // `&mut editor`, which the row list is borrowing to draw.
@@ -711,28 +765,6 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                     command = Some(select(app, &mut editor, id));
                 }
             }
-            ui.separator();
-            ui.horizontal(|ui| {
-                if action(ui, "ff-caption-split", "Split at Playhead", false).clicked() {
-                    command = Some(split_at_playhead(app, &mut editor).map(|_| ()));
-                }
-                if action(ui, "ff-caption-merge", "Merge Up", false).clicked() {
-                    command = Some(merge_with_previous(app, &mut editor).map(|_| ()));
-                }
-            });
-            ui.horizontal(|ui| {
-                let enabled = editor.selected.is_some();
-                ui.label(ui::hint("Start"));
-                ui.add_enabled(enabled, egui::DragValue::new(&mut editor.start).speed(0.1).range(0.0..=3600.0).suffix(" s"));
-                ui.label(ui::hint("Length"));
-                ui.add_enabled(enabled, egui::DragValue::new(&mut editor.length).speed(0.1).range(0.1..=60.0).suffix(" s"));
-                if ui.add_enabled(enabled, egui::Button::new("Apply")).clicked() {
-                    command = Some(apply_text(app, &mut editor).and_then(|()| apply_times(app, &mut editor)));
-                }
-                if ui.add_enabled(enabled, egui::Button::new("Delete")).clicked() {
-                    command = Some(delete(app, &mut editor));
-                }
-            });
         });
     match command {
         Some(Err(error)) => editor.error = Some(error),
