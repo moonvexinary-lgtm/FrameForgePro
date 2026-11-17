@@ -1034,6 +1034,38 @@ fn the_caption_window_renames_a_track_and_cycles_its_format_each_as_one_undo() {
 }
 
 #[test]
+fn caption_language_row_sets_the_tag_and_toggles_sync_lock_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    let track = |h: &Harness| -> (String, bool) {
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| (t.language.clone(), t.sync_lock)).unwrap_or_default()
+    };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    assert_eq!(track(&h), ("en".to_string(), true), "a new track is tagged en and follows other tracks (status {:?})", h.app.status);
+
+    // `captions.setTrack` carries the track's language tag and its sync lock
+    // too, but the window only reaches the name and the format. The field
+    // commits a BCP-47 tag (the engine stores it verbatim, so the window
+    // trims it) and the lock control toggles the engine's own value.
+    h.focus(egui::Id::new("ff-caption-language"));
+    h.retype("fr-CA");
+    h.click(egui::Id::new("ff-caption-language-set"));
+    assert_eq!(track(&h).0, "fr-CA", "the language field sets the tag (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Caption language set");
+    h.press(Key::Z, command(false));
+    assert_eq!(track(&h).0, "en", "one Ctrl+Z restores the tag");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-sync"));
+    assert!(!track(&h).1, "the sync control turns the lock off (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Caption sync lock off");
+    h.press(Key::Z, command(false));
+    assert!(track(&h).1, "one Ctrl+Z restores the lock");
+}
+
+#[test]
 fn dragging_the_out_edge_trims_the_tail_and_ctrl_z_restores_the_length() {
     let (mut h, _) = seeded();
     let (_, clip) = timeline_at(&mut h, 40.0);
