@@ -693,7 +693,15 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 ui.label(ui::hint("Length"));
                 ui.add_enabled(enabled, egui::DragValue::new(&mut editor.length).speed(0.1).range(0.1..=60.0).suffix(" s"));
                 if action_enabled(ui, "ff-caption-apply", "Apply", false, enabled).clicked() {
-                    command = Some(apply_text(app, &mut editor).and_then(|()| apply_times(app, &mut editor)));
+                    // Only write the times when they changed: an unchanged timing
+                    // edit still pushes its own undo step, so Apply would take two
+                    // Ctrl+Z to undo instead of one.
+                    let times = editor
+                        .selected
+                        .and_then(|id| editor.captions.iter().find(|row| row.id == id))
+                        .map(|row| (row.start as f64 / TICKS_PER_SECOND as f64, (row.end - row.start) as f64 / TICKS_PER_SECOND as f64));
+                    let changed = times.is_none_or(|(start, length)| (editor.start - start).abs() > 1e-9 || (editor.length - length).abs() > 1e-9);
+                    command = Some(apply_text(app, &mut editor).and_then(|()| if changed { apply_times(app, &mut editor) } else { Ok(()) }));
                     // A commit ends the edit, so hand both fields' focus back:
                     // otherwise the field's own Ctrl+Z would swallow the app's undo.
                     ui.ctx().memory_mut(|memory| {
