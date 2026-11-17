@@ -32,6 +32,8 @@ pub struct TrackRow {
     pub label: String,
     pub name: String,
     pub format: String,
+    /// The track's BCP-47 language tag (`en`, `fr-CA`).
+    pub language: String,
     /// How many captions the track holds.
     pub count: usize,
 }
@@ -69,9 +71,12 @@ pub struct CaptionEditor {
     pub speaker: String,
     /// Draft name for the window's target track.
     pub name: String,
-    /// The track `name` was seeded from, so a target change re-reads the name
-    /// without clobbering a name the user is in the middle of typing.
-    name_track: Option<u64>,
+    /// Draft BCP-47 language tag for the window's target track.
+    pub language: String,
+    /// The track `name` and `language` were seeded from, so a target change
+    /// re-reads them without clobbering a value the user is in the middle of
+    /// typing.
+    seeded_track: Option<u64>,
     /// Draft length in seconds for the next Add.
     pub seconds: f64,
     /// Draft start and length in seconds for the selected caption.
@@ -93,7 +98,8 @@ impl CaptionEditor {
             text: String::new(),
             speaker: String::new(),
             name: String::new(),
-            name_track: None,
+            language: String::new(),
+            seeded_track: None,
             seconds: 3.0,
             start: 0.0,
             length: 3.0,
@@ -123,7 +129,7 @@ pub fn refresh(app: &mut App, editor: &mut CaptionEditor) {
             if editor.track.is_none_or(|id| !editor.tracks.iter().any(|t| t.id == id)) {
                 editor.track = editor.tracks.first().map(|t| t.id);
             }
-            seed_name(editor);
+            seed_track(editor);
             if let Some(row) = editor.selected.and_then(|id| editor.captions.iter().find(|r| r.id == id)).cloned() {
                 seed(editor, &row);
             }
@@ -137,21 +143,24 @@ pub fn refresh(app: &mut App, editor: &mut CaptionEditor) {
     }
 }
 
-/// Seed the name draft from the target track. Only a target change re-reads
-/// it, so a name the user is typing survives the refreshes the other commands
-/// run (an undo does not refresh the window, so the draft keeps the last edit).
-fn seed_name(editor: &mut CaptionEditor) {
+/// Seed the name and language drafts from the target track. Only a target
+/// change re-reads them, so a value the user is typing survives the refreshes
+/// the other commands run (an undo does not refresh the window, so the draft
+/// keeps the last edit).
+fn seed_track(editor: &mut CaptionEditor) {
     let Some(id) = editor.track else {
         editor.name.clear();
-        editor.name_track = None;
+        editor.language.clear();
+        editor.seeded_track = None;
         return;
     };
-    if editor.name_track == Some(id) {
+    if editor.seeded_track == Some(id) {
         return;
     }
     if let Some(row) = editor.tracks.iter().find(|t| t.id == id) {
         editor.name = row.name.clone();
-        editor.name_track = Some(id);
+        editor.language = row.language.clone();
+        editor.seeded_track = Some(id);
     }
 }
 
@@ -177,6 +186,7 @@ pub fn rows_from_list(value: &Value) -> (Vec<TrackRow>, Vec<CaptionRow>, Vec<u64
             label: track.get("label").and_then(Value::as_str).unwrap_or_default().to_string(),
             name: track.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
             format: track.get("format").and_then(Value::as_str).unwrap_or_default().to_string(),
+            language: track.get("language").and_then(Value::as_str).unwrap_or_default().to_string(),
             count: captions.len(),
         });
         for caption in captions {
@@ -204,7 +214,7 @@ pub fn delete_track(app: &mut App, editor: &mut CaptionEditor) -> Result<(), Str
     // The target is gone: let the window fall back to the track that is left
     // rather than keep an id that no longer resolves.
     editor.track = None;
-    editor.name_track = None;
+    editor.seeded_track = None;
     refresh(app, editor);
     app.status = "Deleted caption track".to_string();
     Ok(())
@@ -218,7 +228,7 @@ pub fn add_track(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String
     if let Some(id) = id {
         editor.track = Some(id);
         // `refresh` seeded the old target; the new track's name is its own.
-        seed_name(editor);
+        seed_track(editor);
     }
     app.status = "Added caption track".to_string();
     Ok(())
@@ -462,6 +472,13 @@ fn format_of(app: &App, track: u64) -> Result<String, String> {
     Ok(item.format.label().to_string())
 }
 
+/// The engine's current sync lock for `track`.
+fn sync_lock_of(app: &App, track: u64) -> Result<bool, String> {
+    let item =
+        app.sequence().and_then(|sequence| sequence.caption_track(filmcraft_project::TrackId(track))).ok_or_else(|| "no such caption track".to_string())?;
+    Ok(item.sync_lock)
+}
+
 /// Rename the window's target track through `captions.setTrack`.
 pub fn rename(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
     let track = target_track(editor)?;
@@ -486,6 +503,33 @@ pub fn cycle_format(app: &mut App, editor: &mut CaptionEditor) -> Result<(), Str
     app.execute("captions.setTrack", json!({"track": track, "format": next.label()}))?;
     refresh(app, editor);
     app.status = format!("Caption format: {}", next.label());
+    Ok(())
+}
+
+/// Set the window's target track's BCP-47 language tag through
+/// `captions.setTrack`. The engine stores the tag verbatim, so the window
+/// trims it and refuses an empty one rather than write an invalid tag.
+pub fn set_language(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let language = editor.language.trim().to_string();
+    if language.is_empty() {
+        return Err("a caption track needs a language tag".to_string());
+    }
+    app.execute("captions.setTrack", json!({"track": track, "language": language}))?;
+    editor.language = language;
+    refresh(app, editor);
+    app.status = "Caption language set".to_string();
+    Ok(())
+}
+
+/// Flip the target track's sync lock. The lock is read from the sequence
+/// document, so a toggle right after an undo is not stale.
+pub fn toggle_sync(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let lock = !sync_lock_of(app, track)?;
+    app.execute("captions.setTrack", json!({"track": track, "syncLock": lock}))?;
+    refresh(app, editor);
+    app.status = if lock { "Caption sync lock on".to_string() } else { "Caption sync lock off".to_string() };
     Ok(())
 }
 
@@ -519,7 +563,7 @@ pub fn import_file(app: &mut App, editor: &mut CaptionEditor, path: &Path) -> Re
     // `refresh` keeps a still-valid old target; the import is the new target.
     if let Some(track) = value.get("track").and_then(Value::as_u64) {
         editor.track = Some(track);
-        seed_name(editor);
+        seed_track(editor);
     }
     let plural = if count == 1 { "" } else { "s" };
     app.status = format!("Imported {count} caption{plural}");
@@ -613,6 +657,8 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
     let mut command: Option<Result<(), String>> = None;
     // The place row's labels read the document, like the style commands do.
     let style = editor.track.and_then(|id| style_of(app, id).ok());
+    // The sync control shows the document's live lock, not a cached row.
+    let sync = editor.track.and_then(|id| sync_lock_of(app, id).ok());
     egui::Window::new("Captions")
         .id(egui::Id::new("ff-caption-window"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-24.0, 84.0))
@@ -679,6 +725,26 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                         .clicked()
                     {
                         command = Some(cycle_format(app, &mut editor));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(ui::hint("Lang"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut editor.language).id(egui::Id::new("ff-caption-language")).desired_width(70.0).hint_text("BCP-47 tag"),
+                    );
+                    if action(ui, "ff-caption-language-set", "Set", false).on_hover_text("Set the track's BCP-47 language tag").clicked() {
+                        command = Some(set_language(app, &mut editor));
+                        // A commit ends the edit, so hand focus back: otherwise
+                        // the field's own Ctrl+Z would swallow the app's undo.
+                        ui.ctx().memory_mut(|memory| memory.surrender_focus(egui::Id::new("ff-caption-language")));
+                    }
+                    if let Some(sync) = sync {
+                        if action(ui, "ff-caption-sync", if sync { "Sync on" } else { "Sync off" }, false)
+                            .on_hover_text("Follow inserts and extracts on other tracks")
+                            .clicked()
+                        {
+                            command = Some(toggle_sync(app, &mut editor));
+                        }
                     }
                 });
             }
@@ -838,7 +904,7 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 // The row handler runs after the scroll area: a click needs
                 // `&mut editor`, which the row list is borrowing to draw.
                 let mut clicked = None;
-                egui::ScrollArea::vertical().id_salt("caption-list").max_height(160.0).auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("caption-list").max_height(120.0).auto_shrink([false, false]).show(ui, |ui| {
                     for row in &editor.captions {
                         let width = ui.available_width();
                         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
@@ -940,6 +1006,7 @@ mod tests {
             "the engine's slot labels, top first (a new track is inserted at the top)"
         );
         assert_eq!(tracks.iter().map(|t| t.count).collect::<Vec<_>>(), [1, 2], "each track counts its own captions");
+        assert_eq!(tracks.iter().map(|t| t.language.as_str()).collect::<Vec<_>>(), ["en", "en"], "a new track carries the engine's language default");
         assert_eq!(rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["earlier", "on the other track", "later"], "captions read in timeline order");
         assert_eq!(rows[0].in_tc, "00:00:01:00", "the engine's own timecode at 24 fps");
         assert_eq!(rows[0].duration, "00:00:01:12", "a 1.5 s caption is 36 frames");
