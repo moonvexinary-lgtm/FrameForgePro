@@ -390,6 +390,45 @@ pub fn reset_style(app: &mut App, editor: &CaptionEditor) -> Result<(), String> 
     Ok(())
 }
 
+/// The app's palettes for the caption text, its background box and its
+/// outline. Each one starts on the engine's own default, so a fresh track
+/// begins where the engine would put it and the first click moves off it.
+const TEXT_COLORS: [[u8; 4]; 4] = [[255, 255, 255, 255], [255, 255, 0, 255], [0, 255, 255, 255], [16, 16, 16, 255]];
+const BOX_COLORS: [[u8; 4]; 4] = [[0, 0, 0, 191], [0, 0, 0, 255], [32, 32, 32, 255], [255, 255, 255, 255]];
+const OUTLINE_COLORS: [[u8; 4]; 4] = [[0, 0, 0, 255], [255, 255, 255, 255], [255, 255, 0, 255], [255, 0, 0, 255]];
+
+/// Which of the style's three colours a control cycles.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ColorSlot {
+    Text,
+    Box,
+    Outline,
+}
+
+/// The engine's spelling of a colour: `#rrggbbaa`.
+fn hex_color(color: [u8; 4]) -> String {
+    format!("#{:02x}{:02x}{:02x}{:02x}", color[0], color[1], color[2], color[3])
+}
+
+/// Step one of the target track's colours to the next palette entry.
+pub fn cycle_color(app: &mut App, editor: &CaptionEditor, slot: ColorSlot) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let style = style_of(app, track)?;
+    let (palette, current, key) = match slot {
+        ColorSlot::Text => (&TEXT_COLORS, style.color, "color"),
+        ColorSlot::Box => (&BOX_COLORS, style.background_color, "backgroundColor"),
+        ColorSlot::Outline => (&OUTLINE_COLORS, style.outline_color, "outlineColor"),
+    };
+    // A colour the palette does not know came from an import: start the cycle
+    // over rather than jump to an arbitrary neighbour.
+    let next = palette.iter().position(|color| *color == current).map_or(palette[0], |index| palette[(index + 1) % palette.len()]);
+    let mut params = json!({"track": track});
+    params[key] = json!(hex_color(next));
+    app.execute("captions.setStyle", params)?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
+}
+
 /// The engine's current format label for `track`.
 fn format_of(app: &App, track: u64) -> Result<String, String> {
     let item =
@@ -633,6 +672,20 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 }
             });
             ui.horizontal(|ui| {
+                ui.label(ui::hint("Colour"));
+                if style.is_some() {
+                    if action(ui, "ff-caption-text-color", "Text", false).on_hover_text("Cycle the caption text colour").clicked() {
+                        command = Some(cycle_color(app, &editor, ColorSlot::Text));
+                    }
+                    if action(ui, "ff-caption-box-color", "Box", false).on_hover_text("Cycle the background box colour").clicked() {
+                        command = Some(cycle_color(app, &editor, ColorSlot::Box));
+                    }
+                    if action(ui, "ff-caption-outline-color", "Outline", false).on_hover_text("Cycle the outline colour").clicked() {
+                        command = Some(cycle_color(app, &editor, ColorSlot::Outline));
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
                 ui.label(ui::hint("Place"));
                 if let Some(style) = &style {
                     if action(ui, "ff-caption-align", &format!("Align: {}", align_name(style.align)), false).on_hover_text("Left, centre, right").clicked() {
@@ -742,7 +795,7 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 // The row handler runs after the scroll area: a click needs
                 // `&mut editor`, which the row list is borrowing to draw.
                 let mut clicked = None;
-                egui::ScrollArea::vertical().id_salt("caption-list").max_height(240.0).auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("caption-list").max_height(200.0).auto_shrink([false, false]).show(ui, |ui| {
                     for row in &editor.captions {
                         let width = ui.available_width();
                         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
