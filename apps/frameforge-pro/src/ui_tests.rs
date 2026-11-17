@@ -884,6 +884,43 @@ fn the_caption_window_deletes_the_target_track_and_can_undo_it() {
 }
 
 #[test]
+fn caption_colour_rows_cycle_text_box_and_outline_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    let style = |h: &Harness| -> filmcraft_project::CaptionStyle {
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| t.style.clone()).unwrap_or_default()
+    };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    let start = style(&h);
+    assert_eq!(start.color, [255, 255, 255, 255], "a new track takes the engine's default text colour");
+    assert_eq!(start.background_color, [0, 0, 0, 191], "and its default box colour");
+    assert_eq!(start.outline_color, [0, 0, 0, 255], "and its default outline colour");
+
+    // The rest of `captions.setStyle`: the three colours. Each control steps
+    // its own colour through the app's palette, one undoable edit per click.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-text-color"));
+    assert_eq!(style(&h).color, [255, 255, 0, 255], "text steps white to yellow (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Caption style updated");
+    h.press(Key::Z, command(false));
+    assert_eq!(style(&h).color, start.color, "one Ctrl+Z restores the text colour");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-box-color"));
+    assert_eq!(style(&h).background_color, [0, 0, 0, 255], "the box steps to opaque black (got {:?})", style(&h).background_color);
+    h.press(Key::Z, command(false));
+    assert_eq!(style(&h).background_color, start.background_color, "one Ctrl+Z restores the box colour");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-outline-color"));
+    assert_eq!(style(&h).outline_color, [255, 255, 255, 255], "the outline steps black to white (got {:?})", style(&h).outline_color);
+    h.press(Key::Z, command(false));
+    assert_eq!(style(&h).outline_color, start.outline_color, "one Ctrl+Z restores the outline colour");
+}
+
+#[test]
 fn caption_style_row_sets_alignment_anchor_margin_and_outline_each_as_one_undo() {
     let (mut h, _) = seeded();
     let style = |h: &Harness| -> filmcraft_project::CaptionStyle {
