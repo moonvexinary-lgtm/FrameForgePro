@@ -884,6 +884,41 @@ fn the_caption_window_deletes_the_target_track_and_can_undo_it() {
 }
 
 #[test]
+fn caption_type_row_cycles_the_font_and_steps_line_spacing_each_as_one_undo() {
+    let (mut h, _) = seeded();
+    let style = |h: &Harness| -> filmcraft_project::CaptionStyle {
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| t.style.clone()).unwrap_or_default()
+    };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    let start = style(&h);
+    assert_eq!(start.font, "Inter", "a new track uses the engine's bundled default family");
+    assert!((start.line_spacing - 1.25).abs() < 1e-6, "and its default line spacing (got {})", start.line_spacing);
+
+    // `captions.setStyle` also carries the family and the line spacing. The
+    // cycle stays on the engine's three bundled faces, so every entry really
+    // renders instead of falling back, and the engine clamps the spacing.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-font"));
+    assert_eq!(style(&h).font, "JetBrains Mono", "the family steps Inter to JetBrains Mono (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Caption style updated");
+    h.press(Key::Z, command(false));
+    assert_eq!(style(&h).font, start.font, "one Ctrl+Z restores the family");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-spacing-up"));
+    assert!((style(&h).line_spacing - 1.30).abs() < 1e-6, "spacing steps 1.25 to 1.30 (got {})", style(&h).line_spacing);
+    h.press(Key::Z, command(false));
+    assert!((style(&h).line_spacing - 1.25).abs() < 1e-6, "one Ctrl+Z restores the spacing");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-spacing-down"));
+    assert!((style(&h).line_spacing - 1.20).abs() < 1e-6, "and steps back down (got {})", style(&h).line_spacing);
+}
+
+#[test]
 fn caption_colour_rows_cycle_text_box_and_outline_each_as_one_undo() {
     let (mut h, _) = seeded();
     let style = |h: &Harness| -> filmcraft_project::CaptionStyle {
