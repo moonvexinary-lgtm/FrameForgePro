@@ -738,13 +738,12 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                         // the field's own Ctrl+Z would swallow the app's undo.
                         ui.ctx().memory_mut(|memory| memory.surrender_focus(egui::Id::new("ff-caption-language")));
                     }
-                    if let Some(sync) = sync {
-                        if action(ui, "ff-caption-sync", if sync { "Sync on" } else { "Sync off" }, false)
+                    if let Some(sync) = sync
+                        && action(ui, "ff-caption-sync", if sync { "Sync on" } else { "Sync off" }, false)
                             .on_hover_text("Follow inserts and extracts on other tracks")
                             .clicked()
-                        {
-                            command = Some(toggle_sync(app, &mut editor));
-                        }
+                    {
+                        command = Some(toggle_sync(app, &mut editor));
                     }
                 });
             }
