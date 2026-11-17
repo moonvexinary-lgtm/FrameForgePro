@@ -602,6 +602,42 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T38 - caption text, box and outline colours (CI-verified, run 44007287240)
+
+The style rows could switch the background box on and off and change the text's
+size and place, but `CaptionStyle`'s three colours were still command-only:
+every caption wore the engine's default white text, translucent black box and
+black outline.
+
+- **Controls**: a `Colour` row with `ff-caption-text-color` (Text),
+  `ff-caption-box-color` (Box) and `ff-caption-outline-color` (Outline), shown
+  when the window has a track to style.
+- **Palettes**: each control cycles its own four-entry palette, and each
+  palette starts on the engine's default - white, `#000000bf`, black - so a
+  fresh track begins where the engine would put it and the first click visibly
+  moves. The text steps white, yellow, cyan, near-black; the box steps its alpha
+  up, then to charcoal and white; the outline steps black, white, yellow, red.
+- **Command**: `cycle_color` reads the live `CaptionStyle` from the sequence
+  document, finds the current colour's palette index and sends the next entry as
+  `#rrggbbaa` under the engine's own key (`color`, `backgroundColor`,
+  `outlineColor`) through `captions.setStyle` on `App::execute` - one undoable
+  edit per click, status "Caption style updated". A colour the palette does not
+  know, such as one written by an import, restarts the cycle at the palette's
+  first entry rather than jumping to an arbitrary neighbour.
+- **Test**:
+  `ui_tests::caption_colour_rows_cycle_text_box_and_outline_each_as_one_undo`
+  adds a track, checks the engine's default for all three colours, steps each
+  one and checks the next palette entry and the status, then checks that one
+  Ctrl+Z restores each colour.
+- **Limitations**: the palettes are fixed - there is no colour picker and no
+  opacity control beyond the entries the box palette carries - and font family,
+  line spacing, per-cue overrides and a burned-in preview are still open.
+- **Red evidence**: red commit `7305905` added the test against a window with no
+  colour row: **153 passed; 1 failed**, with no widget registered for
+  `ff-caption-text-color`.
+- **CI**: run 44007287240 - fmt, clippy `-D warnings`, check, **154 tests**, release
+  build and the binary self-test.
+
 ## T37 - caption speaker (WebVTT voice) in the editor (CI-verified, run 43999210590)
 
 `captions.setText` carries both the cue's text and its WebVTT voice - the
@@ -2060,6 +2096,7 @@ with a real, user-installed runtime.
 | T35 | Caption place and weight: a Place row cycles alignment and anchor and an Edge row steps margin and outline, all through `captions.setStyle` on `App::execute` as one undoable edit each, reading the live `CaptionStyle` from the sequence document | CI-verified, run 43677712997 |
 | T36 | Delete a caption track: Delete Track in the window header runs `captions.deleteTrack` on the target through `App::execute` as one undoable edit, then retargets the window to the track that is left, with the header split into track commands and Prev / Next so it cannot overflow the window | CI-verified, run 43735970446 |
 | T37 | Caption speaker: a Speaker field seeds from the selected cue's WebVTT voice and Apply writes it through the same undoable `captions.setText`, sending `null` for a blank field so the span is cleared; the editing rows moved above the cue list so Apply is no longer clipped out of the fixed panel | CI-verified, run 43999210590 |
+| T38 | Caption colours: a Colour row cycles the text, background-box and outline colours through small app palettes (each starting on the engine's default, custom colours restarting the cycle) and sends the chosen entry as `#rrggbbaa` through `captions.setStyle` on `App::execute`, one undoable edit per click | CI-verified, run 44007287240 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
