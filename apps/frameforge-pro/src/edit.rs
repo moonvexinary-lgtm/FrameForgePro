@@ -4443,6 +4443,21 @@ mod tests {
     }
 
     #[test]
+    fn caption_snap_targets_include_clip_edges() {
+        let s = demo_session();
+        let seq = s.active_sequence().unwrap();
+        let targets = super::caption_snap_targets(seq, None, Tick::ZERO);
+        let items: Vec<_> = seq.video_tracks.iter().chain(&seq.audio_tracks).flat_map(|track| track.items.iter()).collect();
+        assert!(!items.is_empty(), "the demo has clips to snap to");
+        for item in items {
+            assert!(targets.contains(&(item.start + item.duration)), "a clip's tail is a snap target");
+            if item.start > Tick::ZERO {
+                assert!(targets.contains(&item.start), "a clip's head is a snap target");
+            }
+        }
+    }
+
+    #[test]
     fn snap_move_does_not_snap_a_linked_pair_to_its_own_other_half() {
         let mut s = Session::default();
         s.execute("file.newProject", json!({"name": "Snap"})).unwrap();
