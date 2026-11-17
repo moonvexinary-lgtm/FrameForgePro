@@ -602,6 +602,54 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T37 - caption speaker (WebVTT voice) in the editor (CI-verified, run 43999210590)
+
+`captions.setText` carries both the cue's text and its WebVTT voice - the
+`speaker` field of `Caption` - but the window's Apply sent only `text`, so a
+voice span could not be added, corrected or removed from the shell, and one
+written by an import could not be repaired.
+
+- **Control**: a `Speaker` row above the cue text field, `ff-caption-speaker`,
+  seeded from the selected caption's voice (each caption row carries it back
+  from `captions.list`) and blank when the cue has none.
+- **Command**: Apply (`ff-caption-apply`) keeps running `captions.setText` on
+  the selected cue through `App::execute` as one undoable engine edit and now
+  sends `speaker` as well: the trimmed draft, or `null` when the field is blank,
+  which is the engine's own way of clearing the span rather than writing an
+  empty voice.
+- **Focus**: a commit surrenders focus on both text fields, because egui
+  0.36's `TextEdit` consumes Ctrl+Z for its own local undo; without that the
+  field would swallow the app's undo of the edit it just made.
+- **Undo**: Apply skips the timing command when the start and length drafts
+  still match the selected cue's bounds. The engine pushes a history step even
+  for an edit that writes the same values back, so before this a text-only
+  Apply was two undo steps and the first Ctrl+Z looked like it did nothing.
+  Editing the times still writes them, as a second step.
+- **Layout**: the editing rows (speaker, text, split / merge, start / length /
+  Apply / Delete, format) now sit above the scrollable cue list, and the panel
+  grows from 560 to 720 px. The Apply row used to be the last item in the
+  window, under a 240 px list, so it was clipped out of the fixed panel and a
+  click could not reach it - the new test is the first to try. Apply and Delete
+  also gain stable ids through a new `action_enabled` helper, which draws the
+  same button as `action` but greyed out and unpickable when no cue is
+  selected.
+- **Test**:
+  `ui_tests::the_caption_editor_speaker_field_sets_the_selected_cue_voice_as_one_undo`
+  adds a cue at the playhead, checks it starts with no speaker, focuses the
+  field, types a name over it through real key and text events, clicks Apply
+  and checks the cue's `speaker`, then checks one Ctrl+Z clears it again.
+- **Limitations**: the cue identifier and the WebVTT cue settings string
+  (`line:90% align:start`) are still command-only, and a cue's speaker is not
+  shown in the cue list rows.
+- **Red evidence**: red commit `6e45028` added the test against a window with no
+  speaker field and no Apply id: **152 passed; 1 failed**, with no widget
+  registered for `ff-caption-apply`. The first green attempt (`58fe39b`, run
+  `43996346592`) wrote the speaker but failed the undo assertion - the timing
+  edit it also recorded made the first Ctrl+Z a no-op - which is what the skip
+  above exists to prevent.
+- **CI**: run 43999210590 - fmt, clippy `-D warnings`, check, **153 tests**, release
+  build and the binary self-test.
+
 ## T36 - delete a caption track from the editor (CI-verified, run 43735970446)
 
 `captions.deleteTrack` was the one caption-track command the shell never
@@ -2011,6 +2059,7 @@ with a real, user-installed runtime.
 | T34 | Caption track identity in the editor: a name field and Rename, plus a format control that steps Subtitle / CEA-608 / CEA-708 / Teletext, both through `captions.setTrack` on `App::execute` as one undoable edit each, with the format read from the sequence document and the name draft kept across refreshes | CI-verified, run 43669709018 |
 | T35 | Caption place and weight: a Place row cycles alignment and anchor and an Edge row steps margin and outline, all through `captions.setStyle` on `App::execute` as one undoable edit each, reading the live `CaptionStyle` from the sequence document | CI-verified, run 43677712997 |
 | T36 | Delete a caption track: Delete Track in the window header runs `captions.deleteTrack` on the target through `App::execute` as one undoable edit, then retargets the window to the track that is left, with the header split into track commands and Prev / Next so it cannot overflow the window | CI-verified, run 43735970446 |
+| T37 | Caption speaker: a Speaker field seeds from the selected cue's WebVTT voice and Apply writes it through the same undoable `captions.setText`, sending `null` for a blank field so the span is cleared; the editing rows moved above the cue list so Apply is no longer clipped out of the fixed panel | CI-verified, run 43999210590 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
