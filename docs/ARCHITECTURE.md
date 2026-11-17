@@ -602,6 +602,41 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T39 - caption font family and line spacing (CI-verified, run 44016394634)
+
+The style rows reached the size, the place and the colours; the text's family
+and its line spacing were the last two `captions.setStyle` fields without a
+control, so every caption was Inter at 1.25 lines.
+
+- **Controls**: a `Type` row with `ff-caption-font` (labelled with the track's
+  live family, `Inter`, `JetBrains Mono` or `Noto Serif`) and
+  `ff-caption-spacing-down` / `ff-caption-spacing-up` (`L-` / `L+`).
+- **Bundled families only**: the cycle stays on the three families
+  `filmcraft-text` bundles (`include_bytes!` in `fonts.rs`), so every entry
+  really renders; a system name the build may not carry would silently fall
+  back to Inter and the button would be lying. A family the cycle does not
+  carry, such as one an import wrote, restarts the cycle at Inter instead of
+  jumping to an arbitrary neighbour.
+- **Spacing**: `L-` / `L+` step the line height by 0.05 of the font size and
+  leave the range to the engine's own clamp (0.8..4.0); the default 1.25 steps
+  to 1.30 or 1.20.
+- **Command**: both read the live `CaptionStyle` from the sequence document and
+  run `captions.setStyle` on the window's target through `App::execute`, one
+  undoable edit per click, status "Caption style updated".
+- **Test**:
+  `ui_tests::caption_type_row_cycles_the_font_and_steps_line_spacing_each_as_one_undo`
+  adds a track, checks the engine's default family and spacing, steps the
+  family Inter to JetBrains Mono, steps the spacing up to 1.30 and back down to
+  1.20, and checks one Ctrl+Z restores the family and the spacing.
+- **Limitations**: the family list is the bundled three (no system fonts and no
+  picker), type cannot be set per cue, and there is still no burned-in preview
+  to judge the result by.
+- **Red evidence**: red commit `02c8ff3` added the test against a window with no
+  Type row: **154 passed; 1 failed**, with no widget registered for
+  `ff-caption-font`.
+- **CI**: run 44016394634 - fmt, clippy `-D warnings`, check, **155 tests**, release
+  build and the binary self-test.
+
 ## T38 - caption text, box and outline colours (CI-verified, run 44007287240)
 
 The style rows could switch the background box on and off and change the text's
@@ -2097,6 +2132,7 @@ with a real, user-installed runtime.
 | T36 | Delete a caption track: Delete Track in the window header runs `captions.deleteTrack` on the target through `App::execute` as one undoable edit, then retargets the window to the track that is left, with the header split into track commands and Prev / Next so it cannot overflow the window | CI-verified, run 43735970446 |
 | T37 | Caption speaker: a Speaker field seeds from the selected cue's WebVTT voice and Apply writes it through the same undoable `captions.setText`, sending `null` for a blank field so the span is cleared; the editing rows moved above the cue list so Apply is no longer clipped out of the fixed panel | CI-verified, run 43999210590 |
 | T38 | Caption colours: a Colour row cycles the text, background-box and outline colours through small app palettes (each starting on the engine's default, custom colours restarting the cycle) and sends the chosen entry as `#rrggbbaa` through `captions.setStyle` on `App::execute`, one undoable edit per click | CI-verified, run 44007287240 |
+| T39 | Caption typography: a Type row cycles the family through the three faces the engine bundles (so nothing falls back silently) and steps line spacing by 0.05 inside the engine's 0.8-4.0 clamp, each through `captions.setStyle` on `App::execute` as one undoable edit | CI-verified, run 44016394634 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
