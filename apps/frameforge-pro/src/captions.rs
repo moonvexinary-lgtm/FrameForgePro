@@ -429,6 +429,32 @@ pub fn cycle_color(app: &mut App, editor: &CaptionEditor, slot: ColorSlot) -> Re
     Ok(())
 }
 
+/// The families the engine bundles, in cycle order. Every one of them really
+/// renders, unlike a system name that may only fall back to Inter.
+const FONT_FAMILIES: [&str; 3] = ["Inter", "JetBrains Mono", "Noto Serif"];
+
+/// Step the target track's family through the engine's bundled faces.
+pub fn cycle_font(app: &mut App, editor: &CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let font = style_of(app, track)?.font;
+    // A family from an import that the cycle does not carry starts the cycle
+    // over rather than jumping to an arbitrary neighbour.
+    let next = FONT_FAMILIES.iter().position(|family| *family == font).map_or(FONT_FAMILIES[0], |index| FONT_FAMILIES[(index + 1) % FONT_FAMILIES.len()]);
+    app.execute("captions.setStyle", json!({"track": track, "font": next}))?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
+}
+
+/// Step the target track's line spacing by `delta` multiples of the font size
+/// (the engine clamps it to 0.8..4.0).
+pub fn step_line_spacing(app: &mut App, editor: &CaptionEditor, delta: f32) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let spacing = style_of(app, track)?.line_spacing;
+    app.execute("captions.setStyle", json!({"track": track, "lineSpacing": (spacing + delta) as f64}))?;
+    app.status = "Caption style updated".to_string();
+    Ok(())
+}
+
 /// The engine's current format label for `track`.
 fn format_of(app: &App, track: u64) -> Result<String, String> {
     let item =
@@ -686,6 +712,23 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 }
             });
             ui.horizontal(|ui| {
+                ui.label(ui::hint("Type"));
+                if let Some(style) = &style {
+                    if action(ui, "ff-caption-font", &format!("Font: {}", style.font), false)
+                        .on_hover_text("Inter, JetBrains Mono, Noto Serif - the bundled faces")
+                        .clicked()
+                    {
+                        command = Some(cycle_font(app, &editor));
+                    }
+                    if action(ui, "ff-caption-spacing-down", "L-", false).on_hover_text("Tighter line spacing").clicked() {
+                        command = Some(step_line_spacing(app, &editor, -0.05));
+                    }
+                    if action(ui, "ff-caption-spacing-up", "L+", false).on_hover_text("Looser line spacing").clicked() {
+                        command = Some(step_line_spacing(app, &editor, 0.05));
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
                 ui.label(ui::hint("Place"));
                 if let Some(style) = &style {
                     if action(ui, "ff-caption-align", &format!("Align: {}", align_name(style.align)), false).on_hover_text("Left, centre, right").clicked() {
@@ -795,7 +838,7 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 // The row handler runs after the scroll area: a click needs
                 // `&mut editor`, which the row list is borrowing to draw.
                 let mut clicked = None;
-                egui::ScrollArea::vertical().id_salt("caption-list").max_height(200.0).auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("caption-list").max_height(160.0).auto_shrink([false, false]).show(ui, |ui| {
                     for row in &editor.captions {
                         let width = ui.available_width();
                         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
