@@ -571,6 +571,47 @@ fn splitting_and_merging_the_caption_from_the_editor_are_undoable_steps() {
 }
 
 #[test]
+fn the_caption_editor_splits_without_a_selection_and_merges_down() {
+    let (mut h, _) = seeded();
+    let spans = |h: &Harness| -> Vec<(i64, i64)> {
+        h.app.sequence().map(|q| q.caption_tracks.iter().flat_map(|t| t.captions.iter().map(|c| (c.start.0, c.end().0))).collect()).unwrap_or_default()
+    };
+    let tick = |frames: i64| FrameRate::FPS_24.tick_of(frames).0;
+
+    // One 0-4 s cue, added through the engine and never selected: a bare Split
+    // is about the playhead, not about a cue.
+    let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
+    let track = created["track"].as_u64().expect("the track id comes back");
+    h.app.execute("captions.add", serde_json::json!({"track": track, "text": "one", "time": 0, "durationSeconds": 4.0})).expect("the cue is added");
+    h.app.playhead = Tick(2 * TICKS_PER_SECOND);
+    // `captions.add` names the new cue in the engine selection; clearing it makes
+    // the window open with nothing selected, which is the case under test.
+    h.app.execute("captions.select", serde_json::json!({"captions": []})).expect("the caption selection clears");
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert!(h.app.captions.as_ref().is_some_and(|e| e.selected.is_none()), "nothing is selected in the window");
+
+    h.click(egui::Id::new("ff-caption-split"));
+    assert_eq!(h.app.status, "Split captions at the playhead");
+    assert_eq!(spans(&h), vec![(0, tick(48)), (tick(48), tick(96))], "the playhead cut the cue in two");
+
+    // The list grew by a row, so let the window lay out again before reading the
+    // merge controls. Clicking the left half's row selects it, then Merge Down
+    // folds its neighbour into it.
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    let left =
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).and_then(|t| t.captions.first()).map(|c| c.id.0).expect("the left half is in the document");
+    h.click(egui::Id::new(format!("ff-caption-row-{left}")));
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-merge-down"));
+    assert_eq!(h.app.status, "Merged caption down");
+    assert_eq!(spans(&h), vec![(0, tick(96))], "the merged cue spans both halves");
+}
+
+#[test]
 fn a_caption_cue_paints_on_its_own_timeline_row_and_a_click_selects_it() {
     let (mut h, _) = seeded();
     // A caption track with one 3 s cue from the 1 s mark, added through the

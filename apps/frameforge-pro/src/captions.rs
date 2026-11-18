@@ -625,6 +625,11 @@ fn previous_caption(editor: &CaptionEditor, id: u64) -> Option<u64> {
     editor.captions[..index].iter().rev().find(|r| r.track == track).map(|r| r.id)
 }
 
+/// Merge the selected caption with the one after it on the same track.
+pub fn merge_with_next(_app: &mut App, _editor: &mut CaptionEditor) -> Result<u64, String> {
+    Err("Merge Down is not wired yet".to_string())
+}
+
 fn action(ui: &mut egui::Ui, id: &str, label: &str, accent: bool) -> egui::Response {
     let font = egui::FontId::proportional(11.0);
     let width = ui.painter().layout_no_wrap(label.to_string(), font.clone(), ui::TEXT_HI).size().x + 20.0;
@@ -845,6 +850,9 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                 }
                 if action(ui, "ff-caption-merge", "Merge Up", false).clicked() {
                     command = Some(merge_with_previous(app, &mut editor).map(|_| ()));
+                }
+                if action(ui, "ff-caption-merge-down", "Merge Down", false).clicked() {
+                    command = Some(merge_with_next(app, &mut editor).map(|_| ()));
                 }
             });
             ui.horizontal(|ui| {
@@ -1226,6 +1234,57 @@ mod tests {
         let kept = merge_with_previous(&mut app, &mut editor).expect("the cue merges into the one before it");
         assert_eq!(kept, first, "the earlier cue keeps the merged result");
         assert_eq!(caption_list(&app), vec![(0, frames(72), "one\ntwo".to_string())], "the merged cue spans both cues and joins the texts with a line break");
+        assert_eq!(
+            app.session.state.caption_selection.iter().map(|c| c.0).collect::<Vec<_>>(),
+            vec![kept],
+            "the engine's caption selection names the merged cue"
+        );
+
+        app.undo();
+        assert_eq!(caption_list(&app), vec![(0, frames(36), "one".to_string()), (frames(36), frames(72), "two".to_string())], "one undo restores both cues");
+    }
+
+    #[test]
+    fn splitting_at_the_playhead_with_no_cue_selected_cuts_every_cue_it_crosses() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        add_track(&mut app, &mut editor).expect("the track is added");
+        add_caption(&mut app, &mut editor).expect("the caption is added");
+        // Drop the selection: a bare Split is about the playhead, not one cue.
+        editor.selected = None;
+        app.playhead = Tick(TICKS_PER_SECOND);
+
+        let right = split_at_playhead(&mut app, &mut editor).expect("the playhead split works without a selection");
+        assert_eq!(
+            caption_list(&app),
+            vec![(0, frames(24), "New caption".to_string()), (frames(24), frames(72), "New caption".to_string())],
+            "the cue the playhead crosses is cut in two"
+        );
+        assert_eq!(app.status, "Split captions at the playhead", "the plural says no single cue was meant");
+        assert_eq!(editor.selected, Some(right), "the window selects the new right half");
+
+        app.undo();
+        assert_eq!(caption_list(&app), vec![(0, frames(72), "New caption".to_string())], "one undo restores the whole cue");
+    }
+
+    #[test]
+    fn merging_the_selected_caption_down_folds_the_next_cue_into_it() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        add_track(&mut app, &mut editor).expect("the track is added");
+        let track = editor.track.expect("the new track is the target");
+        app.execute("captions.add", json!({"track": track, "text": "one", "time": 0, "durationSeconds": 1.5})).expect("the first cue is added");
+        app.execute("captions.add", json!({"track": track, "text": "two", "time": frames(36), "durationSeconds": 1.5})).expect("the second cue is added");
+        refresh(&mut app, &mut editor);
+        let first = editor.captions[0].id;
+        select(&mut app, &mut editor, first).expect("the first cue is selected");
+
+        let kept = merge_with_next(&mut app, &mut editor).expect("the cue merges into the one after it");
+        assert_eq!(kept, first, "the selected cue keeps the merged result");
+        assert_eq!(caption_list(&app), vec![(0, frames(72), "one\ntwo".to_string())], "the merged cue spans both cues and joins the texts with a line break");
+        assert_eq!(app.status, "Merged caption down");
         assert_eq!(
             app.session.state.caption_selection.iter().map(|c| c.0).collect::<Vec<_>>(),
             vec![kept],
