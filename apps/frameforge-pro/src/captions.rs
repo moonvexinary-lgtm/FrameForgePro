@@ -416,7 +416,7 @@ const BOX_COLORS: [[u8; 4]; 4] = [[0, 0, 0, 191], [0, 0, 0, 255], [32, 32, 32, 2
 const OUTLINE_COLORS: [[u8; 4]; 4] = [[0, 0, 0, 255], [255, 255, 255, 255], [255, 255, 0, 255], [255, 0, 0, 255]];
 
 /// Which of the style's three colours a control cycles.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorSlot {
     Text,
     Box,
