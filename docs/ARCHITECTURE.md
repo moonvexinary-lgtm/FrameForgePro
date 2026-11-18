@@ -602,6 +602,34 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T41 - caption gestures snap to clip edges (CI-verified, run 44209906055)
+
+A caption usually describes the clip under it, so a cut is the edge it most
+wants to land on. Clip moves and trims already snapped to every clip edge, but
+a caption move or trim only reached zero, the playhead, the sequence markers
+and the other cues, so timing a cue to a cut was a manual trim.
+
+- **Change**: `caption_snap_targets` now also carries every V1..Vn and A1..An
+  item head and tail, the same edges `snap_targets` gives the clip gestures.
+  There is no engine change: the snap is the app's own gesture maths, and the
+  committed gesture is still one `captions.move` or `captions.trim` edit.
+- **Behaviour**: inside the same 8 px radius (0.2 s at 40 px per second) a cue's
+  nearer edge lands on the cut, the status still says "(snapped)" only when the
+  delta really moved, and snapping off leaves the gesture untouched.
+- **Tests**: `edit::tests::caption_snap_targets_include_clip_edges` checks every
+  demo clip head and tail is in the target list, and
+  `ui_tests::a_caption_move_and_trim_snap_to_a_clip_edge` drags a 6-9 s cue
+  0.95 s later so its end lands on the seeded clip's 10 s tail (7-10 s), then
+  drags the out edge to the same tail, each restored by one Ctrl+Z.
+- **Limitations**: sequence In/Out points and a grid are still not snap targets;
+  every item edge counts, including clips on hidden tracks, because a cut is a
+  time rather than a track choice.
+- **Red evidence**: red commit `7ff2bd9` added both tests: **156 passed; 2
+  failed** - the target list lacked the clip tails, and the gesture stopped at
+  its raw 6.95-9.95 s with status "Moved caption".
+- **CI**: run 44209906055 - fmt, clippy `-D warnings`, check, **158 tests**, release
+  build and the binary self-test.
+
 ## T40 - caption track language and sync lock (CI-verified, run 44103850125)
 
 `captions.setTrack` also carries a track's BCP-47 language tag and whether it
@@ -2172,6 +2200,7 @@ with a real, user-installed runtime.
 | T38 | Caption colours: a Colour row cycles the text, background-box and outline colours through small app palettes (each starting on the engine's default, custom colours restarting the cycle) and sends the chosen entry as `#rrggbbaa` through `captions.setStyle` on `App::execute`, one undoable edit per click | CI-verified, run 44007287240 |
 | T39 | Caption typography: a Type row cycles the family through the three faces the engine bundles (so nothing falls back silently) and steps line spacing by 0.05 inside the engine's 0.8-4.0 clamp, each through `captions.setStyle` on `App::execute` as one undoable edit | CI-verified, run 44016394634 |
 | T40 | Caption track identity: a Lang row sets the track's BCP-47 language tag (trimmed, refusing an empty one) and a sync control flips its lock read live from the document, each through `captions.setTrack` on `App::execute` as one undoable edit | CI-verified, run 44103850125 |
+| T41 | Caption snapping: `caption_snap_targets` also carries every video/audio item head and tail, so a cue move or trim lands on a cut inside the same 8 px radius the clip gestures use, still committed as one undoable `captions.move` / `captions.trim` edit | CI-verified, run 44209906055 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
