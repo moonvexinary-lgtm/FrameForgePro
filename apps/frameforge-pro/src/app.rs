@@ -240,6 +240,9 @@ pub struct Monitor {
     pub revision: u64,
     pub seq: ItemId,
     pub size: (u32, u32),
+    /// Whether this texture was rendered with the caption burn-in on, so the
+    /// preview shows the styled cues export would ship.
+    pub captions: bool,
 }
 
 /// The cached Source-monitor texture and what it was rendered from.

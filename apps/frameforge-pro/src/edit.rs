@@ -3901,6 +3901,16 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
 
 /// The program monitor, shared by the Edit, Color and new workspaces. The
 /// picture is the engine's rendered sequence frame; the transport is real.
+/// What the Program monitor renders with. Export passes the same caption flag
+/// (`burn_captions`), so the preview is the picture export ships: the engine
+/// lays out and rasterises each enabled track's cue.
+///
+/// Today the flag is still off: the monitor shows the clean picture and a
+/// styled cue only appears after the burn-in decision below is flipped on.
+fn monitor_render_options() -> filmcraft_render::RenderOptions {
+    filmcraft_render::RenderOptions::default()
+}
+
 pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     ui.painter().rect_filled(rect, 0.0, ui::BG_PANEL);
     ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui::LINE_DARK));
@@ -3926,8 +3936,9 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let needs = app.monitor.as_ref().is_none_or(|m| m.frame != frame || m.revision != app.revision || m.seq != seq_id);
     if needs {
         let playhead = app.playhead;
+        let options = monitor_render_options();
         let rendered = app
-            .with_sources(|project, sources| filmcraft_render::render_sequence(project, seq_id, playhead, filmcraft_render::RenderOptions::default(), sources))
+            .with_sources(|project, sources| filmcraft_render::render_sequence(project, seq_id, playhead, options, sources))
             .unwrap_or_else(|| filmcraft_render::Image::new(SEQUENCE_W as usize, SEQUENCE_H as usize));
         let size = (rendered.w as u32, rendered.h as u32);
         let image = pixels::to_color_image(&rendered);
@@ -3935,11 +3946,12 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
             m.texture.set(image, egui::TextureOptions::default());
         } else {
             let texture = ui.ctx().load_texture("program-monitor", image, egui::TextureOptions::default());
-            app.monitor = Some(Monitor { texture, frame, revision: app.revision, seq: seq_id, size });
+            app.monitor = Some(Monitor { texture, frame, revision: app.revision, seq: seq_id, size, captions: options.captions });
         }
         if let Some(m) = app.monitor.as_mut() {
             m.frame = frame;
             m.revision = app.revision;
+            m.captions = options.captions;
         }
     }
 
@@ -4548,6 +4560,39 @@ mod tests {
         let captions = super::caption_snap_targets(seq, None, Tick::ZERO, false);
         assert!(captions.contains(&mark_in), "the sequence In is a caption snap target");
         assert!(captions.contains(&mark_out), "the sequence Out is a caption snap target");
+    }
+
+    /// A tiny project whose only picture is black: any non-black pixel in the
+    /// caption area proves the burn-in drew something.
+    fn caption_preview_app() -> (crate::app::App, u64) {
+        let mut app = crate::app::App::new();
+        app.execute("file.newSequence", json!({"name": "Main", "width": 640, "height": 360, "fps": 24, "video": 1, "audio": 1})).unwrap();
+        let track = app.execute("captions.newTrack", json!({"name": "Dialogue"})).unwrap()["track"].as_u64().unwrap();
+        app.execute("captions.add", json!({"track": track, "text": "hello there", "time": 0, "durationSeconds": 4.0})).unwrap();
+        app.playhead = Tick(TICKS_PER_SECOND);
+        (app, track)
+    }
+
+    #[test]
+    fn the_monitor_burns_in_the_captions_export_would() {
+        let (mut app, track) = caption_preview_app();
+        let seq_id = app.sequence_id().unwrap();
+        let at = app.playhead;
+        let render = |app: &mut crate::app::App, options: filmcraft_render::RenderOptions| {
+            app.with_sources(|project, sources| filmcraft_render::render_sequence(project, seq_id, at, options, sources)).expect("the caption preview renders")
+        };
+
+        let options = super::monitor_render_options();
+        assert!(options.captions, "the Program monitor renders with the caption burn-in on");
+        let with = render(&mut app, options);
+        let without = render(&mut app, filmcraft_render::RenderOptions { captions: false, ..options });
+        assert_ne!(with.px, without.px, "an enabled caption track changes the monitor's picture");
+
+        // Output off draws nothing, so the preview and the clean picture agree.
+        app.execute("captions.setTrack", json!({"track": track, "enabled": false})).unwrap();
+        let hidden = render(&mut app, options);
+        let clean = render(&mut app, filmcraft_render::RenderOptions { captions: false, ..options });
+        assert_eq!(hidden.px, clean.px, "a track with output off draws no caption in the preview");
     }
 
     #[test]

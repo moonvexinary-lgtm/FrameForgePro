@@ -861,6 +861,24 @@ fn a_caption_move_snaps_to_whole_seconds_with_the_grid_on() {
 }
 
 #[test]
+fn the_program_monitor_previews_captions_burned_in() {
+    let (mut h, _) = seeded();
+    let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
+    let track = created["track"].as_u64().expect("the track id comes back");
+    h.app
+        .execute("captions.add", serde_json::json!({"track": track, "text": "hello", "time": TICKS_PER_SECOND, "durationSeconds": 2.0}))
+        .expect("the cue is added");
+    h.app.playhead = Tick(TICKS_PER_SECOND);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    let monitor = h.app.monitor.as_ref().expect("the Program monitor rendered a frame");
+    assert!(monitor.captions, "the monitor's texture is rendered with the caption burn-in on");
+    assert_eq!(monitor.frame, FrameRate::FPS_24.frame_at(TICKS_PER_SECOND), "the texture is the playhead's frame");
+    assert!(monitor.revision <= h.app.revision, "the texture was built from this document");
+}
+
+#[test]
 fn a_caption_track_header_toggles_output_and_lock_each_as_one_undo() {
     let (mut h, _) = seeded();
     let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
