@@ -1020,12 +1020,20 @@ fn snap_tick(candidate: Tick, targets: &[Tick], tolerance: Tick) -> Tick {
     best
 }
 
+/// The optional snapping grid: every whole second the sequence reaches. It stops
+/// at the sequence's own duration, because no gesture can land past it, so the
+/// list stays short however long the session runs.
+fn grid_targets(duration: Tick) -> Vec<Tick> {
+    let last = (duration.0 / TICKS_PER_SECOND).max(0);
+    (0..=last).map(|second| Tick(second * TICKS_PER_SECOND)).collect()
+}
+
 /// Everything a move or trim can snap to: zero, the playhead, the sequence
 /// In/Out points, every sequence marker and every clip edge except those of the
 /// clips being dragged. A linked A/V pair moves as one, so the dragged clip's
 /// other half is left out too: the pair would otherwise snap straight back onto
-/// itself.
-fn snap_targets(seq: &Sequence, exclude: Option<filmcraft_project::ClipId>, playhead: Tick) -> Vec<Tick> {
+/// itself. `grid` adds every whole second (the ruler's own tick lines).
+fn snap_targets(seq: &Sequence, exclude: Option<filmcraft_project::ClipId>, playhead: Tick, grid: bool) -> Vec<Tick> {
     let mut targets = vec![Tick::ZERO, playhead.max(Tick::ZERO)];
     targets.extend(seq.markers.iter().map(|marker| marker.start));
     targets.extend([seq.mark_in, seq.mark_out].into_iter().flatten());
@@ -1038,6 +1046,9 @@ fn snap_targets(seq: &Sequence, exclude: Option<filmcraft_project::ClipId>, play
             targets.push(item.start);
             targets.push(item.start + item.duration);
         }
+    }
+    if grid {
+        targets.extend(grid_targets(seq.duration()));
     }
     targets
 }
@@ -1071,7 +1082,7 @@ fn snap_move(app: &App, clip: filmcraft_project::ClipId, raw: Tick, zoom: f32) -
         return raw;
     }
     let Some(seq) = app.sequence() else { return raw };
-    let targets = snap_targets(seq, Some(clip), app.playhead);
+    let targets = snap_targets(seq, Some(clip), app.playhead, app.snap_grid);
     let tol = snap_tolerance(zoom);
     let duration = seq.find_item(clip).map(|(_, i)| i.duration).unwrap_or_default();
     let by_start = snap_tick(raw, &targets, tol);
@@ -1088,7 +1099,7 @@ fn snap_trim(app: &App, clip: filmcraft_project::ClipId, edge: &str, delta: Tick
     let Some((_, item)) = seq.find_item(clip) else { return delta };
     let base = if edge == "in" { item.start } else { item.start + item.duration };
     let raw_edge = Tick((base.0 + delta.0).max(0));
-    let targets = snap_targets(seq, Some(clip), app.playhead);
+    let targets = snap_targets(seq, Some(clip), app.playhead, app.snap_grid);
     Tick(snap_tick(raw_edge, &targets, snap_tolerance(zoom)).0 - base.0)
 }
 
@@ -1096,8 +1107,8 @@ fn snap_trim(app: &App, clip: filmcraft_project::ClipId, edge: &str, delta: Tick
 /// In/Out points, every sequence marker, every clip edge and every other cue's
 /// edges. A caption usually describes the clip under it, so a cut is the edge
 /// it most wants to land on. The dragged cue is left out so it cannot snap to
-/// itself.
-fn caption_snap_targets(seq: &Sequence, exclude: Option<u64>, playhead: Tick) -> Vec<Tick> {
+/// itself. `grid` adds every whole second (the ruler's own tick lines).
+fn caption_snap_targets(seq: &Sequence, exclude: Option<u64>, playhead: Tick, grid: bool) -> Vec<Tick> {
     let mut targets = vec![Tick::ZERO, playhead.max(Tick::ZERO)];
     targets.extend(seq.markers.iter().map(|marker| marker.start));
     targets.extend([seq.mark_in, seq.mark_out].into_iter().flatten());
@@ -1116,6 +1127,9 @@ fn caption_snap_targets(seq: &Sequence, exclude: Option<u64>, playhead: Tick) ->
             targets.push(cue.start + cue.duration);
         }
     }
+    if grid {
+        targets.extend(grid_targets(seq.duration()));
+    }
     targets
 }
 
@@ -1132,7 +1146,7 @@ fn snap_caption_move(app: &App, caption: u64, raw: Tick, zoom: f32) -> Tick {
     }
     let Some(seq) = app.sequence() else { return raw };
     let Some((_, duration)) = caption_span(seq, caption) else { return raw };
-    let targets = caption_snap_targets(seq, Some(caption), app.playhead);
+    let targets = caption_snap_targets(seq, Some(caption), app.playhead, app.snap_grid);
     let tol = snap_tolerance(zoom);
     let by_start = snap_tick(raw, &targets, tol);
     let by_end = Tick(snap_tick(raw + duration, &targets, tol).0 - duration.0);
@@ -1149,7 +1163,7 @@ fn snap_caption_trim(app: &App, caption: u64, edge: &str, delta: Tick, zoom: f32
     let Some((start, duration)) = caption_span(seq, caption) else { return delta };
     let base = if edge == "in" { start } else { start + duration };
     let raw_edge = Tick((base.0 + delta.0).max(0));
-    let targets = caption_snap_targets(seq, Some(caption), app.playhead);
+    let targets = caption_snap_targets(seq, Some(caption), app.playhead, app.snap_grid);
     Tick(snap_tick(raw_edge, &targets, snap_tolerance(zoom)).0 - base.0)
 }
 
@@ -1590,6 +1604,26 @@ fn chip(ui: &mut egui::Ui, id: egui::Id, label: &str) -> egui::Response {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
     let response = ui.interact(rect, id, egui::Sense::click());
     let (fill, color) = if response.hovered() { (ui::BG_HOVER, ui::TEXT_HI) } else { (ui::BG_INSET, ui::TEXT_LO) };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3.0, fill);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, font, color);
+    response
+}
+
+/// A chip that stays lit while its setting is on, so a preference like the
+/// snapping grid reads its own state without a checkbox's auto id.
+fn toggle_chip(ui: &mut egui::Ui, id: egui::Id, label: &str, on: bool) -> egui::Response {
+    let font = egui::FontId::proportional(10.0);
+    let width = ui.painter().layout_no_wrap(label.to_string(), font.clone(), ui::TEXT_LO).size().x + 12.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let (fill, color) = if response.hovered() {
+        (ui::ACCENT, ui::TEXT_HI)
+    } else if on {
+        (ui::ACCENT_DIM, ui::TEXT_HI)
+    } else {
+        (ui::BG_INSET, ui::TEXT_LO)
+    };
     let painter = ui.painter();
     painter.rect_filled(rect, 3.0, fill);
     painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, font, color);
@@ -2929,6 +2963,14 @@ fn timeline_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
                 Ok(_) => app.status = if ripple { "Ripple markers on".to_string() } else { "Ripple markers off".to_string() },
                 Err(e) => app.status = e.to_string(),
             }
+        }
+        // The grid is an editor preference, not a document edit: it adds the
+        // ruler's own whole-second lines to both gesture families' targets, and
+        // toggling it never dirties the project or adds an undo step.
+        let grid = app.snap_grid;
+        if toggle_chip(ui, egui::Id::new("ff-timeline-grid"), "Grid", grid).on_hover_text("Snap clip and caption moves and trims to whole seconds").clicked() {
+            app.snap_grid = !grid;
+            app.status = if app.snap_grid { "Grid snapping on".to_string() } else { "Grid snapping off".to_string() };
         }
         ui.separator();
         // The four split points, at the sequence playhead. Video and audio are
@@ -4395,8 +4437,8 @@ mod tests {
         let s = demo_session();
         let seq = s.active_sequence().unwrap();
         let clip = seq.video_tracks.iter().chain(&seq.audio_tracks).flat_map(|t| t.items.iter()).map(|i| i.id).next().expect("the demo has clips");
-        let all = super::snap_targets(seq, None, Tick(777));
-        let without = super::snap_targets(seq, Some(clip), Tick(777));
+        let all = super::snap_targets(seq, None, Tick(777), false);
+        let without = super::snap_targets(seq, Some(clip), Tick(777), false);
         assert!(without.contains(&Tick(777)), "the playhead is a target");
         assert_eq!(all.len() - without.len(), 4, "the dragged clip and its linked sound contribute two edges each, and nothing else");
     }
@@ -4414,8 +4456,30 @@ mod tests {
         let mut s = demo_session();
         s.execute("markers.add", json!({"time": 4 * TICKS_PER_SECOND, "name": "cue"})).unwrap();
         let seq = s.active_sequence().unwrap();
-        let targets = super::snap_targets(seq, None, Tick(777));
+        let targets = super::snap_targets(seq, None, Tick(777), false);
         assert!(targets.contains(&Tick(4 * TICKS_PER_SECOND)), "a sequence marker is a snap target");
+    }
+
+    #[test]
+    fn the_grid_covers_whole_seconds_up_to_the_sequence_duration() {
+        let s = demo_session();
+        let seq = s.active_sequence().unwrap();
+        let duration = seq.duration();
+        let grid = super::grid_targets(duration);
+        assert_eq!(grid.first(), Some(&Tick::ZERO), "the grid starts on the zero line");
+        assert_eq!(
+            grid.last(),
+            Some(&Tick((duration.0 / TICKS_PER_SECOND) * TICKS_PER_SECOND)),
+            "the grid stops on the last whole second the sequence reaches"
+        );
+        assert_eq!(grid.len() as i64, duration.0 / TICKS_PER_SECOND + 1, "one line per whole second, both ends included");
+
+        let clips = super::snap_targets(seq, None, Tick::ZERO, true);
+        assert!(clips.contains(&Tick(TICKS_PER_SECOND)), "a whole second is a clip target when the grid is on");
+        let captions = super::caption_snap_targets(seq, None, Tick::ZERO, true);
+        assert!(captions.contains(&Tick(TICKS_PER_SECOND)), "a whole second is a caption target when the grid is on");
+        let off = super::caption_snap_targets(seq, None, Tick::ZERO, false);
+        assert!(!off.contains(&Tick(TICKS_PER_SECOND)), "the grid is off by default, so a whole second is not a target");
     }
 
     #[test]
@@ -4444,7 +4508,7 @@ mod tests {
         let (own_start, own_end) = own.expect("the dragged cue");
         let (other_start, other_end) = other.expect("the second cue");
 
-        let targets = super::caption_snap_targets(seq, Some(dragged), Tick(9 * TICKS_PER_SECOND));
+        let targets = super::caption_snap_targets(seq, Some(dragged), Tick(9 * TICKS_PER_SECOND), false);
         assert!(targets.contains(&Tick(3 * TICKS_PER_SECOND)), "a sequence marker is a target");
         assert!(targets.contains(&Tick(9 * TICKS_PER_SECOND)), "the playhead is a target");
         assert!(targets.contains(&other_start), "another cue's start is a target");
@@ -4457,7 +4521,7 @@ mod tests {
     fn caption_snap_targets_include_clip_edges() {
         let s = demo_session();
         let seq = s.active_sequence().unwrap();
-        let targets = super::caption_snap_targets(seq, None, Tick::ZERO);
+        let targets = super::caption_snap_targets(seq, None, Tick::ZERO, false);
         let items: Vec<_> = seq.video_tracks.iter().chain(&seq.audio_tracks).flat_map(|track| track.items.iter()).collect();
         assert!(!items.is_empty(), "the demo has clips to snap to");
         for item in items {
@@ -4477,11 +4541,11 @@ mod tests {
         let mark_in = seq.mark_in.expect("the sequence has an in point");
         let mark_out = seq.mark_out.expect("the sequence has an out point");
 
-        let clips = super::snap_targets(seq, None, Tick::ZERO);
+        let clips = super::snap_targets(seq, None, Tick::ZERO, false);
         assert!(clips.contains(&mark_in), "the sequence In is a clip snap target");
         assert!(clips.contains(&mark_out), "the sequence Out is a clip snap target");
 
-        let captions = super::caption_snap_targets(seq, None, Tick::ZERO);
+        let captions = super::caption_snap_targets(seq, None, Tick::ZERO, false);
         assert!(captions.contains(&mark_in), "the sequence In is a caption snap target");
         assert!(captions.contains(&mark_out), "the sequence Out is a caption snap target");
     }

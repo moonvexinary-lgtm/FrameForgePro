@@ -131,6 +131,9 @@ pub struct App {
     /// Wall-clock playback (no audio device, or playback not started yet).
     pub last: Option<Instant>,
     pub zoom: f32,
+    /// Snap clip and caption gestures to every whole second, on top of the
+    /// engine's own targets. An editor preference: never saved, never undoable.
+    pub snap_grid: bool,
     pub selection: Option<ClipId>,
     /// The media item selected in the project panel (the Insert/Overwrite source).
     pub bin_selection: Option<ItemId>,
@@ -274,6 +277,7 @@ impl App {
             playing: false,
             last: None,
             zoom: 120.0,
+            snap_grid: false,
             selection: None,
             bin_selection: None,
             seq,
