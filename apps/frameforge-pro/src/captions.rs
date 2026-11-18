@@ -71,6 +71,10 @@ pub struct CaptionEditor {
     pub text: String,
     /// Draft WebVTT voice for the selected caption.
     pub speaker: String,
+    /// Draft colour for the hex row, in the engine's `#rrggbbaa` spelling.
+    pub hex: String,
+    /// Which of the style's three colours the hex row writes.
+    pub hex_slot: ColorSlot,
     /// Draft name for the window's target track.
     pub name: String,
     /// Draft BCP-47 language tag for the window's target track.
@@ -99,6 +103,8 @@ impl CaptionEditor {
             selected: None,
             text: String::new(),
             speaker: String::new(),
+            hex: String::new(),
+            hex_slot: ColorSlot::Text,
             name: String::new(),
             language: String::new(),
             seeded_track: None,
@@ -417,6 +423,26 @@ pub enum ColorSlot {
     Outline,
 }
 
+impl ColorSlot {
+    /// The next slot the hex row writes, in the chip's cycle order.
+    fn next(self) -> Self {
+        match self {
+            Self::Text => Self::Box,
+            Self::Box => Self::Outline,
+            Self::Outline => Self::Text,
+        }
+    }
+
+    /// The chip's label.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Text => "Text",
+            Self::Box => "Box",
+            Self::Outline => "Outline",
+        }
+    }
+}
+
 /// The engine's spelling of a colour: `#rrggbbaa`.
 fn hex_color(color: [u8; 4]) -> String {
     format!("#{:02x}{:02x}{:02x}{:02x}", color[0], color[1], color[2], color[3])
@@ -439,6 +465,12 @@ pub fn cycle_color(app: &mut App, editor: &CaptionEditor, slot: ColorSlot) -> Re
     app.execute("captions.setStyle", params)?;
     app.status = "Caption style updated".to_string();
     Ok(())
+}
+
+/// Set one of the target track's three colours from the hex row's text, so a
+/// colour does not have to come from a fixed palette.
+pub fn set_hex_color(_app: &mut App, _editor: &mut CaptionEditor) -> Result<(), String> {
+    Err("the hex colour field is not wired yet".to_string())
 }
 
 /// The families the engine bundles, in cycle order. Every one of them really
@@ -811,6 +843,24 @@ pub fn show(app: &mut App, ui: &egui::Ui) {
                     }
                     if action(ui, "ff-caption-outline-color", "Outline", false).on_hover_text("Cycle the outline colour").clicked() {
                         command = Some(cycle_color(app, &editor, ColorSlot::Outline));
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(ui::hint("Hex"));
+                if style.is_some() {
+                    if action(ui, "ff-caption-hex-slot", editor.hex_slot.label(), false)
+                        .on_hover_text("Which of the three colours the hex field sets")
+                        .clicked()
+                    {
+                        editor.hex_slot = editor.hex_slot.next();
+                    }
+                    ui.add(egui::TextEdit::singleline(&mut editor.hex).id(egui::Id::new("ff-caption-hex")).desired_width(84.0).hint_text("#rrggbbaa"));
+                    if action(ui, "ff-caption-hex-set", "Set", false).on_hover_text("Set this colour from its hex value").clicked() {
+                        command = Some(set_hex_color(app, &mut editor));
+                        // A commit ends the edit, so hand focus back: otherwise
+                        // the field's own Ctrl+Z would swallow the app's undo.
+                        ui.ctx().memory_mut(|memory| memory.surrender_focus(egui::Id::new("ff-caption-hex")));
                     }
                 }
             });
@@ -1326,5 +1376,70 @@ mod tests {
 
         app.undo();
         assert_eq!(caption_list(&app), vec![(0, frames(36), "one".to_string()), (frames(36), frames(72), "two".to_string())], "one undo restores both cues");
+    }
+
+    #[test]
+    fn setting_a_caption_colour_from_hex_writes_the_style() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        add_track(&mut app, &mut editor).expect("the track is added");
+        let track = editor.track.expect("the new track is the target");
+        let before = style_of(&app, track).expect("the style reads");
+        assert_eq!(before.color, TEXT_COLORS[0], "a new track starts on the palette's first text colour");
+        let undo = app.session.history.undo.len();
+
+        editor.hex_slot = ColorSlot::Text;
+        editor.hex = "  #3366ff  ".to_string();
+        set_hex_color(&mut app, &mut editor).expect("six hex digits set the colour");
+        assert_eq!(style_of(&app, track).expect("the style reads").color, [0x33, 0x66, 0xff, 0xff], "a six-digit colour is opaque");
+        assert_eq!(app.status, "Caption text colour set");
+        assert_eq!(app.session.history.undo.len(), undo + 1, "one undo step");
+
+        // Eight digits keep their alpha, and each slot writes only its own key.
+        editor.hex_slot = ColorSlot::Box;
+        editor.hex = "#11223344".to_string();
+        set_hex_color(&mut app, &mut editor).expect("eight hex digits set the colour");
+        let style = style_of(&app, track).expect("the style reads");
+        assert_eq!(style.background_color, [0x11, 0x22, 0x33, 0x44], "the alpha is kept");
+        assert_eq!(style.color, [0x33, 0x66, 0xff, 0xff], "the box slot leaves the text colour alone");
+        assert_eq!(app.status, "Caption box colour set");
+
+        editor.hex_slot = ColorSlot::Outline;
+        editor.hex = "#00ff00".to_string();
+        set_hex_color(&mut app, &mut editor).expect("the outline slot sets its own colour");
+        assert_eq!(style_of(&app, track).expect("the style reads").outline_color, [0, 255, 0, 255], "the outline colour is written");
+        assert_eq!(app.status, "Caption outline colour set");
+
+        for _ in 0..3 {
+            app.undo();
+        }
+        let restored = style_of(&app, track).expect("the style reads");
+        assert_eq!(
+            (restored.color, restored.background_color, restored.outline_color),
+            (before.color, before.background_color, before.outline_color),
+            "three Ctrl+Z restore all three colours"
+        );
+    }
+
+    #[test]
+    fn a_malformed_hex_colour_is_refused_without_an_edit() {
+        let mut app = caption_app();
+        open(&mut app);
+        let mut editor = app.captions.clone().expect("the editor opens");
+        add_track(&mut app, &mut editor).expect("the track is added");
+        let track = editor.track.expect("the new track is the target");
+        let before = style_of(&app, track).expect("the style reads");
+        let undo = app.session.history.undo.len();
+
+        editor.hex = "blue".to_string();
+        let error = set_hex_color(&mut app, &mut editor).expect_err("a word is not a colour");
+        assert!(error.starts_with("not a colour"), "the message says what is wrong (got {error:?})");
+        editor.hex = "#12345".to_string();
+        let error = set_hex_color(&mut app, &mut editor).expect_err("five digits are not a colour");
+        assert!(error.starts_with("not a colour"), "the message says what is wrong (got {error:?})");
+
+        assert_eq!(style_of(&app, track).expect("the style reads"), before, "a refused colour changes nothing");
+        assert_eq!(app.session.history.undo.len(), undo, "a refused colour adds no undo step");
     }
 }

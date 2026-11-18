@@ -1160,6 +1160,56 @@ fn caption_colour_rows_cycle_text_box_and_outline_each_as_one_undo() {
 }
 
 #[test]
+fn the_caption_colour_row_sets_an_arbitrary_hex_value() {
+    let (mut h, _) = seeded();
+    let style = |h: &Harness| -> filmcraft_project::CaptionStyle {
+        h.app.sequence().and_then(|q| q.caption_tracks.first()).map(|t| t.style.clone()).unwrap_or_default()
+    };
+    h.click(egui::Id::new("ff-caption-open"));
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-add-track"));
+    let start = style(&h);
+
+    // The hex row is not a palette: the slot chip picks which of the three
+    // colours the field writes, and the text is the engine's own spelling. A
+    // six-digit value is opaque; eight digits carry their own alpha.
+    h.frame(Vec::new());
+    h.focus(egui::Id::new("ff-caption-hex"));
+    h.retype("#3366ffcc");
+    h.click(egui::Id::new("ff-caption-hex-set"));
+    assert_eq!(style(&h).color, [0x33, 0x66, 0xff, 0xcc], "the picked colour is written with its alpha (got {:?})", style(&h).color);
+    assert_eq!(h.app.status, "Caption text colour set");
+    h.press(Key::Z, command(false));
+    assert_eq!(style(&h).color, start.color, "one Ctrl+Z restores the palette colour");
+
+    // The slot chip steps to the box colour, which is a different key.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-caption-hex-slot"));
+    h.frame(Vec::new());
+    h.focus(egui::Id::new("ff-caption-hex"));
+    h.retype("#123456");
+    h.click(egui::Id::new("ff-caption-hex-set"));
+    assert_eq!(style(&h).background_color, [0x12, 0x34, 0x56, 0xff], "the box slot sets an opaque box colour (got {:?})", style(&h).background_color);
+    assert_eq!(style(&h).color, start.color, "the text colour is untouched");
+    assert_eq!(h.app.status, "Caption box colour set");
+    h.press(Key::Z, command(false));
+    assert_eq!(style(&h).background_color, start.background_color, "one Ctrl+Z restores the box colour");
+
+    // A word is refused with a reason, and a refused colour is not an edit.
+    h.frame(Vec::new());
+    h.focus(egui::Id::new("ff-caption-hex"));
+    h.retype("blue");
+    h.click(egui::Id::new("ff-caption-hex-set"));
+    assert!(
+        h.app.captions.as_ref().and_then(|e| e.error.as_deref()).is_some_and(|error| error.starts_with("not a colour")),
+        "the window says what is wrong (error {:?})",
+        h.app.captions.as_ref().and_then(|e| e.error.clone())
+    );
+    assert_eq!(style(&h).background_color, start.background_color, "a refused colour leaves the box alone");
+}
+
+#[test]
 fn caption_style_row_sets_alignment_anchor_margin_and_outline_each_as_one_undo() {
     let (mut h, _) = seeded();
     let style = |h: &Harness| -> filmcraft_project::CaptionStyle {
