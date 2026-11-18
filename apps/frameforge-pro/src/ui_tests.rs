@@ -874,7 +874,7 @@ fn the_program_monitor_previews_captions_burned_in() {
 
     let monitor = h.app.monitor.as_ref().expect("the Program monitor rendered a frame");
     assert!(monitor.captions, "the monitor's texture is rendered with the caption burn-in on");
-    assert_eq!(monitor.frame, FrameRate::FPS_24.frame_at(TICKS_PER_SECOND), "the texture is the playhead's frame");
+    assert_eq!(monitor.frame, FrameRate::FPS_24.frame_at(Tick(TICKS_PER_SECOND)), "the texture is the playhead's frame");
     assert!(monitor.revision <= h.app.revision, "the texture was built from this document");
 }
 
