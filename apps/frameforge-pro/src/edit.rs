@@ -1091,11 +1091,18 @@ fn snap_trim(app: &App, clip: filmcraft_project::ClipId, edge: &str, delta: Tick
 }
 
 /// Snap targets for a caption cue gesture: zero, the playhead, every sequence
-/// marker and every other cue's edges. The dragged cue is left out so it
-/// cannot snap to itself.
+/// marker, every clip edge and every other cue's edges. A caption usually
+/// describes the clip under it, so a cut is the edge it most wants to land on.
+/// The dragged cue is left out so it cannot snap to itself.
 fn caption_snap_targets(seq: &Sequence, exclude: Option<u64>, playhead: Tick) -> Vec<Tick> {
     let mut targets = vec![Tick::ZERO, playhead.max(Tick::ZERO)];
     targets.extend(seq.markers.iter().map(|marker| marker.start));
+    for track in seq.video_tracks.iter().chain(&seq.audio_tracks) {
+        for item in &track.items {
+            targets.push(item.start);
+            targets.push(item.start + item.duration);
+        }
+    }
     for track in &seq.caption_tracks {
         for cue in &track.captions {
             if Some(cue.id.0) == exclude {
