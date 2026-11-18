@@ -602,6 +602,57 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T45 - caption Split works from the playhead alone and Merge Down joins the next cue (CI-verified, run 44245155902)
+
+Split at the Playhead refused without a selected cue ("select a caption first"),
+although `captions.split` has always accepted a call with no `caption` and cuts
+every unlocked track's cue the playhead crosses. And Merge only went up: the
+engine's `captions.merge` takes adjacent cues in any order, so folding the next
+cue into the selected one is the same edit in the other direction.
+
+- **Change - Split**: `split_at_playhead` reads `split_all` from the selection
+  before refreshing, sends `caption` only when one cue is selected, and
+  otherwise sends just `time`. It selects the first new right half (the engine
+  reports one id per cut cue) and reports "Split captions at the playhead"
+  (plural) so the status says no single cue was meant; with a selection it
+  keeps "Split caption at the playhead".
+- **Empty split**: with no selection the button first checks that some listed
+  row's own bounds straddle the playhead (`start < t < end`) and reports "no
+  caption crosses the playhead" instead of the engine's bare "nothing to do".
+  The engine still filters locked tracks itself, so a cue on a locked track that
+  is visible in the list is refused by the engine as before.
+- **Change - Merge Down**: a new `next_caption` helper mirrors
+  `previous_caption` (first row after the cue on the same track, in timeline
+  order). `merge_with_next` merges `[id, next]` through `captions.merge`, keeps
+  the earlier id the engine returns, re-seeds the draft fields from the merged
+  cue and reports "Merged caption down". The `Merge Down` button
+  (`ff-caption-merge-down`) sits beside `Merge Up`.
+- **Undo**: both are ordinary `app.execute` edits, so each Split and each merge
+  is exactly one history step and one dirty flag, like every other caption
+  command; the editor refresh after them is the journal-free `captions.list`
+  query.
+- **Tests**: `captions::tests::splitting_at_the_playhead_with_no_cue_selected_cuts_every_cue_it_crosses`
+  drops the selection, splits at 1 s, checks the two 0-1 s / 1-3 s halves, the
+  plural status and the selected right half, and that one undo restores the
+  whole cue. `captions::tests::merging_the_selected_caption_down_folds_the_next_cue_into_it`
+  builds two adjacent 1.5 s cues, merges down and checks the kept id, the 0-3 s
+  span, the line-break-joined text, the status, the engine selection and one
+  undo. `ui_tests::the_caption_editor_splits_without_a_selection_and_merges_down`
+  clears the engine selection (`captions.select` with an empty list) so the
+  window opens with nothing selected, then drives Split, a click on the left
+  half's row and Merge Down.
+- **Limitations**: Merge Down always keeps the earlier cue (the engine merges
+  into the earliest) and joins the texts with a line break; the cues must still
+  be adjacent with nothing between them, which the engine enforces; the
+  empty-split message is an editor nicety, not an engine rule.
+- **Red evidence**: red commit `311d61a` shipped the `Merge Down` button wired to
+  a stub and Split still demanding a selection. Run `44240555224` gave **164
+  passed; 3 failed** - "the playhead split works without a selection" ->
+  "select a caption first", "the cue merges into the one after it" -> "Merge
+  Down is not wired yet", and the UI test's status still "Overwrote on V1 + A1".
+- **CI**: run 44245155902 - fmt, clippy `-D warnings`, check, **167 tests**, release
+  build and the binary self-test.
+
 ## T44 - the Program monitor previews the burned-in captions export ships (CI-verified, run 44235227745)
 
 Export burns the styled caption tracks into the picture when `burn_captions` is
@@ -2321,6 +2372,7 @@ with a real, user-installed runtime.
 | T42 | Sequence In/Out snapping: both `snap_targets` and `caption_snap_targets` carry the sequence's `mark_in` / `mark_out`, so a clip move or trim and a cue move or trim land on the edit's own bounds inside the same 8 px radius | CI-verified, run 44218821681 |
 | T43 | Optional whole-second snapping grid: a lit `Grid` chip toggles `App::snap_grid` (editor state, no undo step, not saved) and `grid_targets(seq.duration())` feeds both target lists, so clip and caption gestures land on the ruler's own second lines inside the same 8 px radius | CI-verified, run 44225603014 |
 | T44 | Burned-in caption preview: `monitor_render_options()` renders the Program monitor with the caption flag on, so the engine's own burn-in lays out and rasterises each enabled track's styled cue just as export ships it, and `Monitor::captions` guards the cached texture | CI-verified, run 44235227745 |
+| T45 | Caption Split from the playhead alone: with nothing selected `split_at_playhead` sends no `caption`, so every unlocked track's cue the playhead crosses is cut under the plural status, and `merge_with_next` adds Merge Down (`next_caption`, `captions.merge` with `[id, next]`, the earlier cue kept), each one undo step | CI-verified, run 44245155902 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
