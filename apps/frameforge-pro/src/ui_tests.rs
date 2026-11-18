@@ -786,8 +786,8 @@ fn a_caption_move_and_trim_snap_to_the_sequence_in_and_out() {
     // 6 s to 9 s. The Out at 8.5 s is 0.45 s from the raw end, outside it.
     let cue = h.app.sequence().and_then(|q| q.caption_tracks.first()).and_then(|t| t.captions.first()).map(|c| c.id.0).expect("the cue is in the document");
     let id = egui::Id::new(("ff-timeline-caption", cue));
-    let rect = h.rect_of(id).expect("the cue paints a bar");
-    let grab = rect.center();
+    let before = h.rect_of(id).expect("the cue paints a bar");
+    let grab = before.center();
     h.drag(grab, &[grab + Vec2::new(10.0, 0.0), grab + Vec2::new(208.0, 0.0)]);
     assert_eq!(spans(&h), vec![(tick(144), tick(216))], "the cue's start snapped to the sequence In (status {:?})", h.app.status);
     assert_eq!(h.app.status, "Moved caption (snapped)");
@@ -795,7 +795,11 @@ fn a_caption_move_and_trim_snap_to_the_sequence_in_and_out() {
     // The moved cue's out edge dragged 0.45 s earlier would end at 8.55 s; the
     // sequence Out at 8.5 s pulls it back, so the cue ends on the mark.
     h.frame(Vec::new());
+    h.frame(Vec::new());
     let rect = h.rect_of(id).expect("the cue still paints a bar");
+    // The bar really is at its new time: a rect read before the move settled
+    // would put the press on empty row and the gesture would scrub instead.
+    assert!((rect.left() - before.left() - 200.0).abs() < 2.0, "the bar moved 5 s (200 px) with the cue");
     let y = rect.center().y;
     let press = Pos2::new(rect.right() - 1.0, y);
     let grab = Pos2::new(rect.right() - 7.9, y);
