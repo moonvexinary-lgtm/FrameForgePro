@@ -441,6 +441,24 @@ impl ColorSlot {
             Self::Outline => "Outline",
         }
     }
+
+    /// The `captions.setStyle` key this slot writes.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Text => "color",
+            Self::Box => "backgroundColor",
+            Self::Outline => "outlineColor",
+        }
+    }
+
+    /// The slot's name in the status message.
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Box => "box",
+            Self::Outline => "outline",
+        }
+    }
 }
 
 /// The engine's spelling of a colour: `#rrggbbaa`.
@@ -467,10 +485,34 @@ pub fn cycle_color(app: &mut App, editor: &CaptionEditor, slot: ColorSlot) -> Re
     Ok(())
 }
 
+/// Parse the engine's colour spelling: `#rrggbb` or `#rrggbbaa`, with or
+/// without the leading `#` and around whitespace. Alpha defaults to opaque.
+fn parse_hex_color(text: &str) -> Result<[u8; 4], String> {
+    let trimmed = text.trim();
+    let digits = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    let invalid = || format!("not a colour: {trimmed} (use #rrggbb or #rrggbbaa)");
+    if !matches!(digits.len(), 6 | 8) || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(invalid());
+    }
+    let byte = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|_| invalid());
+    let alpha = if digits.len() == 8 { byte(6)? } else { 255 };
+    Ok([byte(0)?, byte(2)?, byte(4)?, alpha])
+}
+
 /// Set one of the target track's three colours from the hex row's text, so a
 /// colour does not have to come from a fixed palette.
-pub fn set_hex_color(_app: &mut App, _editor: &mut CaptionEditor) -> Result<(), String> {
-    Err("the hex colour field is not wired yet".to_string())
+pub fn set_hex_color(app: &mut App, editor: &mut CaptionEditor) -> Result<(), String> {
+    let track = target_track(editor)?;
+    let slot = editor.hex_slot;
+    let color = parse_hex_color(&editor.hex)?;
+    let mut params = json!({"track": track});
+    params[slot.key()] = json!(hex_color(color));
+    app.execute("captions.setStyle", params)?;
+    // Show the applied value the way the engine spells it.
+    editor.hex = hex_color(color);
+    editor.error = None;
+    app.status = format!("Caption {} colour set", slot.noun());
+    Ok(())
 }
 
 /// The families the engine bundles, in cycle order. Every one of them really
