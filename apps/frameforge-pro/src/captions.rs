@@ -13,8 +13,10 @@
 //!
 //! Import and export read and write a real caption file through the engine
 //! (`captions.import` / `captions.export`): an import is one undoable edit, an
-//! export is not an edit at all. Split cuts the selected cue at the playhead
-//! and Merge Up folds it into the cue before it on the same track.
+//! export is not an edit at all. Split cuts the selected cue at the playhead,
+//! or every cue the playhead crosses when nothing is selected; Merge Up folds a
+//! cue into the one before it and Merge Down into the one after, on the same
+//! track.
 
 use std::path::{Path, PathBuf};
 
@@ -584,10 +586,23 @@ pub fn export_file(app: &mut App, editor: &mut CaptionEditor, path: PathBuf) -> 
     Ok(count)
 }
 
-/// Split the selected caption at the playhead and select the right half.
+/// Split at the playhead and select the new right half. With a caption
+/// selected that is the selected cue; with nothing selected the engine cuts
+/// every unlocked track's cue the playhead crosses, which is the behaviour a
+/// bare Split should have.
 pub fn split_at_playhead(app: &mut App, editor: &mut CaptionEditor) -> Result<u64, String> {
-    let id = editor.selected.ok_or_else(|| "select a caption first".to_string())?;
-    let value = app.execute("captions.split", json!({"caption": id, "time": app.playhead.0}))?;
+    let t = app.playhead.0;
+    let split_all = editor.selected.is_none();
+    let params = match editor.selected {
+        Some(id) => json!({"caption": id, "time": t}),
+        None => {
+            if !editor.captions.iter().any(|row| row.start < t && t < row.end) {
+                return Err("no caption crosses the playhead".to_string());
+            }
+            json!({"time": t})
+        }
+    };
+    let value = app.execute("captions.split", params)?;
     let right = value
         .get("captions")
         .and_then(Value::as_array)
@@ -599,7 +614,7 @@ pub fn split_at_playhead(app: &mut App, editor: &mut CaptionEditor) -> Result<u6
     if let Some(row) = editor.captions.iter().find(|r| r.id == right).cloned() {
         seed(editor, &row);
     }
-    app.status = "Split caption at the playhead".to_string();
+    app.status = if split_all { "Split captions at the playhead".to_string() } else { "Split caption at the playhead".to_string() };
     Ok(right)
 }
 
@@ -625,9 +640,27 @@ fn previous_caption(editor: &CaptionEditor, id: u64) -> Option<u64> {
     editor.captions[..index].iter().rev().find(|r| r.track == track).map(|r| r.id)
 }
 
-/// Merge the selected caption with the one after it on the same track.
-pub fn merge_with_next(_app: &mut App, _editor: &mut CaptionEditor) -> Result<u64, String> {
-    Err("Merge Down is not wired yet".to_string())
+/// The caption on the same track immediately after `id`, in timeline order.
+fn next_caption(editor: &CaptionEditor, id: u64) -> Option<u64> {
+    let index = editor.captions.iter().position(|r| r.id == id)?;
+    let track = editor.captions[index].track;
+    editor.captions[index + 1..].iter().find(|r| r.track == track).map(|r| r.id)
+}
+
+/// Merge the selected caption with the one after it on the same track, keeping
+/// the selected cue (the merge result is the earlier of the two).
+pub fn merge_with_next(app: &mut App, editor: &mut CaptionEditor) -> Result<u64, String> {
+    let id = editor.selected.ok_or_else(|| "select a caption first".to_string())?;
+    let next = next_caption(editor, id).ok_or_else(|| "the last caption on its track has nothing to merge down into".to_string())?;
+    let value = app.execute("captions.merge", json!({"captions": [id, next]}))?;
+    let kept = value.get("caption").and_then(Value::as_u64).unwrap_or(id);
+    refresh(app, editor);
+    editor.selected = Some(kept);
+    if let Some(row) = editor.captions.iter().find(|r| r.id == kept).cloned() {
+        seed(editor, &row);
+    }
+    app.status = "Merged caption down".to_string();
+    Ok(kept)
 }
 
 fn action(ui: &mut egui::Ui, id: &str, label: &str, accent: bool) -> egui::Response {
