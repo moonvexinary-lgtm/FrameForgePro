@@ -602,6 +602,39 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T42 - clip and caption gestures snap to the sequence In/Out (CI-verified, run 44218821681)
+
+The sequence's own In and Out points bound what an edit is meant to cover, and
+neither gesture family snapped to them: `snap_targets` (clip moves and trims)
+and `caption_snap_targets` (cue moves and trims) carried zero, the playhead, the
+markers and the item or cue edges, but never the sequence's `mark_in` or
+`mark_out`.
+
+- **Change**: both lists now extend with
+  `[seq.mark_in, seq.mark_out].into_iter().flatten()`, one line each. An
+  unmarked sequence stores `None`, so the flatten adds nothing; no engine
+  change, and a committed gesture is still one undoable edit.
+- **Behaviour**: the same 8 px radius (0.2 s at 40 px per second) and the same
+  status wording: "(snapped)" appears only when the delta really moved, because
+  a cue already sitting on the mark must not report a snap it did not make.
+- **Tests**: `edit::tests::clip_and_caption_snap_targets_include_the_sequence_in_and_out`
+  marks In at 2 s and Out at 5 s on the demo sequence and checks both target
+  lists carry them;
+  `ui_tests::a_caption_move_and_trim_snap_to_the_sequence_in_and_out` marks In
+  at 6 s and Out at 8.5 s, drags a 1-4 s cue so its start lands on the In
+  (6-9 s), then trims that cue's out edge onto the Out (6-8.5 s), each restored
+  by one Ctrl+Z. The trim press reads the bar after two idle frames and asserts
+  it moved 200 px, because run `44216451469` showed the press landing on the
+  stale 1-4 s rectangle and scrubbing instead of trimming.
+- **Limitations**: only the sequence's marks are targets; a source clip's own
+  In/Out marks are not, and a grid is still not a snap target at all.
+- **Red evidence**: red commit `1b5b424` added both tests against the old
+  target lists: **158 passed; 2 failed** - the unit test panicked on "the
+  sequence In is a clip snap target", and the gesture stopped at its raw
+  5.95-8.95 s with status "Moved caption".
+- **CI**: run 44218821681 - fmt, clippy `-D warnings`, check, **160 tests**, release
+  build and the binary self-test.
+
 ## T41 - caption gestures snap to clip edges (CI-verified, run 44209906055)
 
 A caption usually describes the clip under it, so a cut is the edge it most
@@ -2201,6 +2234,7 @@ with a real, user-installed runtime.
 | T39 | Caption typography: a Type row cycles the family through the three faces the engine bundles (so nothing falls back silently) and steps line spacing by 0.05 inside the engine's 0.8-4.0 clamp, each through `captions.setStyle` on `App::execute` as one undoable edit | CI-verified, run 44016394634 |
 | T40 | Caption track identity: a Lang row sets the track's BCP-47 language tag (trimmed, refusing an empty one) and a sync control flips its lock read live from the document, each through `captions.setTrack` on `App::execute` as one undoable edit | CI-verified, run 44103850125 |
 | T41 | Caption snapping: `caption_snap_targets` also carries every video/audio item head and tail, so a cue move or trim lands on a cut inside the same 8 px radius the clip gestures use, still committed as one undoable `captions.move` / `captions.trim` edit | CI-verified, run 44209906055 |
+| T42 | Sequence In/Out snapping: both `snap_targets` and `caption_snap_targets` carry the sequence's `mark_in` / `mark_out`, so a clip move or trim and a cue move or trim land on the edit's own bounds inside the same 8 px radius | CI-verified, run 44218821681 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
