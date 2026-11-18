@@ -4465,6 +4465,24 @@ mod tests {
     }
 
     #[test]
+    fn clip_and_caption_snap_targets_include_the_sequence_in_and_out() {
+        let mut s = demo_session();
+        s.execute("markers.markIn", json!({"time": 2 * TICKS_PER_SECOND})).unwrap();
+        s.execute("markers.markOut", json!({"time": 5 * TICKS_PER_SECOND})).unwrap();
+        let seq = s.active_sequence().unwrap();
+        let mark_in = seq.mark_in.expect("the sequence has an in point");
+        let mark_out = seq.mark_out.expect("the sequence has an out point");
+
+        let clips = super::snap_targets(seq, None, Tick::ZERO);
+        assert!(clips.contains(&mark_in), "the sequence In is a clip snap target");
+        assert!(clips.contains(&mark_out), "the sequence Out is a clip snap target");
+
+        let captions = super::caption_snap_targets(seq, None, Tick::ZERO);
+        assert!(captions.contains(&mark_in), "the sequence In is a caption snap target");
+        assert!(captions.contains(&mark_out), "the sequence Out is a caption snap target");
+    }
+
+    #[test]
     fn snap_move_does_not_snap_a_linked_pair_to_its_own_other_half() {
         let mut s = Session::default();
         s.execute("file.newProject", json!({"name": "Snap"})).unwrap();

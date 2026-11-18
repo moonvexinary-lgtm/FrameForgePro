@@ -764,6 +764,53 @@ fn a_caption_move_and_trim_snap_to_a_clip_edge() {
 }
 
 #[test]
+fn a_caption_move_and_trim_snap_to_the_sequence_in_and_out() {
+    let (mut h, _) = seeded();
+    let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
+    let track = created["track"].as_u64().expect("the track id comes back");
+    h.app
+        .execute("captions.add", serde_json::json!({"track": track, "text": "one", "time": TICKS_PER_SECOND, "durationSeconds": 3.0}))
+        .expect("the cue is added");
+    h.app.execute("markers.markIn", serde_json::json!({"time": 6 * TICKS_PER_SECOND})).expect("the in point is marked");
+    h.app.execute("markers.markOut", serde_json::json!({"time": 17 * TICKS_PER_SECOND / 2})).expect("the out point is marked");
+    let spans = |h: &Harness| -> Vec<(i64, i64)> {
+        h.app.sequence().map(|q| q.caption_tracks.iter().flat_map(|t| t.captions.iter().map(|c| (c.start.0, c.end().0))).collect()).unwrap_or_default()
+    };
+    let tick = |frames: i64| FrameRate::FPS_24.tick_of(frames).0;
+    h.app.zoom = 40.0;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    // 1 s to 4 s dragged 4.95 s later would start at 5.95 s; the sequence In at
+    // 6 s is inside the 0.2 s radius and pulls the start over, so the cue lands
+    // 6 s to 9 s. The Out at 8.5 s is 0.45 s from the raw end, outside it.
+    let cue = h.app.sequence().and_then(|q| q.caption_tracks.first()).and_then(|t| t.captions.first()).map(|c| c.id.0).expect("the cue is in the document");
+    let id = egui::Id::new(("ff-timeline-caption", cue));
+    let rect = h.rect_of(id).expect("the cue paints a bar");
+    let grab = rect.center();
+    h.drag(grab, &[grab + Vec2::new(10.0, 0.0), grab + Vec2::new(208.0, 0.0)]);
+    assert_eq!(spans(&h), vec![(tick(144), tick(216))], "the cue's start snapped to the sequence In (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Moved caption (snapped)");
+
+    // The moved cue's out edge dragged 0.45 s earlier would end at 8.55 s; the
+    // sequence Out at 8.5 s pulls it back, so the cue ends on the mark.
+    h.frame(Vec::new());
+    let rect = h.rect_of(id).expect("the cue still paints a bar");
+    let y = rect.center().y;
+    let press = Pos2::new(rect.right() - 1.0, y);
+    let grab = Pos2::new(rect.right() - 7.9, y);
+    let end = Pos2::new(rect.right() - 7.9 - 18.0, y);
+    h.drag(press, &[grab, end]);
+    assert_eq!(spans(&h), vec![(tick(144), tick(204))], "the tail snapped to the sequence Out (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Trimmed caption (snapped)");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(spans(&h), vec![(tick(144), tick(216))], "one Ctrl+Z restores the tail");
+    h.press(Key::Z, command(false));
+    assert_eq!(spans(&h), vec![(tick(24), tick(96))], "and another restores the move");
+}
+
+#[test]
 fn a_caption_track_header_toggles_output_and_lock_each_as_one_undo() {
     let (mut h, _) = seeded();
     let created = h.app.execute("captions.newTrack", serde_json::json!({"name": "Dialogue"})).expect("the caption track is added");
