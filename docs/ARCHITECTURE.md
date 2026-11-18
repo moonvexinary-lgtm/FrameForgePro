@@ -602,6 +602,48 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T44 - the Program monitor previews the burned-in captions export ships (CI-verified, run 44235227745)
+
+Export burns the styled caption tracks into the picture when `burn_captions` is
+on, but the Program monitor rendered with `RenderOptions::default()`, where the
+caption flag is off. A cue's size, box, colours and placement could only be
+seen by exporting: the four style slices before this one changed a picture the
+editor never drew.
+
+- **Change**: `monitor_render_options()` returns `RenderOptions { captions:
+  true, ..Default::default() }` and `monitor_panel` renders through it. No
+  second renderer was written: the engine's `caption_overlays` (from
+  `filmcraft_captions::burn`) lays out and rasterises each enabled track's cue
+  with the track's style, WebVTT `line:`/`align:` overrides included, exactly as
+  export does.
+- **Why no toggle**: the document already defines a caption track's `enabled`
+  flag as "shown in the Program monitor and burned in on export", so the output
+  switch is the way to hide a cue, and the preview matches what a render of the
+  same sequence would contain. A track with output off draws nothing.
+- **Cache**: `Monitor` gains `captions`, the flag its texture was built with, and
+  the re-render guard compares it with the current option as well as frame,
+  revision and sequence. The flag is constant today, but a preview that changes
+  its options must not show a texture built from the old ones.
+- **Tests**: `edit::tests::the_monitor_burns_in_the_captions_export_would` renders
+  one frame with the monitor's own options and with the flag off: an enabled cue
+  must change the pixels, and after `captions.setTrack` turns output off the two
+  renders must agree.
+  `ui_tests::the_program_monitor_previews_captions_burned_in` adds a cue at the
+  playhead in the harness, frames twice and checks the cached texture records the
+  burn-in flag, its frame and its revision.
+- **Limitations**: the burn-in runs on the CPU whenever the monitor re-renders
+  (frame or document change), which costs more than the clean picture; the
+  preview is the sequence's own resolution rather than the export's, and a cue's
+  identifier and WebVTT settings string remain command-only.
+- **Red evidence**: red commit `79783ef` (with the one-line fix `89c2bf2` for
+  `frame_at` taking a `Tick`) added both tests against a stub helper returning
+  the default options: run `44230682968` did not compile, run `44232495458`
+  gave **162 passed; 2 failed** - "the Program monitor renders with the caption
+  burn-in on" and "the monitor's texture is rendered with the caption burn-in
+  on".
+- **CI**: run 44235227745 - fmt, clippy `-D warnings`, check, **164 tests**, release
+  build and the binary self-test.
+
 ## T43 - clip and caption gestures snap to an optional whole-second grid (CI-verified, run 44225603014)
 
 The ruler has always painted one tick per second and labelled every fifth, but
@@ -2278,6 +2320,7 @@ with a real, user-installed runtime.
 | T41 | Caption snapping: `caption_snap_targets` also carries every video/audio item head and tail, so a cue move or trim lands on a cut inside the same 8 px radius the clip gestures use, still committed as one undoable `captions.move` / `captions.trim` edit | CI-verified, run 44209906055 |
 | T42 | Sequence In/Out snapping: both `snap_targets` and `caption_snap_targets` carry the sequence's `mark_in` / `mark_out`, so a clip move or trim and a cue move or trim land on the edit's own bounds inside the same 8 px radius | CI-verified, run 44218821681 |
 | T43 | Optional whole-second snapping grid: a lit `Grid` chip toggles `App::snap_grid` (editor state, no undo step, not saved) and `grid_targets(seq.duration())` feeds both target lists, so clip and caption gestures land on the ruler's own second lines inside the same 8 px radius | CI-verified, run 44225603014 |
+| T44 | Burned-in caption preview: `monitor_render_options()` renders the Program monitor with the caption flag on, so the engine's own burn-in lays out and rasterises each enabled track's styled cue just as export ships it, and `Monitor::captions` guards the cached texture | CI-verified, run 44235227745 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
