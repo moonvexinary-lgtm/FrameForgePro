@@ -1020,13 +1020,15 @@ fn snap_tick(candidate: Tick, targets: &[Tick], tolerance: Tick) -> Tick {
     best
 }
 
-/// Everything a move or trim can snap to: zero, the playhead, every sequence
-/// marker and every clip edge except those of the clips being dragged. A
-/// linked A/V pair moves as one, so the dragged clip's other half is left out
-/// too: the pair would otherwise snap straight back onto itself.
+/// Everything a move or trim can snap to: zero, the playhead, the sequence
+/// In/Out points, every sequence marker and every clip edge except those of the
+/// clips being dragged. A linked A/V pair moves as one, so the dragged clip's
+/// other half is left out too: the pair would otherwise snap straight back onto
+/// itself.
 fn snap_targets(seq: &Sequence, exclude: Option<filmcraft_project::ClipId>, playhead: Tick) -> Vec<Tick> {
     let mut targets = vec![Tick::ZERO, playhead.max(Tick::ZERO)];
     targets.extend(seq.markers.iter().map(|marker| marker.start));
+    targets.extend([seq.mark_in, seq.mark_out].into_iter().flatten());
     let exclude_link = exclude.and_then(|id| seq.find_item(id)).and_then(|(_, item)| item.link);
     for track in seq.video_tracks.iter().chain(&seq.audio_tracks) {
         for item in &track.items {
@@ -1090,13 +1092,15 @@ fn snap_trim(app: &App, clip: filmcraft_project::ClipId, edge: &str, delta: Tick
     Tick(snap_tick(raw_edge, &targets, snap_tolerance(zoom)).0 - base.0)
 }
 
-/// Snap targets for a caption cue gesture: zero, the playhead, every sequence
-/// marker, every clip edge and every other cue's edges. A caption usually
-/// describes the clip under it, so a cut is the edge it most wants to land on.
-/// The dragged cue is left out so it cannot snap to itself.
+/// Snap targets for a caption cue gesture: zero, the playhead, the sequence
+/// In/Out points, every sequence marker, every clip edge and every other cue's
+/// edges. A caption usually describes the clip under it, so a cut is the edge
+/// it most wants to land on. The dragged cue is left out so it cannot snap to
+/// itself.
 fn caption_snap_targets(seq: &Sequence, exclude: Option<u64>, playhead: Tick) -> Vec<Tick> {
     let mut targets = vec![Tick::ZERO, playhead.max(Tick::ZERO)];
     targets.extend(seq.markers.iter().map(|marker| marker.start));
+    targets.extend([seq.mark_in, seq.mark_out].into_iter().flatten());
     for track in seq.video_tracks.iter().chain(&seq.audio_tracks) {
         for item in &track.items {
             targets.push(item.start);
