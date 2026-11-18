@@ -3899,18 +3899,19 @@ pub fn source_monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) 
     }
 }
 
-/// The program monitor, shared by the Edit, Color and new workspaces. The
-/// picture is the engine's rendered sequence frame; the transport is real.
 /// What the Program monitor renders with. Export passes the same caption flag
 /// (`burn_captions`), so the preview is the picture export ships: the engine
-/// lays out and rasterises each enabled track's cue.
+/// lays out and rasterises each enabled track's cue with the track's style.
 ///
-/// Today the flag is still off: the monitor shows the clean picture and a
-/// styled cue only appears after the burn-in decision below is flipped on.
+/// Captions are always previewed because a caption track's output switch is
+/// already the way to hide them: `enabled` means "shown in the Program monitor
+/// and burned in on export" in the document itself.
 fn monitor_render_options() -> filmcraft_render::RenderOptions {
-    filmcraft_render::RenderOptions::default()
+    filmcraft_render::RenderOptions { captions: true, ..filmcraft_render::RenderOptions::default() }
 }
 
+/// The program monitor, shared by the Edit, Color and new workspaces. The
+/// picture is the engine's rendered sequence frame; the transport is real.
 pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     ui.painter().rect_filled(rect, 0.0, ui::BG_PANEL);
     ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, ui::LINE_DARK));
@@ -3931,12 +3932,12 @@ pub fn monitor_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect) {
     let frame = rate.frame_at(app.playhead);
     let seq_end = app.sequence_end();
 
-    // Render only when the shown frame, the document revision or the sequence
-    // changed — through the same compositor export uses.
-    let needs = app.monitor.as_ref().is_none_or(|m| m.frame != frame || m.revision != app.revision || m.seq != seq_id);
+    // Render only when the shown frame, the document revision, the sequence or
+    // the preview options changed — through the same compositor export uses.
+    let options = monitor_render_options();
+    let needs = app.monitor.as_ref().is_none_or(|m| m.frame != frame || m.revision != app.revision || m.seq != seq_id || m.captions != options.captions);
     if needs {
         let playhead = app.playhead;
-        let options = monitor_render_options();
         let rendered = app
             .with_sources(|project, sources| filmcraft_render::render_sequence(project, seq_id, playhead, options, sources))
             .unwrap_or_else(|| filmcraft_render::Image::new(SEQUENCE_W as usize, SEQUENCE_H as usize));
