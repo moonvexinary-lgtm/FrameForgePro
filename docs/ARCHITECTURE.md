@@ -602,6 +602,48 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T43 - clip and caption gestures snap to an optional whole-second grid (CI-verified, run 44225603014)
+
+The ruler has always painted one tick per second and labelled every fifth, but
+no gesture could land on those lines. A cue dragged to 5.95 s stayed at 5.95 s,
+so hitting 6 s exactly was a manual trim on a line already drawn under it.
+
+- **Control**: a `Grid` chip (`ff-timeline-grid`) sits beside the `Snap`
+  checkbox in the timeline header, painted lit while the grid is on by a new
+  `toggle_chip` helper (`chip` stays stateless; this variant reads
+  `ui::ACCENT_DIM` as its lit fill). Turning it on reports "Grid snapping on"
+  and off "Grid snapping off".
+- **Change**: `App::snap_grid` (default `false`) holds the preference, and
+  `grid_targets(duration)` returns `0..=duration` in whole seconds. Both
+  `snap_targets` (clip moves and trims) and `caption_snap_targets` (cue moves
+  and trims) take a `grid: bool` and extend their list with it at every gesture
+  site that passes `app.snap_grid`, so one grid serves both families under the
+  same 8 px radius (0.2 s at 40 px per second).
+- **Why editor state**: the grid is a preference about gestures, not a property
+  of the edit. It lives on `App`, is never written to the document, and toggling
+  it adds no undo step and sets no dirty flag; a committed gesture is still one
+  `timeline.move` / `timeline.trim` / `captions.move` / `captions.trim` edit.
+- **Bounds**: the list stops at the sequence's own duration because no gesture
+  can land past it, so it stays short however long the session runs, and the
+  default is off so every earlier gesture and test keeps its behaviour.
+- **Tests**: `edit::tests::the_grid_covers_whole_seconds_up_to_the_sequence_duration`
+  pins the list's first and last entries and its count, checks a whole second is
+  in both target lists with the grid on, and checks it is absent from the
+  caption list with the grid off.
+  `ui_tests::a_caption_move_snaps_to_whole_seconds_with_the_grid_on` drives one
+  cue drag three ways: grid off leaves the raw time ("Moved caption"), the chip
+  on lands it 6-9 s ("Moved caption (snapped)"), and the chip off again reports
+  "Grid snapping off".
+- **Limitations**: whole seconds only (a sub-second grid is not offered), the
+  grid needs `Snap` on because both live behind the same
+  `app.session.state.snapping` guard, and the preference is not saved with the
+  project or carried into an export.
+- **Red evidence**: red commit `d235719` added both tests against the tree with
+  no chip and no grid: **160 passed; 1 failed**, "no widget registered for
+  Id::new(\"ff-timeline-grid\")".
+- **CI**: run 44225603014 - fmt, clippy `-D warnings`, check, **162 tests**, release
+  build and the binary self-test.
+
 ## T42 - clip and caption gestures snap to the sequence In/Out (CI-verified, run 44218821681)
 
 The sequence's own In and Out points bound what an edit is meant to cover, and
@@ -627,7 +669,7 @@ markers and the item or cue edges, but never the sequence's `mark_in` or
   it moved 200 px, because run `44216451469` showed the press landing on the
   stale 1-4 s rectangle and scrubbing instead of trimming.
 - **Limitations**: only the sequence's marks are targets; a source clip's own
-  In/Out marks are not, and a grid is still not a snap target at all.
+  In/Out marks are not, and a grid is not a snap target until T43 adds one.
 - **Red evidence**: red commit `1b5b424` added both tests against the old
   target lists: **158 passed; 2 failed** - the unit test panicked on "the
   sequence In is a clip snap target", and the gesture stopped at its raw
@@ -2235,6 +2277,7 @@ with a real, user-installed runtime.
 | T40 | Caption track identity: a Lang row sets the track's BCP-47 language tag (trimmed, refusing an empty one) and a sync control flips its lock read live from the document, each through `captions.setTrack` on `App::execute` as one undoable edit | CI-verified, run 44103850125 |
 | T41 | Caption snapping: `caption_snap_targets` also carries every video/audio item head and tail, so a cue move or trim lands on a cut inside the same 8 px radius the clip gestures use, still committed as one undoable `captions.move` / `captions.trim` edit | CI-verified, run 44209906055 |
 | T42 | Sequence In/Out snapping: both `snap_targets` and `caption_snap_targets` carry the sequence's `mark_in` / `mark_out`, so a clip move or trim and a cue move or trim land on the edit's own bounds inside the same 8 px radius | CI-verified, run 44218821681 |
+| T43 | Optional whole-second snapping grid: a lit `Grid` chip toggles `App::snap_grid` (editor state, no undo step, not saved) and `grid_targets(seq.duration())` feeds both target lists, so clip and caption gestures land on the ruler's own second lines inside the same 8 px radius | CI-verified, run 44225603014 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
