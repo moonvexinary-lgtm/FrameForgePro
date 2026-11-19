@@ -1976,7 +1976,7 @@ fn the_color_stack_resets_an_effect_and_one_parameter() {
     assert_eq!(motion_value(&h.app, clip, "rotation"), 25.0, "one Ctrl+Z restores the parameter");
 
     h.frame(Vec::new());
-    h.click(egui::Id::new(&format!("ff-color-reset-effect-{index}")));
+    h.click(egui::Id::new(format!("ff-color-reset-effect-{index}")));
     assert_eq!(motion_value(&h.app, clip, "scale"), 100.0, "the effect button resets every parameter (status {:?})", h.app.status);
     assert_eq!(motion_value(&h.app, clip, "rotation"), 0.0, "rotation is back to its default too");
     assert_eq!(h.app.status, "Effect reset", "the panel names the command that ran");

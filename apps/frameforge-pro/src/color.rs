@@ -148,13 +148,15 @@ fn reset_button(ui: &mut egui::Ui, id: &str, tip: &str) -> egui::Response {
 }
 
 /// Reset one effect's parameters to their defaults through `effects.reset`.
-fn reset_effect(_app: &mut App, _clip: filmcraft_project::ClipId, _index: usize) -> Result<(), String> {
-    Err("not implemented".to_string())
+fn reset_effect(app: &mut App, clip: filmcraft_project::ClipId, index: usize) -> Result<(), String> {
+    app.execute("effects.reset", serde_json::json!({"clip": clip.0, "index": index}))?;
+    Ok(())
 }
 
 /// Reset one parameter of an effect through `effects.resetParam`.
-fn reset_parameter(_app: &mut App, _clip: filmcraft_project::ClipId, _effect: usize, _param: &str) -> Result<(), String> {
-    Err("not implemented".to_string())
+fn reset_parameter(app: &mut App, clip: filmcraft_project::ClipId, effect: usize, param: &str) -> Result<(), String> {
+    app.execute("effects.resetParam", serde_json::json!({"clip": clip.0, "effect": effect, "param": param}))?;
+    Ok(())
 }
 
 /// The selected effect's parameter rows, written through `effects.setParam`.
