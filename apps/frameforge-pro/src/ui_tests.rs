@@ -1975,6 +1975,10 @@ fn the_color_stack_resets_an_effect_and_one_parameter() {
     h.press(Key::Z, command(false));
     assert_eq!(motion_value(&h.app, clip, "rotation"), 25.0, "one Ctrl+Z restores the parameter");
 
+    // A history jump drops the clip selection (`after_history_change`), so the
+    // panel would show its empty state; select the clip again before the row click.
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
     h.frame(Vec::new());
     h.click(egui::Id::new(format!("ff-color-reset-effect-{index}")));
     assert_eq!(motion_value(&h.app, clip, "scale"), 100.0, "the effect button resets every parameter (status {:?})", h.app.status);
