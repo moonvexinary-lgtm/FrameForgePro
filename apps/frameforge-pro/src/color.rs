@@ -61,6 +61,7 @@ fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcra
 
     let mut to_toggle = None;
     let mut to_remove = None;
+    let mut to_reset = None;
     if stack.is_empty() {
         panel.label(crate::ui::hint("No video effects on this clip yet — add one below."));
     }
@@ -73,6 +74,9 @@ fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcra
             }
             if ui.selectable_label(selected, name).clicked() {
                 app.color_effect = Some(*index);
+            }
+            if reset_button(ui, &format!("ff-color-reset-effect-{index}"), "Reset every parameter of this effect").clicked() {
+                to_reset = Some(*index);
             }
             if ui.small_button("✕").clicked() {
                 to_remove = Some(*index);
@@ -91,6 +95,12 @@ fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcra
                 app.color_effect = None;
                 app.status = "Effect removed".to_string();
             }
+            Err(e) => app.status = e,
+        }
+    }
+    if let Some(index) = to_reset {
+        match reset_effect(app, clip, index) {
+            Ok(()) => app.status = "Effect reset".to_string(),
             Err(e) => app.status = e,
         }
     }
@@ -125,6 +135,28 @@ fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcra
     parameters(app, &mut panel, clip);
 }
 
+/// A small, stable-id button for the effect rows: the tests drive it by id, and
+/// the panel's other controls keep their automatic ids.
+fn reset_button(ui: &mut egui::Ui, id: &str, tip: &str) -> egui::Response {
+    let font = egui::FontId::proportional(11.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 18.0), egui::Sense::hover());
+    let response = ui.interact(rect, egui::Id::new(id), egui::Sense::click()).on_hover_text(tip);
+    let fill = if response.hovered() { crate::ui::BG_HOVER } else { crate::ui::BG_INSET };
+    ui.painter().rect_filled(rect, 3.0, fill);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "⟲", font, crate::ui::TEXT_MID);
+    response
+}
+
+/// Reset one effect's parameters to their defaults through `effects.reset`.
+fn reset_effect(_app: &mut App, _clip: filmcraft_project::ClipId, _index: usize) -> Result<(), String> {
+    Err("not implemented".to_string())
+}
+
+/// Reset one parameter of an effect through `effects.resetParam`.
+fn reset_parameter(_app: &mut App, _clip: filmcraft_project::ClipId, _effect: usize, _param: &str) -> Result<(), String> {
+    Err("not implemented".to_string())
+}
+
 /// The selected effect's parameter rows, written through `effects.setParam`.
 fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::ClipId) {
     let Some(effect_index) = app.color_effect else {
@@ -143,49 +175,55 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
     panel.label(egui::RichText::new(def.name).size(12.0).strong().color(crate::ui::ACCENT_HI));
 
     let mut writes: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut resets: Vec<String> = Vec::new();
     egui::ScrollArea::vertical().show(panel, |ui| {
         for p in &def.params {
             let current = instance.params.get(p.id).map(|v| v.value.clone()).unwrap_or_else(|| p.default.clone());
             let animated = instance.params.get(p.id).is_some_and(|v| v.is_animated());
-            match &p.kind {
-                filmcraft_project::ParamKind::Float { min, max, soft_min, soft_max, decimals, .. } => {
-                    let mut value = current.as_f64().unwrap_or_default();
-                    let lo = if soft_min < soft_max { *soft_min } else { *min };
-                    let hi = if soft_min < soft_max { *soft_max } else { *max };
-                    let mut slider = egui::Slider::new(&mut value, lo..=hi).text(format!("{}{}", p.label, if animated { " ◆" } else { "" }));
-                    if *decimals <= 1 {
-                        slider = slider.integer();
-                    }
-                    if ui.add(slider).changed() {
-                        writes.push((p.id.to_string(), serde_json::json!(value)));
-                    }
+            ui.horizontal(|ui| {
+                if reset_button(ui, &format!("ff-color-reset-param-{}", p.id), "Reset this parameter to its default").clicked() {
+                    resets.push(p.id.to_string());
                 }
-                filmcraft_project::ParamKind::Bool => {
-                    let mut value = current.as_bool().unwrap_or_default();
-                    if ui.checkbox(&mut value, p.label).changed() {
-                        writes.push((p.id.to_string(), serde_json::json!(value)));
-                    }
-                }
-                filmcraft_project::ParamKind::Choice(options) => {
-                    let current_index = match &current {
-                        ParamValue::Choice(c) => *c as usize,
-                        _ => 0,
-                    };
-                    let selected_text = options.get(current_index).map(|s| s.to_string()).unwrap_or_else(|| "?".to_string());
-                    let mut new_index = current_index;
-                    egui::ComboBox::from_id_salt(p.id).selected_text(selected_text).show_ui(ui, |ui| {
-                        for (i, option) in options.iter().enumerate() {
-                            ui.selectable_value(&mut new_index, i, *option);
+                match &p.kind {
+                    filmcraft_project::ParamKind::Float { min, max, soft_min, soft_max, decimals, .. } => {
+                        let mut value = current.as_f64().unwrap_or_default();
+                        let lo = if soft_min < soft_max { *soft_min } else { *min };
+                        let hi = if soft_min < soft_max { *soft_max } else { *max };
+                        let mut slider = egui::Slider::new(&mut value, lo..=hi).text(format!("{}{}", p.label, if animated { " ◆" } else { "" }));
+                        if *decimals <= 1 {
+                            slider = slider.integer();
                         }
-                    });
-                    if new_index != current_index {
-                        writes.push((p.id.to_string(), serde_json::json!(new_index)));
+                        if ui.add(slider).changed() {
+                            writes.push((p.id.to_string(), serde_json::json!(value)));
+                        }
+                    }
+                    filmcraft_project::ParamKind::Bool => {
+                        let mut value = current.as_bool().unwrap_or_default();
+                        if ui.checkbox(&mut value, p.label).changed() {
+                            writes.push((p.id.to_string(), serde_json::json!(value)));
+                        }
+                    }
+                    filmcraft_project::ParamKind::Choice(options) => {
+                        let current_index = match &current {
+                            ParamValue::Choice(c) => *c as usize,
+                            _ => 0,
+                        };
+                        let selected_text = options.get(current_index).map(|s| s.to_string()).unwrap_or_else(|| "?".to_string());
+                        let mut new_index = current_index;
+                        egui::ComboBox::from_id_salt(p.id).selected_text(selected_text).show_ui(ui, |ui| {
+                            for (i, option) in options.iter().enumerate() {
+                                ui.selectable_value(&mut new_index, i, *option);
+                            }
+                        });
+                        if new_index != current_index {
+                            writes.push((p.id.to_string(), serde_json::json!(new_index)));
+                        }
+                    }
+                    _ => {
+                        ui.label(format!("{} — not editable in this workspace yet", p.label));
                     }
                 }
-                _ => {
-                    ui.label(format!("{} — not editable in this workspace yet", p.label));
-                }
-            }
+            });
         }
     });
     for (param, value) in writes {
@@ -193,5 +231,91 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
         if let Err(e) = app.execute("effects.setParam", params) {
             app.status = e;
         }
+    }
+    for param in resets {
+        match reset_parameter(app, clip, effect_index, &param) {
+            Ok(()) => app.status = "Parameter reset".to_string(),
+            Err(e) => app.status = e,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use filmcraft_project::ClipId;
+    use serde_json::json;
+
+    /// A 24 fps sequence with one 10 s Bars & Tone pair placed at zero.
+    fn color_app() -> (App, ClipId) {
+        let mut app = App::new();
+        app.execute("file.newSequence", json!({"name": "Color", "fps": 24, "video": 1, "audio": 1})).expect("create the sequence");
+        let item = app.execute("file.newBarsAndTone", json!({"seconds": 10.0})).expect("add bars")["item"].as_u64().expect("the item id");
+        let placed = app.execute("timeline.place", json!({"item": item, "track": "V1", "audioTrack": "A1", "seconds": 0.0})).expect("place the clip");
+        (app, ClipId(placed["clips"][0].as_u64().expect("the video clip id")))
+    }
+
+    fn effect_index(app: &App, clip: ClipId) -> usize {
+        app.sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effects.iter().position(|effect| effect.effect == "motion"))
+            .expect("the clip carries the intrinsic motion effect")
+    }
+
+    fn value(app: &App, clip: ClipId, effect: &str, param: &str) -> f64 {
+        app.sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effect(effect))
+            .and_then(|effect| effect.param(param))
+            .and_then(|param| param.value.as_f64())
+            .unwrap_or_else(|| panic!("{effect}/{param} is set"))
+    }
+
+    fn set(app: &mut App, clip: ClipId, effect: &str, param: &str, value: f64) {
+        app.execute("effects.setParam", json!({"clip": clip.0, "effect": effect, "param": param, "value": value})).expect("set the parameter");
+    }
+
+    #[test]
+    fn resetting_an_effect_restores_every_parameter_in_one_undo_step() {
+        let (mut app, clip) = color_app();
+        let index = effect_index(&app, clip);
+        set(&mut app, clip, "motion", "scale", 150.0);
+        set(&mut app, clip, "motion", "rotation", 30.0);
+
+        reset_effect(&mut app, clip, index).expect("the effect resets");
+
+        assert_eq!(value(&app, clip, "motion", "scale"), 100.0, "scale returns to its default");
+        assert_eq!(value(&app, clip, "motion", "rotation"), 0.0, "rotation returns to its default");
+        app.session.execute("edit.undo", json!({})).expect("one undo");
+        assert_eq!(value(&app, clip, "motion", "scale"), 150.0, "one Ctrl+Z restores the whole effect");
+        assert_eq!(value(&app, clip, "motion", "rotation"), 30.0, "both parameters come back together");
+    }
+
+    #[test]
+    fn resetting_one_parameter_leaves_the_others_alone() {
+        let (mut app, clip) = color_app();
+        let index = effect_index(&app, clip);
+        set(&mut app, clip, "motion", "scale", 150.0);
+        set(&mut app, clip, "motion", "rotation", 30.0);
+
+        reset_parameter(&mut app, clip, index, "rotation").expect("the parameter resets");
+
+        assert_eq!(value(&app, clip, "motion", "rotation"), 0.0, "rotation returns to its default");
+        assert_eq!(value(&app, clip, "motion", "scale"), 150.0, "the other parameter is untouched");
+        app.session.execute("edit.undo", json!({})).expect("one undo");
+        assert_eq!(value(&app, clip, "motion", "rotation"), 30.0, "one Ctrl+Z restores just that parameter");
+    }
+
+    #[test]
+    fn resetting_an_unknown_parameter_reports_the_engine_error() {
+        let (mut app, clip) = color_app();
+        let index = effect_index(&app, clip);
+        set(&mut app, clip, "motion", "rotation", 30.0);
+
+        let error = reset_parameter(&mut app, clip, index, "nope").expect_err("there is no such parameter");
+
+        assert!(error.contains("no param `nope`"), "the engine's own message reaches the panel: {error}");
+        assert_eq!(value(&app, clip, "motion", "rotation"), 30.0, "a refused reset changes nothing");
     }
 }

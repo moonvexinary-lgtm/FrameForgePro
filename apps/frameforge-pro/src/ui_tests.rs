@@ -1931,3 +1931,53 @@ fn the_source_marker_strip_adds_seeks_and_deletes() {
     h.press(Key::Z, command(false));
     assert_eq!(source_marker_starts(&h.app), vec![Tick(2 * TICKS_PER_SECOND)], "deleting a source marker is undoable");
 }
+
+/// The value of one `motion` parameter on a placed clip, or a panic naming it.
+fn motion_value(app: &App, clip: filmcraft_project::ClipId, param: &str) -> f64 {
+    app.sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effect("motion"))
+        .and_then(|effect| effect.param(param))
+        .and_then(|param| param.value.as_f64())
+        .unwrap_or_else(|| panic!("motion/{param} is set"))
+}
+
+#[test]
+fn the_color_stack_resets_an_effect_and_one_parameter() {
+    let (mut h, _item) = seeded();
+    let clip = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.video_tracks.first())
+        .and_then(|track| track.items.first())
+        .map(|item| item.id)
+        .expect("the fixture placed a video clip");
+    h.app.execute("timeline.select", serde_json::json!({"clips": [clip.0]})).expect("select the clip");
+    let index = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effects.iter().position(|effect| effect.effect == "motion"))
+        .expect("the placed clip carries the intrinsic motion effect");
+    h.app.execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "motion", "param": "scale", "value": 140.0})).expect("set scale");
+    h.app.execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "motion", "param": "rotation", "value": 25.0})).expect("set rotation");
+
+    h.app.color_effect = Some(index);
+    h.app.workspace = crate::app::Workspace::Color;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    h.click(egui::Id::new("ff-color-reset-param-rotation"));
+    assert_eq!(motion_value(&h.app, clip, "rotation"), 0.0, "the row button resets just that parameter (status {:?})", h.app.status);
+    assert_eq!(motion_value(&h.app, clip, "scale"), 140.0, "the other parameter is untouched");
+    assert_eq!(h.app.status, "Parameter reset", "the panel names the command that ran");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(motion_value(&h.app, clip, "rotation"), 25.0, "one Ctrl+Z restores the parameter");
+
+    h.frame(Vec::new());
+    h.click(egui::Id::new(&format!("ff-color-reset-effect-{index}")));
+    assert_eq!(motion_value(&h.app, clip, "scale"), 100.0, "the effect button resets every parameter (status {:?})", h.app.status);
+    assert_eq!(motion_value(&h.app, clip, "rotation"), 0.0, "rotation is back to its default too");
+    assert_eq!(h.app.status, "Effect reset", "the panel names the command that ran");
+}
