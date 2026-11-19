@@ -1952,7 +1952,7 @@ fn the_color_stack_resets_an_effect_and_one_parameter() {
         .and_then(|track| track.items.first())
         .map(|item| item.id)
         .expect("the fixture placed a video clip");
-    h.app.execute("timeline.select", serde_json::json!({"clips": [clip.0]})).expect("select the clip");
+    h.app.selection = Some(clip);
     let index = h
         .app
         .sequence()
