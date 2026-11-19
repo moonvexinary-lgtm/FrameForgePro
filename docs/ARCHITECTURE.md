@@ -602,6 +602,56 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T47 - effect reset from the Color stack (CI-verified, run 44436881325)
+
+The Color workspace could apply, toggle, remove and edit an effect's
+parameters, but there was no way back to the defaults short of undoing each
+change by hand - even though the engine has always exposed `effects.reset` and
+`effects.resetParam`, with upstream tests that keep keyframes and reset only
+the named parameter.
+
+- **Controls**: every effect row in the stack gains a `⟲` button
+  (`ff-color-reset-effect-<index>`) and every parameter row gains one
+  (`ff-color-reset-param-<id>`). Both are custom-painted so the id is stable,
+  which is what the UI test clicks; the panel's other controls keep their
+  automatic ids.
+- **Writes**: `reset_effect` sends one `effects.reset` with the clip and the
+  row's index; `reset_parameter` sends one `effects.resetParam` with the clip,
+  the selected effect index and the parameter id. Both go through
+  `App::execute`, so each reset is one undo step and one dirty flag, with the
+  engine's own semantics: table values return to their defaults and an
+  animated parameter gains a default key at the playhead instead of losing its
+  track.
+- **Status**: the panel reports "Effect reset" or "Parameter reset"; an engine
+  refusal - for example ``no param `nope` `` - is shown unchanged and changes
+  nothing, so the row and the status cannot disagree about what ran.
+- **Limits**: reordering, duplicating and presets are still missing, so parity
+  row 68 stays partial. Reset is per instance: a clip with two copies resets
+  only the row clicked. The button resets at the playhead, like the engine
+  command it wraps.
+- **Tests**:
+  `color::tests::resetting_an_effect_restores_every_parameter_in_one_undo_step`
+  sets scale and rotation, resets the effect, checks both defaults and that
+  one undo restores both;
+  `color::tests::resetting_one_parameter_leaves_the_others_alone` checks the
+  surgical case and its one undo;
+  `color::tests::resetting_an_unknown_parameter_reports_the_engine_error`
+  checks the engine's message and that nothing changed.
+  `ui_tests::the_color_stack_resets_an_effect_and_one_parameter` drives the
+  parameter button, undoes it, re-selects the clip (a history jump drops
+  `App::selection`) and drives the effect button through the real frame loop.
+- **Red evidence**: red commit `abac6b0` wired the buttons to stubs returning
+  "not implemented"; run `44431684775` gave **170 passed; 4 failed** - the
+  three unit tests on the stub message and the UI test on a missing widget,
+  because the engine's `timeline.select` does not move `App::selection`.
+  `afed227` selected the clip directly; run `44431771131` then gave the same
+  four behavioural failures, with clippy also refusing a needless `&format!`
+  at the effect-reset click. Green `77dfb31` (run `44434331664`) gave **173
+  passed; 1 failed**, the UI test clicking after the undo had cleared the
+  selection; `06a2d9b` re-selected the clip and run `44436881325` passed.
+- **CI**: run 44436881325 - fmt, clippy `-D warnings`, check, **174 tests**,
+  release build and the binary self-test.
+
 ## T46 - a caption colour can be set from any hex value (CI-verified, run 44327188190)
 
 The style rows could only cycle three fixed palettes - `TEXT_COLORS`,
@@ -2424,6 +2474,7 @@ with a real, user-installed runtime.
 | T44 | Burned-in caption preview: `monitor_render_options()` renders the Program monitor with the caption flag on, so the engine's own burn-in lays out and rasterises each enabled track's styled cue just as export ships it, and `Monitor::captions` guards the cached texture | CI-verified, run 44235227745 |
 | T45 | Caption Split from the playhead alone: with nothing selected `split_at_playhead` sends no `caption`, so every unlocked track's cue the playhead crosses is cut under the plural status, and `merge_with_next` adds Merge Down (`next_caption`, `captions.merge` with `[id, next]`, the earlier cue kept), each one undo step | CI-verified, run 44245155902 |
 | T46 | Any caption colour by hex: a `Hex` row with a Text/Box/Outline slot chip, a field and Set, `parse_hex_color` accepting `#rrggbb`/`#rrggbbaa` and refusing anything else before the document is touched, and `set_hex_color` writing only that slot's `captions.setStyle` key as one undo step | CI-verified, run 44327188190 |
+| T47 | Effect reset from the Color stack: a `⟲` on each effect row and each parameter row runs `effects.reset`/`effects.resetParam` through `App::execute`, one undo step each, keyframes kept as the engine keeps them, defaults restored and engine refusals shown unchanged | CI-verified, run 44436881325 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
