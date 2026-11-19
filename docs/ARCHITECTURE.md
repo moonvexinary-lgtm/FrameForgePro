@@ -602,6 +602,56 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T46 - a caption colour can be set from any hex value (CI-verified, run 44327188190)
+
+The style rows could only cycle three fixed palettes - `TEXT_COLORS`,
+`BOX_COLORS`, `OUTLINE_COLORS`, twelve chips in all - so a colour that was not
+one of them (a brand colour, a colour taken from a design) could only be set by
+running `captions.setStyle` by hand. The engine already takes any `#rrggbb[aa]`,
+and `style_of` reports the live style, so this was purely an app-side gap.
+
+- **Control**: a `Hex` row sits under the palette row: a slot chip
+  (`ff-caption-hex-slot`) that steps Text / Box / Outline, a text field
+  (`ff-caption-hex`) in the engine's own spelling, and `Set`
+  (`ff-caption-hex-set`). The draft text and the chosen slot live on
+  `CaptionEditor`, so neither dirties the project; the chip is the only way the
+  row chooses a colour, and the three palette chips keep their cycling
+  behaviour.
+- **Parsing**: `parse_hex_color` accepts six digits (opaque) or eight (alpha
+  kept), with or without the leading `#` and around whitespace, and refuses
+  anything else with `not a colour: <text> (use #rrggbb or #rrggbbaa)`. A
+  refused value returns before `captions.setStyle` runs, so it changes nothing
+  and adds no undo step.
+- **Write**: `set_hex_color` sends one `captions.setStyle` with only the chosen
+  slot's key (`color`, `backgroundColor`, `outlineColor`, from a new
+  `ColorSlot::key`), reports "Caption text|box|outline colour set" (from
+  `ColorSlot::noun`) and leaves the field showing the normalised value, so the
+  row and the status cannot disagree about which colour was written.
+- **Undo**: it is an ordinary `app.execute` edit - one history step and one
+  dirty flag - like every other style command; the commit also hands focus back
+  to the window, because egui's `TextEdit` would otherwise eat the app's Ctrl+Z.
+- **Tests**: `captions::tests::setting_a_caption_colour_from_hex_writes_the_style`
+  sets a six-digit text colour (opaque), an eight-digit box colour (alpha kept,
+  text colour untouched) and a six-digit outline colour, checks one undo step
+  each and that three undos restore all three.
+  `captions::tests::a_malformed_hex_colour_is_refused_without_an_edit` tries
+  `blue` and `#12345`, checks the "not a colour" message, that the style is
+  unchanged and that no undo step appears.
+  `ui_tests::the_caption_colour_row_sets_an_arbitrary_hex_value` drives the
+  chip, the field and Set for a text colour with alpha and then a box colour,
+  undoing each, and finishes on a refused word.
+- **Limitations**: six or eight digits only (the three-digit shorthand is not
+  accepted), colours are still track-wide because the engine's style is, and a
+  typed value is not validated until `Set` is pressed.
+- **Red evidence**: red commit `bc12556` wired the row to a stub returning "the
+  hex colour field is not wired yet"; it did not compile until the one-line
+  `87c2e4e` derived `Debug` for `ColorSlot` (run `44319191574`: E0277, since
+  `CaptionEditor` derives `Debug`). Run `44322489085` then gave **167 passed; 3
+  failed** - both unit tests on the stub message and the UI test on the
+  unchanged palette colour.
+- **CI**: run 44327188190 - fmt, clippy `-D warnings`, check, **170 tests**, release
+  build and the binary self-test.
+
 ## T45 - caption Split works from the playhead alone and Merge Down joins the next cue (CI-verified, run 44245155902)
 
 Split at the Playhead refused without a selected cue ("select a caption first"),
@@ -2373,6 +2423,7 @@ with a real, user-installed runtime.
 | T43 | Optional whole-second snapping grid: a lit `Grid` chip toggles `App::snap_grid` (editor state, no undo step, not saved) and `grid_targets(seq.duration())` feeds both target lists, so clip and caption gestures land on the ruler's own second lines inside the same 8 px radius | CI-verified, run 44225603014 |
 | T44 | Burned-in caption preview: `monitor_render_options()` renders the Program monitor with the caption flag on, so the engine's own burn-in lays out and rasterises each enabled track's styled cue just as export ships it, and `Monitor::captions` guards the cached texture | CI-verified, run 44235227745 |
 | T45 | Caption Split from the playhead alone: with nothing selected `split_at_playhead` sends no `caption`, so every unlocked track's cue the playhead crosses is cut under the plural status, and `merge_with_next` adds Merge Down (`next_caption`, `captions.merge` with `[id, next]`, the earlier cue kept), each one undo step | CI-verified, run 44245155902 |
+| T46 | Any caption colour by hex: a `Hex` row with a Text/Box/Outline slot chip, a field and Set, `parse_hex_color` accepting `#rrggbb`/`#rrggbbaa` and refusing anything else before the document is touched, and `set_hex_color` writing only that slot's `captions.setStyle` key as one undo step | CI-verified, run 44327188190 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
