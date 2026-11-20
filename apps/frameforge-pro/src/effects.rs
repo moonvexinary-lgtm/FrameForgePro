@@ -10,6 +10,18 @@ use frameforge_bridge::{EffectParamUi, EffectValue, effect_name, effect_params};
 
 use crate::app::App;
 
+/// Move the chain entry at `index` by `delta` (-1 up, +1 down) and return the
+/// entry's new index; a move past either end leaves the chain alone.
+fn move_effect(_composition: &mut frameforge_bridge::Composition, index: usize, _delta: isize) -> usize {
+    index
+}
+
+/// Copy the chain entry at `index` into the slot below it and return the
+/// copy's index, or `None` when there is no entry to copy.
+fn duplicate_effect(_composition: &mut frameforge_bridge::Composition, _index: usize) -> Option<usize> {
+    None
+}
+
 /// The param kinds the shell can edit. The rest are shown read-only — never
 /// faked. Scalar parameters also carry the keyframe editor (the bridge's
 /// keyframes ride the editing engine's keyframe system, in media time).
@@ -244,6 +256,8 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
     // The effect chain.
     let count = app.compositions.get(&item).map(|c| c.effects.len()).unwrap_or(0);
     let mut to_remove = None;
+    let mut to_move = None;
+    let mut to_duplicate = None;
     for index in 0..count {
         let (name, enabled) = {
             let Some(link) = app.compositions.get(&item).and_then(|c| c.effects.get(index)) else { continue };
@@ -260,6 +274,17 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
             }
             if ui.selectable_label(selected, &name).clicked() {
                 app.selected_effect = Some(index);
+            }
+            // Reorder and duplicate are shell-side chain edits: the chain is
+            // this document's own list, so no engine command is involved.
+            if crate::ui::glyph_button(ui, &format!("ff-fx-up-{index}"), "↑", "Move this effect up the chain").clicked() {
+                to_move = Some((index, -1));
+            }
+            if crate::ui::glyph_button(ui, &format!("ff-fx-down-{index}"), "↓", "Move this effect down the chain").clicked() {
+                to_move = Some((index, 1));
+            }
+            if crate::ui::glyph_button(ui, &format!("ff-fx-duplicate-{index}"), "⧉", "Duplicate this effect below itself").clicked() {
+                to_duplicate = Some(index);
             }
             if ui.small_button("✕").clicked() {
                 to_remove = Some(index);
@@ -280,6 +305,23 @@ fn effect_list(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId)
         }
         app.mark_dirty();
         app.status = "Effect removed".to_string();
+    }
+    if let Some((index, delta)) = to_move {
+        let moved = move_effect(app.compositions.entry(item).or_default(), index, delta);
+        if moved != index {
+            app.selected_effect = Some(moved);
+            app.mark_dirty();
+            app.status = if delta < 0 { "Effect moved up" } else { "Effect moved down" }.to_string();
+        } else {
+            app.status = if delta < 0 { "Effect is already first" } else { "Effect is already last" }.to_string();
+        }
+    }
+    if let Some(index) = to_duplicate
+        && let Some(copy) = duplicate_effect(app.compositions.entry(item).or_default(), index)
+    {
+        app.selected_effect = Some(copy);
+        app.mark_dirty();
+        app.status = "Effect duplicated".to_string();
     }
 
     crate::ui::section(&mut panel, "ADD EFFECT");
@@ -416,4 +458,62 @@ fn parameters(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, item: ItemId) 
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A chain of `(effect id, amount)` entries, each with an `amount` parameter
+    /// so a copy can be told from its source.
+    fn chain(entries: &[(&str, f64)]) -> frameforge_bridge::Composition {
+        let mut composition = frameforge_bridge::Composition::default();
+        for (id, amount) in entries {
+            let mut link = frameforge_bridge::EffectLink { effect: id.to_string(), enabled: true, params: HashMap::new() };
+            link.params.insert("amount".to_string(), Param::new(ParamValue::Float(*amount)));
+            composition.effects.push(link);
+        }
+        composition
+    }
+
+    fn ids(composition: &frameforge_bridge::Composition) -> Vec<&str> {
+        composition.effects.iter().map(|link| link.effect.as_str()).collect()
+    }
+
+    fn amounts(composition: &frameforge_bridge::Composition) -> Vec<f64> {
+        composition.effects.iter().filter_map(|link| link.params.get("amount")?.value.as_f64()).collect()
+    }
+
+    #[test]
+    fn moving_an_effect_swaps_it_with_its_neighbour_and_reports_the_new_index() {
+        let mut composition = chain(&[("a", 1.0), ("b", 2.0), ("c", 3.0)]);
+        assert_eq!(move_effect(&mut composition, 0, 1), 1, "down returns the entry's new index");
+        assert_eq!(ids(&composition), vec!["b", "a", "c"]);
+        assert_eq!(move_effect(&mut composition, 2, -1), 1, "up returns the entry's new index");
+        assert_eq!(ids(&composition), vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn moving_past_either_end_leaves_the_chain_alone() {
+        let mut composition = chain(&[("a", 1.0), ("b", 2.0)]);
+        assert_eq!(move_effect(&mut composition, 0, -1), 0, "the first entry cannot move up");
+        assert_eq!(move_effect(&mut composition, 1, 1), 1, "the last entry cannot move down");
+        assert_eq!(move_effect(&mut composition, 9, 1), 9, "an index outside the chain is returned unchanged");
+        assert_eq!(ids(&composition), vec!["a", "b"], "no boundary move reorders anything");
+    }
+
+    #[test]
+    fn duplicating_an_effect_copies_its_parameters_into_the_slot_below() {
+        let mut composition = chain(&[("a", 1.0), ("b", 2.0)]);
+        assert_eq!(duplicate_effect(&mut composition, 0), Some(1), "the copy lands directly below its source");
+        assert_eq!(ids(&composition), vec!["a", "a", "b"]);
+        assert_eq!(amounts(&composition), vec![1.0, 1.0, 2.0], "the copy carries the source's parameters");
+
+        // A real clone: editing the copy must not change the original.
+        composition.effects[1].params.get_mut("amount").expect("the copy keeps its parameter").value = ParamValue::Float(9.0);
+        assert_eq!(amounts(&composition), vec![1.0, 9.0, 2.0], "the copy and its source are independent");
+
+        assert_eq!(duplicate_effect(&mut composition, 3), None, "there is no entry to copy past the end");
+        assert_eq!(composition.effects.len(), 3, "a refused duplicate leaves the chain alone");
+    }
 }

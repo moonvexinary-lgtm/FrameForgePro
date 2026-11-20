@@ -135,16 +135,10 @@ fn stack_panel(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, clip: filmcra
     parameters(app, &mut panel, clip);
 }
 
-/// A small, stable-id button for the effect rows: the tests drive it by id, and
-/// the panel's other controls keep their automatic ids.
+/// A small, stable-id reset button for the effect rows (the shared glyph
+/// button, so the id the test clicks cannot drift with layout).
 fn reset_button(ui: &mut egui::Ui, id: &str, tip: &str) -> egui::Response {
-    let font = egui::FontId::proportional(11.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 18.0), egui::Sense::hover());
-    let response = ui.interact(rect, egui::Id::new(id), egui::Sense::click()).on_hover_text(tip);
-    let fill = if response.hovered() { crate::ui::BG_HOVER } else { crate::ui::BG_INSET };
-    ui.painter().rect_filled(rect, 3.0, fill);
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "⟲", font, crate::ui::TEXT_MID);
-    response
+    crate::ui::glyph_button(ui, id, "⟲", tip)
 }
 
 /// Reset one effect's parameters to their defaults through `effects.reset`.

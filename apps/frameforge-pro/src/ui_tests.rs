@@ -1985,3 +1985,60 @@ fn the_color_stack_resets_an_effect_and_one_parameter() {
     assert_eq!(motion_value(&h.app, clip, "rotation"), 0.0, "rotation is back to its default too");
     assert_eq!(h.app.status, "Effect reset", "the panel names the command that ran");
 }
+
+#[test]
+fn the_effects_chain_moves_and_duplicates_an_effect_each_as_one_undo() {
+    let (mut h, item) = seeded();
+    let clip = v1_id(&h.app);
+    h.app.selection = Some(clip);
+    // Two catalog effects whose `radius` tells them apart, so the order is
+    // read from the parameters instead of two identical display names.
+    {
+        let composition = h.app.compositions.entry(item).or_default();
+        for radius in [1.0, 2.0] {
+            let mut link = frameforge_bridge::EffectLink { effect: "ec.blur.gaussian".to_string(), enabled: true, params: Default::default() };
+            link.params.insert("radius".to_string(), filmcraft_project::keyframe::Param::new(filmcraft_project::keyframe::ParamValue::Float(radius)));
+            composition.effects.push(link);
+        }
+    }
+    let radii = |h: &Harness| -> Vec<f64> {
+        h.app.compositions.get(&item).map(|c| c.effects.iter().filter_map(|l| l.params.get("radius")?.value.as_f64()).collect()).unwrap_or_default()
+    };
+    h.app.workspace = crate::app::Workspace::Effects;
+    // The workspace lays out from the previous frame, so let it settle.
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert_eq!(radii(&h), vec![1.0, 2.0], "the fixture chain starts in insertion order");
+
+    // The first entry has nowhere to go up: the click reports that and edits
+    // nothing (so it is not an undo step either).
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-fx-up-0"));
+    assert_eq!(radii(&h), vec![1.0, 2.0], "Up on the first effect leaves the chain alone");
+    assert_eq!(h.app.status, "Effect is already first");
+
+    // Down swaps the selected effect with its neighbour, and the selection
+    // follows the entry to its new slot.
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-fx-down-0"));
+    assert_eq!(radii(&h), vec![2.0, 1.0], "Down moved the first effect below the second (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Effect moved down");
+    assert_eq!(h.app.selected_effect, Some(1), "the moved effect stays selected");
+    h.press(Key::Z, command(false));
+    assert_eq!(radii(&h), vec![1.0, 2.0], "one Ctrl+Z restores the chain order");
+
+    // A history jump drops the clip selection, so select it again before the
+    // workspace can show the chain.
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    // Duplicate inserts a copy directly below its source, carrying its
+    // parameters, with the copy selected.
+    h.click(egui::Id::new("ff-fx-duplicate-0"));
+    assert_eq!(radii(&h), vec![1.0, 1.0, 2.0], "Duplicate copied the first effect into the slot below it (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Effect duplicated");
+    assert_eq!(h.app.selected_effect, Some(1), "the copy is selected");
+    h.press(Key::Z, command(false));
+    assert_eq!(radii(&h), vec![1.0, 2.0], "one Ctrl+Z removes the copy");
+}
