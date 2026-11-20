@@ -2042,3 +2042,72 @@ fn the_effects_chain_moves_and_duplicates_an_effect_each_as_one_undo() {
     h.press(Key::Z, command(false));
     assert_eq!(radii(&h), vec![1.0, 2.0], "one Ctrl+Z removes the copy");
 }
+
+#[test]
+fn the_effects_stopwatch_keys_deletes_and_clears_a_parameter_through_the_frame_loop() {
+    let (mut h, item) = seeded();
+    let clip = v1_id(&h.app);
+    h.app.selection = Some(clip);
+    // A real EffectCraft parameter (`blurriness` is Gaussian Blur's own id) with
+    // a known static value, so the keys can be read back without touching a
+    // slider.
+    {
+        let composition = h.app.compositions.entry(item).or_default();
+        let mut link = frameforge_bridge::EffectLink { effect: "ec.blur.gaussian".to_string(), enabled: true, params: Default::default() };
+        link.params.insert("blurriness".to_string(), filmcraft_project::keyframe::Param::new(filmcraft_project::keyframe::ParamValue::Float(2.0)));
+        composition.effects.push(link);
+    }
+    let keys = |h: &Harness| -> Vec<(i64, f64)> {
+        h.app
+            .compositions
+            .get(&item)
+            .and_then(|c| c.effects.first())
+            .and_then(|l| l.params.get("blurriness"))
+            .map(|p| p.keyframes.iter().map(|k| (k.time.0, k.value.as_f64().unwrap())).collect())
+            .unwrap_or_default()
+    };
+    h.app.selected_effect = Some(0);
+    h.app.workspace = crate::app::Workspace::Effects;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert!(keys(&h).is_empty(), "the fixture parameter starts static");
+
+    // The stopwatch keys the parameter at the playhead's media time, one
+    // undoable edit per click: 0 s, then 2 s.
+    h.app.playhead = Tick::ZERO;
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-fx-key-blurriness"));
+    let two = Tick(2 * TICKS_PER_SECOND).0;
+    assert_eq!(keys(&h), vec![(0, 2.0)], "the stopwatch added the first key at 0 s (status {:?})", h.app.status);
+
+    h.app.playhead = Tick(2 * TICKS_PER_SECOND);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-fx-key-blurriness"));
+    assert_eq!(keys(&h), vec![(0, 2.0), (two, 2.0)], "a second click at 2 s adds a second key");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(keys(&h), vec![(0, 2.0)], "one Ctrl+Z removes only the second key");
+
+    // A history jump drops the clip selection, so select it again before the
+    // row can be clicked.
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    // The key chip deletes exactly its own key; the static value returns to
+    // the removed key's value when the track is gone.
+    h.click(egui::Id::new("ff-fx-key-del-blurriness-0"));
+    assert!(keys(&h).is_empty(), "the key chip deleted the 0 s key");
+    h.press(Key::Z, command(false));
+    assert_eq!(keys(&h), vec![(0, 2.0)], "one Ctrl+Z restores the deleted key");
+
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    // Clear drops the rest of the track in one undoable edit.
+    h.click(egui::Id::new("ff-fx-key-clear-blurriness"));
+    assert!(keys(&h).is_empty(), "Clear removed every key");
+    h.press(Key::Z, command(false));
+    assert_eq!(keys(&h), vec![(0, 2.0)], "one Ctrl+Z restores the cleared track");
+}
