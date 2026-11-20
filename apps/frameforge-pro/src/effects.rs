@@ -12,14 +12,25 @@ use crate::app::App;
 
 /// Move the chain entry at `index` by `delta` (-1 up, +1 down) and return the
 /// entry's new index; a move past either end leaves the chain alone.
-fn move_effect(_composition: &mut frameforge_bridge::Composition, index: usize, _delta: isize) -> usize {
-    index
+fn move_effect(composition: &mut frameforge_bridge::Composition, index: usize, delta: isize) -> usize {
+    let len = composition.effects.len();
+    if index >= len {
+        return index;
+    }
+    let target = index as isize + delta;
+    if target < 0 || target >= len as isize {
+        return index;
+    }
+    composition.effects.swap(index, target as usize);
+    target as usize
 }
 
 /// Copy the chain entry at `index` into the slot below it and return the
 /// copy's index, or `None` when there is no entry to copy.
-fn duplicate_effect(_composition: &mut frameforge_bridge::Composition, _index: usize) -> Option<usize> {
-    None
+fn duplicate_effect(composition: &mut frameforge_bridge::Composition, index: usize) -> Option<usize> {
+    let copy = composition.effects.get(index)?.clone();
+    composition.effects.insert(index + 1, copy);
+    Some(index + 1)
 }
 
 /// The param kinds the shell can edit. The rest are shown read-only — never
