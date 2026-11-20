@@ -602,6 +602,54 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T48 - reorder and duplicate effects in the chain (CI-verified, run 44673417633)
+
+The Effects workspace could add, remove, toggle and edit an EffectCraft
+effect, but the chain was fixed in insertion order and an effect could not be
+copied. The chain is this document's own `Composition::effects` list, not an
+editing-engine command, so both operations are plain shell-side list edits.
+
+- **Controls**: every chain row gains `↑`, `↓` and `⧉` buttons through a new
+  shared `ui::glyph_button(ui, id, text, tooltip)` with explicit ids
+  (`ff-fx-up-<index>`, `ff-fx-down-<index>`, `ff-fx-duplicate-<index>`). The
+  ids do not drift when a row moves, which is what the UI test clicks. T47's
+  Color reset button now delegates to the same helper, so there is one
+  stable-id button implementation.
+- **Writes**: `move_effect(composition, index, delta)` swaps the entry with its
+  neighbour only when the neighbour is inside the chain, returning the entry's
+  new index; a move past either end leaves the list untouched.
+  `duplicate_effect(composition, index)` clones the entry into the slot below
+  and returns the copy's index, or `None` when there is no entry. `EffectLink`
+  derives `Clone` over its parameter map, so the copy is independent of its
+  source.
+- **Selection and status**: the selection follows the moved or copied entry.
+  The panel reports "Effect moved up", "Effect moved down", "Effect duplicated",
+  or "Effect is already first/last" for a boundary click; only a real change
+  marks the document dirty and becomes an undo step.
+- **Undo**: both edits run inside the Effect workspace's existing per-frame
+  composition snapshot (`record_comp_change`), so each click is exactly one
+  undo step. A boundary click changes nothing, so it records nothing.
+- **Limits**: real serialized presets are still missing, so parity row 68 stays
+  partial. The Color stack (editing-engine effects) still cannot reorder or
+  duplicate because the engine exposes no such command. There is no
+  render-order test for the moved or copied chain yet: the tests assert the
+  document's order, not pixels.
+- **Tests**: `effects::tests::moving_an_effect_swaps_it_with_its_neighbour_and_reports_the_new_index`,
+  `effects::tests::moving_past_either_end_leaves_the_chain_alone` and
+  `effects::tests::duplicating_an_effect_copies_its_parameters_into_the_slot_below`
+  (including that editing the copy leaves the source alone).
+  `ui_tests::the_effects_chain_moves_and_duplicates_an_effect_each_as_one_undo`
+  drives Up on the first row (no-op status), Down on the first row, one Ctrl+Z,
+  re-selects the clip (a history jump drops `App::selection`), and duplicates
+  the first row through the real frame loop, undoing the copy.
+- **Red evidence**: red commit `b1ea2f5` wired the buttons to stubs; run
+  `44670787679` gave **175 passed; 3 failed** - the swap test, the clone test
+  and the UI test. The boundary test passes on the stub by construction,
+  because what it specifies is exactly a no-op. Green `e8b55eb` passed run
+  `44673417633`.
+- **CI**: run 44673417633 - fmt, clippy `-D warnings`, check, **178 tests**,
+  release build and the binary self-test.
+
 ## T47 - effect reset from the Color stack (CI-verified, run 44436881325)
 
 The Color workspace could apply, toggle, remove and edit an effect's
@@ -625,10 +673,11 @@ the named parameter.
 - **Status**: the panel reports "Effect reset" or "Parameter reset"; an engine
   refusal - for example ``no param `nope` `` - is shown unchanged and changes
   nothing, so the row and the status cannot disagree about what ran.
-- **Limits**: reordering, duplicating and presets are still missing, so parity
-  row 68 stays partial. Reset is per instance: a clip with two copies resets
-  only the row clicked. The button resets at the playhead, like the engine
-  command it wraps.
+- **Limits**: at T47, reordering, duplicating and presets were still missing, so
+  parity row 68 stayed partial. T48 later added the EffectCraft chain's reorder
+  and duplicate; real serialized presets and render-order tests remain. Reset
+  is per instance: a clip with two copies resets only the row clicked. The
+  button resets at the playhead, like the engine command it wraps.
 - **Tests**:
   `color::tests::resetting_an_effect_restores_every_parameter_in_one_undo_step`
   sets scale and rotation, resets the effect, checks both defaults and that
@@ -2475,6 +2524,7 @@ with a real, user-installed runtime.
 | T45 | Caption Split from the playhead alone: with nothing selected `split_at_playhead` sends no `caption`, so every unlocked track's cue the playhead crosses is cut under the plural status, and `merge_with_next` adds Merge Down (`next_caption`, `captions.merge` with `[id, next]`, the earlier cue kept), each one undo step | CI-verified, run 44245155902 |
 | T46 | Any caption colour by hex: a `Hex` row with a Text/Box/Outline slot chip, a field and Set, `parse_hex_color` accepting `#rrggbb`/`#rrggbbaa` and refusing anything else before the document is touched, and `set_hex_color` writing only that slot's `captions.setStyle` key as one undo step | CI-verified, run 44327188190 |
 | T47 | Effect reset from the Color stack: a `⟲` on each effect row and each parameter row runs `effects.reset`/`effects.resetParam` through `App::execute`, one undo step each, keyframes kept as the engine keeps them, defaults restored and engine refusals shown unchanged | CI-verified, run 44436881325 |
+| T48 | Effect chain reorder/duplicate in the Effects workspace: per-row `↑`/`↓`/`⧉` through the shared `ui::glyph_button` (`ff-fx-up/down/duplicate-<i>`), swaps only inside the chain, a cloned entry with independent parameters, the selection following the entry, statuses for moves/duplicate/edges, one undo step per real change | CI-verified, run 44673417633 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
