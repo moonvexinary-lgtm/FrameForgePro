@@ -439,3 +439,17 @@ pub fn glyph_button(ui: &mut Ui, id: &str, text: &str, tooltip: &str) -> Respons
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(11.0), color);
     response.on_hover_text(tooltip)
 }
+
+/// A text chip with an explicit, stable id, sized to its own label: for key
+/// lists and other rows whose automatic ids would shift as entries change.
+pub fn chip_button(ui: &mut Ui, id: &str, text: &str, tooltip: &str) -> Response {
+    let font = FontId::proportional(11.0);
+    let width = ui.painter().layout_no_wrap(text.to_string(), font.clone(), TEXT_MID).size().x + 12.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
+    let response = ui.interact(rect, Id::new(id), Sense::click());
+    let fill = if response.hovered() { BG_HOVER } else { BG_INSET };
+    let color = if response.hovered() { ACCENT_HI } else { TEXT_MID };
+    ui.painter().rect_filled(rect, 3.0, fill);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, font, color);
+    response.on_hover_text(tooltip)
+}

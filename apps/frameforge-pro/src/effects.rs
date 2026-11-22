@@ -77,7 +77,13 @@ fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
     let animated = app.compositions.get(&item).and_then(|c| c.effects.get(effect)).and_then(|l| l.params.get(&param.id)).is_some_and(|p| p.is_animated());
     ui.horizontal(|ui| {
         let mut touched = false;
-        if ui.small_button("◆+").on_hover_text(format!("Add keyframe at the playhead (media time {:.2}s)", key_time.seconds())).clicked()
+        if crate::ui::glyph_button(
+            ui,
+            &format!("ff-fx-key-{}", param.id),
+            "◆+",
+            &format!("Add keyframe at the playhead (media time {:.2}s)", key_time.seconds()),
+        )
+        .clicked()
             && let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect))
         {
             let entry = link.params.entry(param.id.clone()).or_insert_with(|| Param::new(ParamValue::Float(value)));
@@ -94,7 +100,8 @@ fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
                 .unwrap_or_default();
             ui.label(format!("{} key{}: ", keys.len(), if keys.len() == 1 { "" } else { "s" }));
             for (t, v) in keys {
-                if ui.small_button(format!("×{:.1}@{:.2}s", v, t.seconds())).on_hover_text("Delete this keyframe").clicked()
+                if crate::ui::chip_button(ui, &format!("ff-fx-key-del-{}-{}", param.id, t.0), &format!("×{v:.1}@{:.2}s", t.seconds()), "Delete this keyframe")
+                    .clicked()
                     && let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect))
                     && let Some(p) = link.params.get_mut(&param.id)
                 {
@@ -102,7 +109,7 @@ fn edit_scalar(app: &mut App, item: ItemId, effect: usize, param: &frameforge_br
                     touched = true;
                 }
             }
-            if ui.small_button("clear").on_hover_text("Remove all keys of this parameter").clicked()
+            if crate::ui::chip_button(ui, &format!("ff-fx-key-clear-{}", param.id), "clear", "Remove all keys of this parameter").clicked()
                 && let Some(link) = app.compositions.get_mut(&item).and_then(|c| c.effects.get_mut(effect))
                 && let Some(p) = link.params.get_mut(&param.id)
             {
