@@ -170,8 +170,19 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
     };
     panel.label(egui::RichText::new(def.name).size(12.0).strong().color(crate::ui::ACCENT_HI));
 
+    // Keys live in media time — the playhead's offset into the clip, through
+    // the same conversion the engine uses, so the stopwatch and the key chips
+    // agree even when the clip is trimmed, retimed or on a nonzero start.
+    let key_time = app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .map(|(_, item)| item.source_time_at(app.playhead.clamp(item.start, (item.end() - filmcraft_time::Tick(1)).max(item.start))))
+        .unwrap_or(app.playhead);
+
     let mut writes: Vec<(String, serde_json::Value)> = Vec::new();
     let mut resets: Vec<String> = Vec::new();
+    let mut key_toggles: Vec<String> = Vec::new();
+    let mut deletions: Vec<(String, i64)> = Vec::new();
     egui::ScrollArea::vertical().show(panel, |ui| {
         for p in &def.params {
             let current = instance.params.get(p.id).map(|v| v.value.clone()).unwrap_or_else(|| p.default.clone());
@@ -220,6 +231,44 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                     }
                 }
             });
+            // Scalar, animatable parameters carry the keyframe row: the
+            // stopwatch keys the value at the playhead and a chip per key
+            // deletes exactly that key (the engine toggles and restores the
+            // removed value when the track empties).
+            if p.animatable && matches!(&p.kind, filmcraft_project::ParamKind::Float { .. }) {
+                ui.horizontal(|ui| {
+                    if crate::ui::glyph_button(
+                        ui,
+                        &format!("ff-color-key-{}", p.id),
+                        "◆+",
+                        &format!("Keyframe at the playhead (media time {:.2}s)", key_time.seconds()),
+                    )
+                    .clicked()
+                    {
+                        key_toggles.push(p.id.to_string());
+                    }
+                    if animated {
+                        let keys: Vec<(i64, f64)> = instance
+                            .params
+                            .get(p.id)
+                            .map(|param| param.keyframes.iter().map(|key| (key.time.0, key.value.as_f64().unwrap_or_default())).collect())
+                            .unwrap_or_default();
+                        ui.label(format!("{} key{}: ", keys.len(), if keys.len() == 1 { "" } else { "s" }));
+                        for (t, v) in keys {
+                            if crate::ui::chip_button(
+                                ui,
+                                &format!("ff-color-key-del-{}-{}", p.id, t),
+                                &format!("×{v:.1}@{:.2}s", filmcraft_time::Tick(t).seconds()),
+                                "Delete this keyframe",
+                            )
+                            .clicked()
+                            {
+                                deletions.push((p.id.to_string(), t));
+                            }
+                        }
+                    }
+                });
+            }
         }
     });
     for (param, value) in writes {
@@ -231,6 +280,30 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
     for param in resets {
         match reset_parameter(app, clip, effect_index, &param) {
             Ok(()) => app.status = "Parameter reset".to_string(),
+            Err(e) => app.status = e,
+        }
+    }
+    for param in key_toggles {
+        // The engine's `effects.addKeyframe` toggles at the playhead, so read
+        // the track after the edit to name what actually happened.
+        let params = serde_json::json!({"clip": clip.0, "effect": effect_index, "param": param, "time": app.playhead.0});
+        match app.execute("effects.addKeyframe", params) {
+            Ok(_) => {
+                let present = app
+                    .sequence()
+                    .and_then(|sequence| sequence.find_item(clip))
+                    .and_then(|(_, item)| item.effects.get(effect_index))
+                    .and_then(|effect| effect.params.get(&param))
+                    .is_some_and(|param| param.keyframes.binary_search_by_key(&key_time, |key| key.time).is_ok());
+                app.status = if present { "Keyframe added" } else { "Keyframe removed" }.to_string();
+            }
+            Err(e) => app.status = e,
+        }
+    }
+    for (param, tick) in deletions {
+        let params = serde_json::json!({"clip": clip.0, "effect": effect_index, "param": param, "mediaTime": tick});
+        match app.execute("effects.deleteKeyframe", params) {
+            Ok(_) => app.status = "Keyframe removed".to_string(),
             Err(e) => app.status = e,
         }
     }
