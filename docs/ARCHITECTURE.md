@@ -602,6 +602,35 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T51 - the keyframe row's boundary is the engine's `animatable` flag (CI-verified, run 45076843535)
+
+Bool and choice parameters looked like the next keyframe rows: `Param` stores
+any `ParamValue` and `effects.addKeyframe` does not inspect the definition.
+The definitions do - `ParamDef` marks Bool and Choice `animatable: false`
+(`b()` and `ch()` in the project crate) - so `effects.setParam` with
+`keyframe: true` returns "cannot be animated". The Color panel's Float-only
+stopwatch gate already matched the model; this slice pins that boundary
+instead of faking past it.
+
+- **Test**: `ui_tests::non_animatable_kinds_offer_no_keyframe_row_and_refuse_a_key`
+  asserts that an animatable Float row registers a stopwatch
+  (`motion/scale`, `opacity/opacity`), that the non-animatable bool
+  (`motion/uniform_scale`) and choice (`opacity/blend`) rows register none,
+  that a keyed `effects.setParam` for both is refused, and that a static
+  write for the bool still succeeds and changes the value.
+- **History**: red `c42b270` (run `45071862095`) asked for bool/choice
+  stopwatches and failed on the absent `ff-color-key-uniform_scale`. The
+  attempted green `c951cd3` (run `45074318086`) failed the same way because
+  the premise was wrong, not the wiring. `6d0a6fe` restored T50's Float-only
+  panel and replaced the test with the boundary above. Both failures stay in
+  the history as the evidence.
+- **Limits**: point, angle and colour are animatable, but the panel has no
+  editor for their values, so they get no stopwatch either; curves are not
+  animatable. Opening bool or choice keys needs an engine change to their
+  `ParamDef`, not a UI patch.
+- **CI**: run 45076843535 - fmt, clippy `-D warnings`, check, **181 tests**,
+  release build and the binary self-test.
+
 ## T50 - keyframing a parameter from the Color panel (CI-verified, run 45068219397)
 
 The Color panel could edit and reset an effect's parameters, but had no way to
@@ -2600,6 +2629,7 @@ with a real, user-installed runtime.
 | T48 | Effect chain reorder/duplicate in the Effects workspace: per-row `↑`/`↓`/`⧉` through the shared `ui::glyph_button` (`ff-fx-up/down/duplicate-<i>`), swaps only inside the chain, a cloned entry with independent parameters, the selection following the entry, statuses for moves/duplicate/edges, one undo step per real change | CI-verified, run 44673417633 |
 | T49 | Effect parameter keyframes from the Effects panel: explicit-id stopwatch/key chips/Clear (`ff-fx-key-<param>`, `ff-fx-key-del-<param>-<tick>`, `ff-fx-key-clear-<param>`) through the new `ui::chip_button`, with a UI test keying a real `blurriness` value at 0 s and 2 s, deleting one key and clearing the track, each one Ctrl+Z | CI-verified, run 45059868885 |
 | T50 | Scalar parameter keyframes from the Color panel: a stopwatch and per-key chips under every animatable `Float` row (`ff-color-key-<param>`, `ff-color-key-del-<param>-<tick>`), running `effects.addKeyframe` with an explicit playhead `time` and `effects.deleteKeyframe` with the key's `mediaTime`, the same `source_time_at` media conversion as the engine, with a UI test keying `motion/scale` at 0 s and 2 s, deleting a key (its value remains) and one Ctrl+Z each | CI-verified, run 45068219397 |
+| T51 | The keyframe row's boundary: pins the engine's `animatable` flag - animatable Float rows have a stopwatch, the non-animatable bool (`motion/uniform_scale`) and choice (`opacity/blend`) rows do not, and a keyed `effects.setParam` for both is refused while a static write succeeds. The failed bool/choice attempt (red c42b270, green c951cd3) is recorded as the evidence | CI-verified, run 45076843535 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
