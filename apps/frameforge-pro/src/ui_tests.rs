@@ -2111,3 +2111,64 @@ fn the_effects_stopwatch_keys_deletes_and_clears_a_parameter_through_the_frame_l
     h.press(Key::Z, command(false));
     assert_eq!(keys(&h), vec![(0, 2.0)], "one Ctrl+Z restores the cleared track");
 }
+
+#[test]
+fn the_color_panel_keys_and_deletes_a_parameter_through_the_frame_loop() {
+    let (mut h, _item) = seeded();
+    let clip = v1_id(&h.app);
+    h.app.selection = Some(clip);
+    let index = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effects.iter().position(|effect| effect.effect == "motion"))
+        .expect("the placed clip carries the intrinsic motion effect");
+    h.app.execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "motion", "param": "scale", "value": 150.0})).expect("set scale");
+    let keys = |h: &Harness| -> Vec<(i64, f64)> {
+        h.app
+            .sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effect("motion"))
+            .and_then(|effect| effect.param("scale"))
+            .map(|param| param.keyframes.iter().map(|key| (key.time.0, key.value.as_f64().unwrap())).collect())
+            .unwrap_or_default()
+    };
+
+    h.app.color_effect = Some(index);
+    h.app.workspace = crate::app::Workspace::Color;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert!(keys(&h).is_empty(), "the fixture parameter starts static");
+
+    // The stopwatch keys the parameter at the playhead's media time, one
+    // undoable edit per click: 0 s, then 2 s.
+    h.app.playhead = Tick::ZERO;
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-color-key-scale"));
+    assert_eq!(keys(&h), vec![(0, 150.0)], "the stopwatch added the first key at 0 s (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Keyframe added");
+
+    h.app.playhead = Tick(2 * TICKS_PER_SECOND);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-color-key-scale"));
+    let two = Tick(2 * TICKS_PER_SECOND).0;
+    assert_eq!(keys(&h), vec![(0, 150.0), (two, 150.0)], "a second click at 2 s adds a second key");
+
+    h.press(Key::Z, command(false));
+    assert_eq!(keys(&h), vec![(0, 150.0)], "one Ctrl+Z removes only the second key");
+
+    // A history jump drops the clip selection, so select it again before the
+    // key row can be clicked.
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+
+    // The key chip deletes exactly its own key; the static value holds the
+    // removed key's value when the track is gone.
+    h.click(egui::Id::new("ff-color-key-del-scale-0"));
+    assert!(keys(&h).is_empty(), "the key chip deleted the 0 s key (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Keyframe removed");
+    assert_eq!(motion_value(&h.app, clip, "scale"), 150.0, "the last removed key leaves its value behind");
+    h.press(Key::Z, command(false));
+    assert_eq!(keys(&h), vec![(0, 150.0)], "one Ctrl+Z restores the deleted key");
+}
