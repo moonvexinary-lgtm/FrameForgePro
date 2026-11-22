@@ -153,6 +153,28 @@ fn reset_parameter(app: &mut App, clip: filmcraft_project::ClipId, effect: usize
     Ok(())
 }
 
+/// A key chip's value text: each parameter keeps its own meaning instead of
+/// being forced through a float (a bool is on/off, a choice is its option).
+fn key_label(kind: &filmcraft_project::ParamKind, value: &ParamValue) -> String {
+    match value {
+        ParamValue::Float(v) => format!("{v:.1}"),
+        ParamValue::Bool(v) => {
+            if *v {
+                "on".to_string()
+            } else {
+                "off".to_string()
+            }
+        }
+        ParamValue::Choice(index) => match kind {
+            filmcraft_project::ParamKind::Choice(options) => {
+                options.get(*index as usize).map(|option| option.to_string()).unwrap_or_else(|| format!("#{index}"))
+            }
+            _ => format!("#{index}"),
+        },
+        _ => "·".to_string(),
+    }
+}
+
 /// The selected effect's parameter rows, written through `effects.setParam`.
 fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::ClipId) {
     let Some(effect_index) = app.color_effect else {
@@ -231,11 +253,13 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                     }
                 }
             });
-            // Scalar, animatable parameters carry the keyframe row: the
-            // stopwatch keys the value at the playhead and a chip per key
-            // deletes exactly that key (the engine toggles and restores the
-            // removed value when the track empties).
-            if p.animatable && matches!(&p.kind, filmcraft_project::ParamKind::Float { .. }) {
+            // Editable, animatable parameters carry the keyframe row: floats,
+            // bools and choices. The stopwatch keys the current value at the
+            // playhead and a chip per key deletes exactly that key (the engine
+            // toggles and restores the removed value when the track empties).
+            if p.animatable
+                && matches!(&p.kind, filmcraft_project::ParamKind::Float { .. } | filmcraft_project::ParamKind::Bool | filmcraft_project::ParamKind::Choice(_))
+            {
                 ui.horizontal(|ui| {
                     if crate::ui::glyph_button(
                         ui,
@@ -248,17 +272,17 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                         key_toggles.push(p.id.to_string());
                     }
                     if animated {
-                        let keys: Vec<(i64, f64)> = instance
+                        let keys: Vec<(i64, String)> = instance
                             .params
                             .get(p.id)
-                            .map(|param| param.keyframes.iter().map(|key| (key.time.0, key.value.as_f64().unwrap_or_default())).collect())
+                            .map(|param| param.keyframes.iter().map(|key| (key.time.0, key_label(&p.kind, &key.value))).collect())
                             .unwrap_or_default();
                         ui.label(format!("{} key{}: ", keys.len(), if keys.len() == 1 { "" } else { "s" }));
                         for (t, v) in keys {
                             if crate::ui::chip_button(
                                 ui,
                                 &format!("ff-color-key-del-{}-{}", p.id, t),
-                                &format!("×{v:.1}@{:.2}s", filmcraft_time::Tick(t).seconds()),
+                                &format!("×{v}@{:.2}s", filmcraft_time::Tick(t).seconds()),
                                 "Delete this keyframe",
                             )
                             .clicked()
