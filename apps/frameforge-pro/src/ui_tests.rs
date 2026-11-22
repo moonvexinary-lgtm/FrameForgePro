@@ -2174,7 +2174,7 @@ fn the_color_panel_keys_and_deletes_a_parameter_through_the_frame_loop() {
 }
 
 #[test]
-fn the_color_panel_keys_bool_and_choice_parameters_through_the_frame_loop() {
+fn non_animatable_kinds_offer_no_keyframe_row_and_refuse_a_key() {
     let (mut h, _item) = seeded();
     let clip = v1_id(&h.app);
     h.app.selection = Some(clip);
@@ -2187,82 +2187,42 @@ fn the_color_panel_keys_bool_and_choice_parameters_through_the_frame_loop() {
     };
     let motion = effect_index(&h, "motion");
     let opacity = effect_index(&h, "opacity");
-    // Non-default values, so a key that held the default would be visible.
-    h.app
-        .execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "motion", "param": "uniform_scale", "value": false}))
-        .expect("set uniform scale");
-    h.app.execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "opacity", "param": "blend", "value": 1})).expect("set the blend mode");
-    let bool_keys = |h: &Harness| -> Vec<(i64, bool)> {
-        h.app
-            .sequence()
-            .and_then(|sequence| sequence.find_item(clip))
-            .and_then(|(_, item)| item.effect("motion"))
-            .and_then(|effect| effect.param("uniform_scale"))
-            .map(|param| param.keyframes.iter().filter_map(|key| Some((key.time.0, key.value.as_bool()?))).collect())
-            .unwrap_or_default()
-    };
-    let blend_keys = |h: &Harness| -> Vec<(i64, u32)> {
-        h.app
-            .sequence()
-            .and_then(|sequence| sequence.find_item(clip))
-            .and_then(|(_, item)| item.effect("opacity"))
-            .and_then(|effect| effect.param("blend"))
-            .map(|param| {
-                param
-                    .keyframes
-                    .iter()
-                    .filter_map(|key| match key.value {
-                        filmcraft_project::keyframe::ParamValue::Choice(index) => Some((key.time.0, index)),
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let blend = |h: &Harness| -> u32 {
-        h.app
-            .sequence()
-            .and_then(|sequence| sequence.find_item(clip))
-            .and_then(|(_, item)| item.effect("opacity"))
-            .and_then(|effect| effect.param("blend"))
-            .map(|param| match param.value {
-                filmcraft_project::keyframe::ParamValue::Choice(index) => index,
-                _ => panic!("blend is a choice"),
-            })
-            .expect("the clip carries opacity/blend")
-    };
 
-    // A bool parameter keys its `false` value at 0 s and undoes cleanly.
+    // The float rows offer the stopwatch ...
     h.app.color_effect = Some(motion);
     h.app.workspace = crate::app::Workspace::Color;
     h.frame(Vec::new());
     h.frame(Vec::new());
-    assert!(bool_keys(&h).is_empty(), "uniform_scale starts static");
-    h.app.playhead = Tick::ZERO;
-    h.frame(Vec::new());
-    h.click(egui::Id::new("ff-color-key-uniform_scale"));
-    assert_eq!(bool_keys(&h), vec![(0, false)], "the stopwatch keyed the bool (status {:?})", h.app.status);
-    assert_eq!(h.app.status, "Keyframe added");
-    h.press(Key::Z, command(false));
-    assert!(bool_keys(&h).is_empty(), "one Ctrl+Z removes the bool key");
+    assert!(h.rect_of(egui::Id::new("ff-color-key-scale")).is_some(), "an animatable float row has a stopwatch");
 
-    // A choice parameter keys its selected option; the chip deletes that key
-    // and the option remains as the static value.
-    h.app.selection = Some(clip);
-    h.frame(Vec::new());
+    // ... the bool row does not: the engine marks `uniform_scale` as not
+    // animatable, so offering a stopwatch would be a control the document
+    // refuses.
+    assert!(h.rect_of(egui::Id::new("ff-color-key-uniform_scale")).is_none(), "no stopwatch for a non-animatable bool");
+    let refused =
+        h.app.execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "motion", "param": "uniform_scale", "value": false, "keyframe": true}));
+    assert!(refused.is_err(), "the engine refuses to animate a non-animatable bool: {refused:?}");
+    // A static write is still fine.
+    h.app
+        .execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "motion", "param": "uniform_scale", "value": false}))
+        .expect("a non-animatable parameter is still editable as a static value");
+    let uniform_scale = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effect("motion"))
+        .and_then(|effect| effect.param("uniform_scale"))
+        .and_then(|param| param.value.as_bool())
+        .expect("motion/uniform_scale is set");
+    assert!(!uniform_scale, "the static value changed");
+
+    // The choice row behaves the same way.
     h.frame(Vec::new());
     h.app.color_effect = Some(opacity);
     h.frame(Vec::new());
     h.frame(Vec::new());
-    h.click(egui::Id::new("ff-color-key-blend"));
-    assert_eq!(blend_keys(&h), vec![(0, 1)], "the stopwatch keyed the choice (status {:?})", h.app.status);
-    assert_eq!(h.app.status, "Keyframe added");
-
-    h.frame(Vec::new());
-    h.click(egui::Id::new("ff-color-key-del-blend-0"));
-    assert!(blend_keys(&h).is_empty(), "the key chip deleted the choice key (status {:?})", h.app.status);
-    assert_eq!(h.app.status, "Keyframe removed");
-    assert_eq!(blend(&h), 1, "the deleted key's option remains as the static value");
-    h.press(Key::Z, command(false));
-    assert_eq!(blend_keys(&h), vec![(0, 1)], "one Ctrl+Z restores the choice key");
+    assert!(h.rect_of(egui::Id::new("ff-color-key-opacity")).is_some(), "the opacity float row has a stopwatch");
+    assert!(h.rect_of(egui::Id::new("ff-color-key-blend")).is_none(), "no stopwatch for a non-animatable choice");
+    let refused = h.app.execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "opacity", "param": "blend", "value": 1, "keyframe": true}));
+    assert!(refused.is_err(), "the engine refuses to animate a non-animatable choice: {refused:?}");
 }
