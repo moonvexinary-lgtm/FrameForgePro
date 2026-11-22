@@ -602,6 +602,43 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T50 - keyframing a parameter from the Color panel (CI-verified, run 45068219397)
+
+The Color panel could edit and reset an effect's parameters, but had no way to
+key one: an animated parameter only showed a diamond, and keys could only
+arrive through `effects.setParam`.
+
+- **Controls**: every scalar, animatable parameter gets a keyframe row under
+  its slider - the stopwatch `ff-color-key-<param>` and one chip per key
+  `ff-color-key-del-<param>-<tick>` - through the shared `ui::glyph_button` and
+  `ui::chip_button`, so ids do not shift as keys come and go.
+- **Commands**: the stopwatch runs the engine's `effects.addKeyframe` with an
+  explicit `time` (the playhead), because `App::execute` does not move the
+  engine playhead; the engine converts it to media time and toggles the key
+  there. A chip runs `effects.deleteKeyframe` with that key's `mediaTime`.
+  Reading the track after a toggle names what happened ("Keyframe added" or
+  "Keyframe removed"); deleting the last key leaves its value as the static
+  value, exactly as `remove_keyframe_at` does.
+- **Media time**: the toggle and the chip list both use the item's
+  `source_time_at` around the playhead clamped to the clip - the same
+  conversion the engine applies - so keys follow a trimmed, retimed or offset
+  clip and the chip ids always match the keys the engine holds.
+- **Undo**: one `App::execute` per click, so every added or deleted key is a
+  single Ctrl+Z.
+- **Limits**: there is no Clear - the engine has no clear-all command for a
+  parameter, so only individual keys are deletable. Only `Float` parameters
+  get a stopwatch; bool, colour, point, angle, choice and curve parameters do
+  not. The test asserts the document's keys and values, not pixels.
+  EffectCraft chain parameters are keyed in the Effects workspace (T49).
+- **Tests**: `ui_tests::the_color_panel_keys_and_deletes_a_parameter_through_the_frame_loop`
+  sets the intrinsic `motion` scale to 150, keys it at 0 s and 2 s, undoes the
+  second key, deletes the 0 s key through its chip (the value stays 150) and
+  undoes that.
+- **Red evidence**: red commit `eba6667` added the test alone; run
+  `45065795826` gave **179 passed; 1 failed**, stopping on ``no widget registered for `Id::new("ff-color-key-scale")` ``.
+- **CI**: run 45068219397 - fmt, clippy `-D warnings`, check, **180 tests**,
+  release build and the binary self-test.
+
 ## T49 - keyframing an effect parameter from the Effects panel (CI-verified, run 45059868885)
 
 The Effects panel could key an EffectCraft scalar parameter with the stopwatch,
@@ -2562,6 +2599,7 @@ with a real, user-installed runtime.
 | T47 | Effect reset from the Color stack: a `⟲` on each effect row and each parameter row runs `effects.reset`/`effects.resetParam` through `App::execute`, one undo step each, keyframes kept as the engine keeps them, defaults restored and engine refusals shown unchanged | CI-verified, run 44436881325 |
 | T48 | Effect chain reorder/duplicate in the Effects workspace: per-row `↑`/`↓`/`⧉` through the shared `ui::glyph_button` (`ff-fx-up/down/duplicate-<i>`), swaps only inside the chain, a cloned entry with independent parameters, the selection following the entry, statuses for moves/duplicate/edges, one undo step per real change | CI-verified, run 44673417633 |
 | T49 | Effect parameter keyframes from the Effects panel: explicit-id stopwatch/key chips/Clear (`ff-fx-key-<param>`, `ff-fx-key-del-<param>-<tick>`, `ff-fx-key-clear-<param>`) through the new `ui::chip_button`, with a UI test keying a real `blurriness` value at 0 s and 2 s, deleting one key and clearing the track, each one Ctrl+Z | CI-verified, run 45059868885 |
+| T50 | Scalar parameter keyframes from the Color panel: a stopwatch and per-key chips under every animatable `Float` row (`ff-color-key-<param>`, `ff-color-key-del-<param>-<tick>`), running `effects.addKeyframe` with an explicit playhead `time` and `effects.deleteKeyframe` with the key's `mediaTime`, the same `source_time_at` media conversion as the engine, with a UI test keying `motion/scale` at 0 s and 2 s, deleting a key (its value remains) and one Ctrl+Z each | CI-verified, run 45068219397 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
