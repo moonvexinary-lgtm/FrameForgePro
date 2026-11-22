@@ -621,12 +621,12 @@ automatic id and no test drove them: parity row 64 rested on code inspection.
 - **Undo**: the workspace's per-frame composition snapshot still records one
   step per click, so the second key, the deleted key and the cleared track are
   each restored by one Ctrl+Z.
-- **Limits**: only the Effects panel is covered. The Color panel has its own
-  copy of the keyframe row for editing-engine effects; its buttons keep
-  automatic ids and remain code-inspected. Bool, colour and choice parameters
-  still have no keyframe UI. The test asserts the document order (keys and
-  values), not pixels; M2 already proves keyframed evaluation through
-  render/export.
+- **Limits**: only the Effects panel has a keyframe row. The Color panel shows a
+  diamond beside animated parameters and edits them through `effects.setParam`
+  (which preserves existing keys), but it has no stopwatch, key list or Clear.
+  Bool, colour and choice parameters still have no keyframe UI. The test
+  asserts the document's keys and values, not pixels; M2 already proves
+  keyframed evaluation through render/export.
 - **Tests**: `ui_tests::the_effects_stopwatch_keys_deletes_and_clears_a_parameter_through_the_frame_loop`
   sets a real `ec.blur.gaussian` `blurriness` value, keys it at 0 s and 2 s,
   undoes the second key, deletes the 0 s key through its chip, and clears the
