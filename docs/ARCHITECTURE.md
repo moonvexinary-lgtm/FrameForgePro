@@ -602,6 +602,42 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T49 - keyframing an effect parameter from the Effects panel (CI-verified, run 45059868885)
+
+The Effects panel could key an EffectCraft scalar parameter with the stopwatch,
+delete one key from the key list and clear the track, but every control had an
+automatic id and no test drove them: parity row 64 rested on code inspection.
+
+- **Controls**: the stopwatch is `ff-fx-key-<param>`, each key chip is
+  `ff-fx-key-del-<param>-<tick>` and Clear is `ff-fx-key-clear-<param>`, all
+  through explicit-id helpers. `ui::chip_button` is the text-chip counterpart
+  to `glyph_button`: it sizes itself to the label, so the key's value and time
+  stay visible while the id remains stable as keys come and go.
+- **Behaviour**: unchanged and now exercised end to end. The stopwatch keys the
+  parameter at the playhead's offset into the clip (media time) - 0 s, then 2 s
+  in the test. A key chip deletes exactly its key; when the last key goes, the
+  engine's `remove_keyframe_at` restores that key's value as the static value.
+  Clear drops every key and holds the value at the playhead, as before.
+- **Undo**: the workspace's per-frame composition snapshot still records one
+  step per click, so the second key, the deleted key and the cleared track are
+  each restored by one Ctrl+Z.
+- **Limits**: only the Effects panel is covered. The Color panel has its own
+  copy of the keyframe row for editing-engine effects; its buttons keep
+  automatic ids and remain code-inspected. Bool, colour and choice parameters
+  still have no keyframe UI. The test asserts the document order (keys and
+  values), not pixels; M2 already proves keyframed evaluation through
+  render/export.
+- **Tests**: `ui_tests::the_effects_stopwatch_keys_deletes_and_clears_a_parameter_through_the_frame_loop`
+  sets a real `ec.blur.gaussian` `blurriness` value, keys it at 0 s and 2 s,
+  undoes the second key, deletes the 0 s key through its chip, and clears the
+  track, re-selecting the clip after each history jump.
+- **Red evidence**: red commit `db99ead` added the test alone; run
+  `44678161274` gave **178 passed; 1 failed**, the test stopping on
+  ``no widget registered for `Id::new("ff-fx-key-blurriness")` ``. Green `85894cd` passed run
+  `45059868885`.
+- **CI**: run 45059868885 - fmt, clippy `-D warnings`, check, **179 tests**,
+  release build and the binary self-test.
+
 ## T48 - reorder and duplicate effects in the chain (CI-verified, run 44673417633)
 
 The Effects workspace could add, remove, toggle and edit an EffectCraft
@@ -2525,6 +2561,7 @@ with a real, user-installed runtime.
 | T46 | Any caption colour by hex: a `Hex` row with a Text/Box/Outline slot chip, a field and Set, `parse_hex_color` accepting `#rrggbb`/`#rrggbbaa` and refusing anything else before the document is touched, and `set_hex_color` writing only that slot's `captions.setStyle` key as one undo step | CI-verified, run 44327188190 |
 | T47 | Effect reset from the Color stack: a `⟲` on each effect row and each parameter row runs `effects.reset`/`effects.resetParam` through `App::execute`, one undo step each, keyframes kept as the engine keeps them, defaults restored and engine refusals shown unchanged | CI-verified, run 44436881325 |
 | T48 | Effect chain reorder/duplicate in the Effects workspace: per-row `↑`/`↓`/`⧉` through the shared `ui::glyph_button` (`ff-fx-up/down/duplicate-<i>`), swaps only inside the chain, a cloned entry with independent parameters, the selection following the entry, statuses for moves/duplicate/edges, one undo step per real change | CI-verified, run 44673417633 |
+| T49 | Effect parameter keyframes from the Effects panel: explicit-id stopwatch/key chips/Clear (`ff-fx-key-<param>`, `ff-fx-key-del-<param>-<tick>`, `ff-fx-key-clear-<param>`) through the new `ui::chip_button`, with a UI test keying a real `blurriness` value at 0 s and 2 s, deleting one key and clearing the track, each one Ctrl+Z | CI-verified, run 45059868885 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
