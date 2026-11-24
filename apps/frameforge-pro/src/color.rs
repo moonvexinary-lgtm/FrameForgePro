@@ -10,15 +10,45 @@ use filmcraft_project::keyframe::ParamValue;
 use crate::app::App;
 use crate::edit;
 
-/// The Color workspace's hex draft for colour parameters: which parameter it
-/// belongs to, the document value it was loaded from, and the text being
-/// typed. Reloading when either changes keeps undo and the other editors
-/// honest without discarding an edit in progress.
+/// One hex draft per colour parameter (effect index plus parameter id): the
+/// document value it was loaded from and the text being typed. A shared draft
+/// would be rewritten by every colour row on every frame - the bug T53's test
+/// caught - so each row keeps its own.
+#[derive(Default)]
+pub struct HexDrafts {
+    rows: std::collections::BTreeMap<(usize, String), HexDraft>,
+}
+
 #[derive(Default)]
 pub struct HexDraft {
-    pub target: Option<(usize, String)>,
     pub loaded: String,
     pub text: String,
+}
+
+impl HexDrafts {
+    /// The draft for one colour parameter, reloaded when the document value it
+    /// was loaded from changes (an undo, a reset, another editor).
+    pub fn row(&mut self, effect: usize, param: &str, current: &str) -> &mut HexDraft {
+        let draft = self.rows.entry((effect, param.to_string())).or_default();
+        if draft.loaded != current {
+            draft.loaded = current.to_string();
+            draft.text = current.to_string();
+        }
+        draft
+    }
+
+    /// The text of one parameter's draft.
+    pub fn text(&self, effect: usize, param: &str) -> Option<&str> {
+        self.rows.get(&(effect, param.to_string())).map(|draft| draft.text.as_str())
+    }
+
+    /// Replace a draft with the canonical spelling after a successful write.
+    pub fn canonicalise(&mut self, effect: usize, param: &str, hex: &str) {
+        if let Some(draft) = self.rows.get_mut(&(effect, param.to_string())) {
+            draft.loaded = hex.to_string();
+            draft.text = hex.to_string();
+        }
+    }
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
@@ -241,22 +271,18 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                     filmcraft_project::ParamKind::Color => {
                         // The engine accepts `#rrggbb`/`#rrggbbaa` strings for
                         // colour parameters, so the row edits that spelling and
-                        // writes it back canonically. The draft belongs to one
-                        // parameter and reloads when the document value it was
-                        // loaded from changes (an undo, a reset, a keyframe).
-                        let target = (effect_index, p.id.to_string());
+                        // writes it back canonically. The draft is per parameter
+                        // and reloads when the document value it was loaded from
+                        // changes (an undo, a reset, a keyframe).
                         let current_hex = filmcraft_color::to_hex(current.as_color().unwrap_or([0.0, 0.0, 0.0, 1.0]));
-                        if app.color_hex.target.as_ref() != Some(&target) || app.color_hex.loaded != current_hex {
-                            app.color_hex.target = Some(target);
-                            app.color_hex.loaded = current_hex.clone();
-                            app.color_hex.text = current_hex;
-                        }
-                        ui.add(egui::TextEdit::singleline(&mut app.color_hex.text).id(egui::Id::new(format!("ff-color-hex-{}", p.id))).desired_width(80.0));
+                        let draft = app.color_hex.row(effect_index, p.id, &current_hex);
+                        ui.add(egui::TextEdit::singleline(&mut draft.text).id(egui::Id::new(format!("ff-color-hex-{}", p.id))).desired_width(80.0));
                         if crate::ui::chip_button(ui, &format!("ff-color-hex-set-{}", p.id), "Set", "Set this colour from #rrggbb or #rrggbbaa").clicked() {
-                            match filmcraft_color::parse_hex(&app.color_hex.text) {
+                            match filmcraft_color::parse_hex(&draft.text) {
                                 Some(color) => {
                                     let hex = filmcraft_color::to_hex(color);
-                                    app.color_hex.text = hex.clone();
+                                    draft.loaded = hex.clone();
+                                    draft.text = hex.clone();
                                     writes.push((p.id.to_string(), serde_json::json!(hex)));
                                 }
                                 None => invalid = Some("A colour is #rrggbb or #rrggbbaa".to_string()),

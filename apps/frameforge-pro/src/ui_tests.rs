@@ -2299,15 +2299,17 @@ fn the_color_panel_sets_a_colour_from_hex_through_the_frame_loop() {
     assert!(h.rect_of(field).is_some(), "the colour row has a hex field");
     assert!(h.rect_of(set).is_some(), "the colour row has a Set button");
 
-    // Typing a value and committing it is one undoable edit.
+    // Typing a value and committing it is one undoable edit. Each colour row
+    // keeps its own draft, so the tint's three colour rows cannot overwrite
+    // each other's text between frames.
     h.focus(field);
     assert_eq!(h.context.memory(|memory| memory.focused()), Some(field), "the hex field holds keyboard focus");
     h.retype("ff8000");
-    assert_eq!(h.app.color_hex.text, "ff8000", "the hex field holds the typed value");
+    assert_eq!(h.app.color_hex.text(tint, "black"), Some("ff8000"), "the hex field holds the typed value");
     h.context.memory_mut(|memory| memory.surrender_focus(field));
     h.frame(Vec::new());
     h.click(set);
-    assert_eq!(h.app.color_hex.text, "#ff8000", "Set canonicalised the field (status {:?})", h.app.status);
+    assert_eq!(h.app.color_hex.text(tint, "black"), Some("#ff8000"), "Set canonicalised the field (status {:?})", h.app.status);
     let written = black(&h).expect("the colour is still set");
     assert!(
         (written[0] - 1.0).abs() < 1e-3 && (written[1] - 0.502).abs() < 1e-2 && written[2].abs() < 1e-3,

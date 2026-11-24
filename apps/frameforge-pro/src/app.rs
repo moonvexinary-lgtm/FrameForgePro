@@ -219,9 +219,9 @@ pub struct App {
     pub timeline_drag: Option<TimelineDrag>,
     /// The selected FilmCraft effect of the Color workspace's clip.
     pub color_effect: Option<usize>,
-    /// The Color workspace's hex draft for colour parameters: which parameter
-    /// it belongs to, the document value it was loaded from, and the text typed.
-    pub color_hex: crate::color::HexDraft,
+    /// The Color workspace's hex drafts, one per colour parameter: the document
+    /// value each was loaded from and the text being typed.
+    pub color_hex: crate::color::HexDrafts,
     /// The Color workspace's stack width (draggable gutter).
     pub color_stack_w: f32,
     /// The Roto AI (XMem) panel: runtime fields, consent, the verified runtime
@@ -335,7 +335,7 @@ impl App {
             wall_start: None,
             timeline_drag: None,
             color_effect: None,
-            color_hex: crate::color::HexDraft::default(),
+            color_hex: crate::color::HexDrafts::default(),
             color_stack_w: 380.0,
             roto: crate::roto::RotoState::default(),
             roto_engine: crate::roto_engine::RotoEngineState::default(),
