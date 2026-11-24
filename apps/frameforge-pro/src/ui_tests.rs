@@ -2264,3 +2264,63 @@ fn the_color_panel_toggles_a_bool_parameter_through_the_frame_loop() {
     h.press(Key::Z, command(false));
     assert!(!uniform_scale(&h), "one Ctrl+Z restores the first value");
 }
+
+#[test]
+fn the_color_panel_sets_a_colour_from_hex_through_the_frame_loop() {
+    let (mut h, _item) = seeded();
+    let clip = v1_id(&h.app);
+    h.app.selection = Some(clip);
+    h.app.execute("effects.apply", serde_json::json!({"clips": [clip.0], "effect": "tint"})).expect("a real video effect applies to the placed clip");
+    let tint = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effects.iter().position(|effect| effect.effect == "tint"))
+        .expect("the clip now carries tint");
+    let black = |h: &Harness| -> Option<[f32; 4]> {
+        h.app
+            .sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effects.get(tint))
+            .and_then(|effect| effect.param("black"))
+            .and_then(|param| param.value.as_color())
+    };
+
+    h.app.color_effect = Some(tint);
+    h.app.workspace = crate::app::Workspace::Color;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert_eq!(black(&h), Some([0.0, 0.0, 0.0, 1.0]), "the fixture starts on opaque black");
+
+    // The colour row offers a hex field and a Set button rather than the
+    // "not editable" label.
+    let field = egui::Id::new("ff-color-hex-black");
+    let set = egui::Id::new("ff-color-hex-set-black");
+    assert!(h.rect_of(field).is_some(), "the colour row has a hex field");
+    assert!(h.rect_of(set).is_some(), "the colour row has a Set button");
+
+    // Typing a value and committing it is one undoable edit.
+    h.click(field);
+    h.press(Key::A, command(false));
+    h.frame(vec![Event::Text("ff8000".to_string())]);
+    h.click(set);
+    let written = black(&h).expect("the colour is still set");
+    assert!(
+        (written[0] - 1.0).abs() < 1e-3 && (written[1] - 0.502).abs() < 1e-2 && written[2].abs() < 1e-3,
+        "the hex row wrote #ff8000: {written:?} (status {:?})",
+        h.app.status
+    );
+    h.press(Key::Z, command(false));
+    assert_eq!(black(&h), Some([0.0, 0.0, 0.0, 1.0]), "one Ctrl+Z restores the black");
+
+    // A malformed value is refused without touching the document.
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(field);
+    h.press(Key::A, command(false));
+    h.frame(vec![Event::Text("zz".to_string())]);
+    h.click(set);
+    assert_eq!(black(&h), Some([0.0, 0.0, 0.0, 1.0]), "a malformed value left the colour alone");
+    assert!(h.app.status.contains("rrggbb"), "the status names the accepted formats: {:?}", h.app.status);
+}
