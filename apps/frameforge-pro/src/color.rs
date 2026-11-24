@@ -37,17 +37,11 @@ impl HexDrafts {
         draft
     }
 
-    /// The text of one parameter's draft.
+    /// The text of one parameter's draft. The panel reads the draft it holds
+    /// directly; this accessor exists so a test can see what a row is showing.
+    #[cfg(test)]
     pub fn text(&self, effect: usize, param: &str) -> Option<&str> {
         self.rows.get(&(effect, param.to_string())).map(|draft| draft.text.as_str())
-    }
-
-    /// Replace a draft with the canonical spelling after a successful write.
-    pub fn canonicalise(&mut self, effect: usize, param: &str, hex: &str) {
-        if let Some(draft) = self.rows.get_mut(&(effect, param.to_string())) {
-            draft.loaded = hex.to_string();
-            draft.text = hex.to_string();
-        }
     }
 }
 
