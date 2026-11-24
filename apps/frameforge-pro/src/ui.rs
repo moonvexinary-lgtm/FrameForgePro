@@ -453,3 +453,20 @@ pub fn chip_button(ui: &mut Ui, id: &str, text: &str, tooltip: &str) -> Response
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, font, color);
     response.on_hover_text(tooltip)
 }
+
+/// A checkbox with an explicit, stable id: a small square plus its label, for
+/// bool rows a test drives and whose automatic ids would shift with the list.
+pub fn check_button(ui: &mut Ui, id: &str, checked: bool, text: &str, tooltip: &str) -> Response {
+    let font = FontId::proportional(12.0);
+    let width = 20.0 + ui.painter().layout_no_wrap(text.to_string(), font.clone(), TEXT_MID).size().x + 4.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
+    let response = ui.interact(rect, Id::new(id), Sense::click());
+    let color = if response.hovered() { ACCENT_HI } else { TEXT_MID };
+    let glyph = Rect::from_min_size(rect.left_center() + vec2(0.0, -6.0), vec2(12.0, 12.0));
+    ui.painter().rect_stroke(glyph, 2.0, Stroke::new(1.0, color), StrokeKind::Inside);
+    if checked {
+        ui.painter().rect_filled(glyph.shrink(3.0), 1.0, color);
+    }
+    ui.painter().text(rect.left_center() + vec2(20.0, 0.0), Align2::LEFT_CENTER, text, font, color);
+    response.on_hover_text(tooltip)
+}

@@ -205,9 +205,9 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                         }
                     }
                     filmcraft_project::ParamKind::Bool => {
-                        let mut value = current.as_bool().unwrap_or_default();
-                        if ui.checkbox(&mut value, p.label).changed() {
-                            writes.push((p.id.to_string(), serde_json::json!(value)));
+                        let value = current.as_bool().unwrap_or_default();
+                        if crate::ui::check_button(ui, &format!("ff-color-toggle-{}", p.id), value, p.label, "Toggle this parameter").clicked() {
+                            writes.push((p.id.to_string(), serde_json::json!(!value)));
                         }
                     }
                     filmcraft_project::ParamKind::Choice(options) => {
