@@ -2226,3 +2226,41 @@ fn non_animatable_kinds_offer_no_keyframe_row_and_refuse_a_key() {
     let refused = h.app.execute("effects.setParam", serde_json::json!({"clip": clip.0, "effect": "opacity", "param": "blend", "value": 1, "keyframe": true}));
     assert!(refused.is_err(), "the engine refuses to animate a non-animatable choice: {refused:?}");
 }
+
+#[test]
+fn the_color_panel_toggles_a_bool_parameter_through_the_frame_loop() {
+    let (mut h, _item) = seeded();
+    let clip = v1_id(&h.app);
+    h.app.selection = Some(clip);
+    let motion = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effects.iter().position(|effect| effect.effect == "motion"))
+        .expect("the placed clip carries the intrinsic motion effect");
+    let uniform_scale = |h: &Harness| -> bool {
+        h.app
+            .sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effect("motion"))
+            .and_then(|effect| effect.param("uniform_scale"))
+            .and_then(|param| param.value.as_bool())
+            .expect("motion/uniform_scale is set")
+    };
+
+    h.app.color_effect = Some(motion);
+    h.app.workspace = crate::app::Workspace::Color;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert!(uniform_scale(&h), "the fixture starts with uniform scale on");
+
+    // The row's toggle writes the opposite value through `effects.setParam`,
+    // and a second click is one more undoable edit.
+    h.click(egui::Id::new("ff-color-toggle-uniform_scale"));
+    assert!(!uniform_scale(&h), "the panel's toggle turned uniform scale off (status {:?})", h.app.status);
+    h.click(egui::Id::new("ff-color-toggle-uniform_scale"));
+    assert!(uniform_scale(&h), "a second click turns it back on");
+
+    h.press(Key::Z, command(false));
+    assert!(!uniform_scale(&h), "one Ctrl+Z restores the first value");
+}
