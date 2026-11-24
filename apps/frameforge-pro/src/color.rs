@@ -10,6 +10,17 @@ use filmcraft_project::keyframe::ParamValue;
 use crate::app::App;
 use crate::edit;
 
+/// The Color workspace's hex draft for colour parameters: which parameter it
+/// belongs to, the document value it was loaded from, and the text being
+/// typed. Reloading when either changes keeps undo and the other editors
+/// honest without discarding an edit in progress.
+#[derive(Default)]
+pub struct HexDraft {
+    pub target: Option<(usize, String)>,
+    pub loaded: String,
+    pub text: String,
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     let Some((clip, _)) = app.selected_clip() else {
         ui.painter().rect_filled(body, 0.0, crate::ui::BG_APP);
@@ -183,6 +194,7 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
     let mut resets: Vec<String> = Vec::new();
     let mut key_toggles: Vec<String> = Vec::new();
     let mut deletions: Vec<(String, i64)> = Vec::new();
+    let mut invalid: Option<String> = None;
     egui::ScrollArea::vertical().show(panel, |ui| {
         for p in &def.params {
             let current = instance.params.get(p.id).map(|v| v.value.clone()).unwrap_or_else(|| p.default.clone());
@@ -224,6 +236,31 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                         });
                         if new_index != current_index {
                             writes.push((p.id.to_string(), serde_json::json!(new_index)));
+                        }
+                    }
+                    filmcraft_project::ParamKind::Color => {
+                        // The engine accepts `#rrggbb`/`#rrggbbaa` strings for
+                        // colour parameters, so the row edits that spelling and
+                        // writes it back canonically. The draft belongs to one
+                        // parameter and reloads when the document value it was
+                        // loaded from changes (an undo, a reset, a keyframe).
+                        let target = (effect_index, p.id.to_string());
+                        let current_hex = filmcraft_color::to_hex(current.as_color().unwrap_or([0.0, 0.0, 0.0, 1.0]));
+                        if app.color_hex.target.as_ref() != Some(&target) || app.color_hex.loaded != current_hex {
+                            app.color_hex.target = Some(target);
+                            app.color_hex.loaded = current_hex.clone();
+                            app.color_hex.text = current_hex;
+                        }
+                        ui.add(egui::TextEdit::singleline(&mut app.color_hex.text).id(egui::Id::new(format!("ff-color-hex-{}", p.id))).desired_width(80.0));
+                        if crate::ui::chip_button(ui, &format!("ff-color-hex-set-{}", p.id), "Set", "Set this colour from #rrggbb or #rrggbbaa").clicked() {
+                            match filmcraft_color::parse_hex(&app.color_hex.text) {
+                                Some(color) => {
+                                    let hex = filmcraft_color::to_hex(color);
+                                    app.color_hex.text = hex.clone();
+                                    writes.push((p.id.to_string(), serde_json::json!(hex)));
+                                }
+                                None => invalid = Some("A colour is #rrggbb or #rrggbbaa".to_string()),
+                            }
                         }
                     }
                     _ => {
@@ -271,6 +308,9 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
             }
         }
     });
+    if let Some(message) = invalid {
+        app.status = message;
+    }
     for (param, value) in writes {
         let params = serde_json::json!({"clip": clip.0, "effect": effect_index, "param": param, "value": value});
         if let Err(e) = app.execute("effects.setParam", params) {

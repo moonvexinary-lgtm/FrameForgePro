@@ -1861,6 +1861,8 @@ dependencies = [
  "eframe",
  "egui",
  "filmcraft-codecs",
+ "filmcraft-color",
+ "filmcraft-edit",
  "filmcraft-engine",
  "filmcraft-export",
  "filmcraft-media",
