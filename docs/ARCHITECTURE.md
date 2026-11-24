@@ -602,6 +602,32 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T52 - the Color panel's bool row, driven through the frame loop (CI-verified, run 45340731420)
+
+The bool row was the last editor in the Color panel that a person could use
+but a test could not: `ui.checkbox` takes no id of its own, so the row
+registered only an automatic id that shifts as the parameter list changes.
+
+`ui::check_button` has the same explicit-id shape as the panel's existing
+`glyph_button` and `chip_button`: a 12 px square plus the parameter's label,
+18 px tall and sized to the text, registering `ff-color-toggle-<param>`. The
+Bool branch writes the opposite of the current value through
+`effects.setParam`, so a click is one undoable edit and the row keeps no
+state of its own.
+
+- **Test**: `ui_tests::the_color_panel_toggles_a_bool_parameter_through_the_frame_loop`
+  selects the intrinsic `motion` effect, asserts `uniform_scale` starts on,
+  clicks the toggle twice (off, then on), checks the engine document after
+  each click, and one Ctrl+Z restores the first value.
+- **History**: red `3ec666a` failed on exactly the absent control (run
+  45337716743: 181 passed, 1 failed - `no widget registered for
+  Id::new("ff-color-toggle-uniform_scale")`).
+- **Limits**: the choice row is still a salted `ComboBox` rather than a
+  driveable control, and the slider, number, percentage, angle, pixel and
+  colour editors remain inspection-only.
+- **CI**: run 45340731420 - fmt, clippy `-D warnings`, check, **182 tests**,
+  release build and the binary self-test.
+
 ## T51 - the keyframe row's boundary is the engine's `animatable` flag (CI-verified, run 45076843535)
 
 Bool and choice parameters looked like the next keyframe rows: `Param` stores
@@ -2630,6 +2656,7 @@ with a real, user-installed runtime.
 | T49 | Effect parameter keyframes from the Effects panel: explicit-id stopwatch/key chips/Clear (`ff-fx-key-<param>`, `ff-fx-key-del-<param>-<tick>`, `ff-fx-key-clear-<param>`) through the new `ui::chip_button`, with a UI test keying a real `blurriness` value at 0 s and 2 s, deleting one key and clearing the track, each one Ctrl+Z | CI-verified, run 45059868885 |
 | T50 | Scalar parameter keyframes from the Color panel: a stopwatch and per-key chips under every animatable `Float` row (`ff-color-key-<param>`, `ff-color-key-del-<param>-<tick>`), running `effects.addKeyframe` with an explicit playhead `time` and `effects.deleteKeyframe` with the key's `mediaTime`, the same `source_time_at` media conversion as the engine, with a UI test keying `motion/scale` at 0 s and 2 s, deleting a key (its value remains) and one Ctrl+Z each | CI-verified, run 45068219397 |
 | T51 | The keyframe row's boundary: pins the engine's `animatable` flag - animatable Float rows have a stopwatch, the non-animatable bool (`motion/uniform_scale`) and choice (`opacity/blend`) rows do not, and a keyed `effects.setParam` for both is refused while a static write succeeds. The failed bool/choice attempt (red c42b270, green c951cd3) is recorded as the evidence | CI-verified, run 45076843535 |
+| T52 | The Color panel's bool row: `ui::check_button` gives the bool editor an explicit `ff-color-toggle-<param>` id and writes the opposite value through `effects.setParam`, with a UI test clicking `motion/uniform_scale` off and on through the frame loop and one Ctrl+Z restoring the first value | CI-verified, run 45340731420 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
