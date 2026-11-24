@@ -2301,8 +2301,13 @@ fn the_color_panel_sets_a_colour_from_hex_through_the_frame_loop() {
 
     // Typing a value and committing it is one undoable edit.
     h.focus(field);
+    assert_eq!(h.context.memory(|memory| memory.focused()), Some(field), "the hex field holds keyboard focus");
     h.retype("ff8000");
+    assert_eq!(h.app.color_hex.text, "ff8000", "the hex field holds the typed value");
+    h.context.memory_mut(|memory| memory.surrender_focus(field));
+    h.frame(Vec::new());
     h.click(set);
+    assert_eq!(h.app.color_hex.text, "#ff8000", "Set canonicalised the field (status {:?})", h.app.status);
     let written = black(&h).expect("the colour is still set");
     assert!(
         (written[0] - 1.0).abs() < 1e-3 && (written[1] - 0.502).abs() < 1e-2 && written[2].abs() < 1e-3,
@@ -2318,6 +2323,8 @@ fn the_color_panel_sets_a_colour_from_hex_through_the_frame_loop() {
     h.frame(Vec::new());
     h.focus(field);
     h.retype("zz");
+    h.context.memory_mut(|memory| memory.surrender_focus(field));
+    h.frame(Vec::new());
     h.click(set);
     assert_eq!(black(&h), Some([0.0, 0.0, 0.0, 1.0]), "a malformed value left the colour alone");
     assert!(h.app.status.contains("rrggbb"), "the status names the accepted formats: {:?}", h.app.status);
