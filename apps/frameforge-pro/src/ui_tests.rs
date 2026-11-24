@@ -2300,9 +2300,8 @@ fn the_color_panel_sets_a_colour_from_hex_through_the_frame_loop() {
     assert!(h.rect_of(set).is_some(), "the colour row has a Set button");
 
     // Typing a value and committing it is one undoable edit.
-    h.click(field);
-    h.press(Key::A, command(false));
-    h.frame(vec![Event::Text("ff8000".to_string())]);
+    h.focus(field);
+    h.retype("ff8000");
     h.click(set);
     let written = black(&h).expect("the colour is still set");
     assert!(
@@ -2317,9 +2316,8 @@ fn the_color_panel_sets_a_colour_from_hex_through_the_frame_loop() {
     h.app.selection = Some(clip);
     h.frame(Vec::new());
     h.frame(Vec::new());
-    h.click(field);
-    h.press(Key::A, command(false));
-    h.frame(vec![Event::Text("zz".to_string())]);
+    h.focus(field);
+    h.retype("zz");
     h.click(set);
     assert_eq!(black(&h), Some([0.0, 0.0, 0.0, 1.0]), "a malformed value left the colour alone");
     assert!(h.app.status.contains("rrggbb"), "the status names the accepted formats: {:?}", h.app.status);
