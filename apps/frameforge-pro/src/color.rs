@@ -10,25 +10,25 @@ use filmcraft_project::keyframe::ParamValue;
 use crate::app::App;
 use crate::edit;
 
-/// One hex draft per colour parameter (effect index plus parameter id): the
-/// document value it was loaded from and the text being typed. A shared draft
-/// would be rewritten by every colour row on every frame - the bug T53's test
-/// caught - so each row keeps its own.
+/// One text draft per parameter (effect index plus parameter id): the document
+/// value it was loaded from and the text being typed. A shared draft would be
+/// rewritten by every row on every frame - the bug T53's test caught - so each
+/// row keeps its own. Hex rows and angle rows both use it.
 #[derive(Default)]
-pub struct HexDrafts {
-    rows: std::collections::BTreeMap<(usize, String), HexDraft>,
+pub struct Drafts {
+    rows: std::collections::BTreeMap<(usize, String), Draft>,
 }
 
 #[derive(Default)]
-pub struct HexDraft {
+pub struct Draft {
     pub loaded: String,
     pub text: String,
 }
 
-impl HexDrafts {
-    /// The draft for one colour parameter, reloaded when the document value it
-    /// was loaded from changes (an undo, a reset, another editor).
-    pub fn row(&mut self, effect: usize, param: &str, current: &str) -> &mut HexDraft {
+impl Drafts {
+    /// The draft for one parameter, reloaded when the document value it was
+    /// loaded from changes (an undo, a reset, another editor).
+    pub fn row(&mut self, effect: usize, param: &str, current: &str) -> &mut Draft {
         let draft = self.rows.entry((effect, param.to_string())).or_default();
         if draft.loaded != current {
             draft.loaded = current.to_string();
@@ -269,7 +269,7 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                         // and reloads when the document value it was loaded from
                         // changes (an undo, a reset, a keyframe).
                         let current_hex = filmcraft_color::to_hex(current.as_color().unwrap_or([0.0, 0.0, 0.0, 1.0]));
-                        let draft = app.color_hex.row(effect_index, p.id, &current_hex);
+                        let draft = app.color_drafts.row(effect_index, p.id, &current_hex);
                         ui.add(egui::TextEdit::singleline(&mut draft.text).id(egui::Id::new(format!("ff-color-hex-{}", p.id))).desired_width(80.0));
                         if crate::ui::chip_button(ui, &format!("ff-color-hex-set-{}", p.id), "Set", "Set this colour from #rrggbb or #rrggbbaa").clicked() {
                             match filmcraft_color::parse_hex(&draft.text) {
@@ -283,19 +283,47 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                             }
                         }
                     }
+                    filmcraft_project::ParamKind::Angle => {
+                        // An angle is a plain Float in degrees. There is no range
+                        // in the definition, so text entry is honest where a
+                        // slider would invent bounds; the draft reloads like the
+                        // colour row's.
+                        let current_angle = format!("{:.1}", current.as_f64().unwrap_or_default());
+                        let draft = app.color_drafts.row(effect_index, p.id, &current_angle);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut draft.text)
+                                .id(egui::Id::new(format!("ff-color-angle-{}", p.id)))
+                                .desired_width(56.0)
+                                .hint_text("°"),
+                        );
+                        if crate::ui::chip_button(ui, &format!("ff-color-angle-set-{}", p.id), "Set", "Set this angle in degrees").clicked() {
+                            let text = draft.text.trim().trim_end_matches('°').trim();
+                            match text.parse::<f64>() {
+                                Ok(deg) if deg.is_finite() => {
+                                    let canonical = format!("{deg:.1}");
+                                    draft.loaded = canonical.clone();
+                                    draft.text = canonical;
+                                    writes.push((p.id.to_string(), serde_json::json!(deg), animated.then_some(app.playhead.0)));
+                                }
+                                _ => invalid = Some("An angle is a number of degrees, e.g. 45 or -60".to_string()),
+                            }
+                        }
+                    }
                     _ => {
                         ui.label(format!("{} — not editable in this workspace yet", p.label));
                     }
                 }
             });
             // Animatable parameters whose value the panel can render carry the
-            // keyframe row: a Float reads as a number, a Color as hex. The
+            // keyframe row: a Float or Angle reads as a number, a Color as hex. The
             // stopwatch keys the value at the playhead and a chip per key
             // deletes exactly that key (the engine toggles and restores the
             // removed value when the track empties). Bool and Choice are not
             // animatable in the project crate, and the other kinds have no
             // value editor here yet.
-            if p.animatable && matches!(&p.kind, filmcraft_project::ParamKind::Float { .. } | filmcraft_project::ParamKind::Color) {
+            if p.animatable
+                && matches!(&p.kind, filmcraft_project::ParamKind::Float { .. } | filmcraft_project::ParamKind::Color | filmcraft_project::ParamKind::Angle)
+            {
                 ui.horizontal(|ui| {
                     if crate::ui::glyph_button(
                         ui,
