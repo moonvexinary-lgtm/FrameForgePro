@@ -602,6 +602,49 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T53 - a colour parameter from the Color panel (CI-verified, run 45512169313)
+
+Colour was the widest remaining gap in the panel: every `ParamKind::Color` row
+fell through to "not editable in this workspace yet", so `tint`'s `black`,
+`white` and `map`, a chroma key's key colour and every other colour parameter
+could not be changed at all.
+
+The row shows the value in the engine's own `#rrggbb`/`#rrggbbaa` spelling in
+a text field (`ff-color-hex-<param>`) with a `Set` chip
+(`ff-color-hex-set-<param>`). Set parses through `filmcraft_color` — the same
+pinned crate the engine formats with, made a direct dependency at the same
+revision and already in the build graph, so nothing new is downloaded — and
+writes the canonical hex string through `effects.setParam`, which accepts a
+hex string for a colour parameter. A malformed value is refused with a status
+naming the two accepted formats, and the document is untouched.
+
+The draft lives in `color::HexDrafts`, keyed by effect index plus parameter id:
+the document value it was loaded from and the text being typed. A row reloads
+when that document value changes (undo, Reset, a keyframe) and otherwise keeps
+an edit in progress. The per-row key matters: the first attempt used one shared
+draft, and `tint`'s three colour rows reloaded it with their own value on every
+frame, so Set read the field as `#ffffff` instead of what had been typed (run
+45480281416). That failed attempt stays in the history.
+
+- **Test**: `ui_tests::the_color_panel_sets_a_colour_from_hex_through_the_frame_loop`
+  applies `tint`, locates it by id (because `effects.apply` inserts standard
+  effects before the intrinsic ones), asserts the field and chip exist, types
+  `ff8000`, commits with Set, checks the document became
+  `[1.0, 0.502, 0.0, 1.0]`, restores black with one Ctrl+Z, then types `zz` and
+  checks the colour is unchanged and the status names `#rrggbb`. Intermediate
+  assertions pin focus, the typed text and the canonicalised field, so a future
+  break names its stage.
+- **History**: red `9d9e67e` failed on exactly the absent field (run
+  45459293822: 182 passed, 1 failed — "the colour row has a hex field"). Two
+  test-harness-only commits (`aa480a5`, `da3ee21`) added the stage checks; the
+  shared-draft defect is what `377855d` fixes, and `7f107c5` dropped a helper
+  clippy found unused.
+- **Limits**: a colour is edited as hex text, not a picker, and it has no
+  stopwatch row yet — the keyframe row is Float-only — so a colour cannot be
+  keyed from this panel.
+- **CI**: run 45512169313 — fmt, clippy `-D warnings`, check, **183 tests**,
+  release build and the binary self-test.
+
 ## T52 - the Color panel's bool row, driven through the frame loop (CI-verified, run 45340731420)
 
 The bool row was the last editor in the Color panel that a person could use
@@ -2657,6 +2700,7 @@ with a real, user-installed runtime.
 | T50 | Scalar parameter keyframes from the Color panel: a stopwatch and per-key chips under every animatable `Float` row (`ff-color-key-<param>`, `ff-color-key-del-<param>-<tick>`), running `effects.addKeyframe` with an explicit playhead `time` and `effects.deleteKeyframe` with the key's `mediaTime`, the same `source_time_at` media conversion as the engine, with a UI test keying `motion/scale` at 0 s and 2 s, deleting a key (its value remains) and one Ctrl+Z each | CI-verified, run 45068219397 |
 | T51 | The keyframe row's boundary: pins the engine's `animatable` flag - animatable Float rows have a stopwatch, the non-animatable bool (`motion/uniform_scale`) and choice (`opacity/blend`) rows do not, and a keyed `effects.setParam` for both is refused while a static write succeeds. The failed bool/choice attempt (red c42b270, green c951cd3) is recorded as the evidence | CI-verified, run 45076843535 |
 | T52 | The Color panel's bool row: `ui::check_button` gives the bool editor an explicit `ff-color-toggle-<param>` id and writes the opposite value through `effects.setParam`, with a UI test clicking `motion/uniform_scale` off and on through the frame loop and one Ctrl+Z restoring the first value | CI-verified, run 45340731420 |
+| T53 | A colour parameter from the Color panel: the row shows the engine's `#rrggbb`/`#rrggbbaa` spelling in `ff-color-hex-<param>` with a `ff-color-hex-set-<param>` chip, parses through the engine's own `filmcraft_color`, writes the canonical hex string through `effects.setParam`, and refuses a malformed value unchanged; drafts are per effect and parameter (`color::HexDrafts`) so `tint`'s three colour rows cannot overwrite each other, with a UI test typing `ff8000`, checking the document, undoing, and refusing `zz` | CI-verified, run 45512169313 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
