@@ -2475,3 +2475,56 @@ fn the_color_panel_sets_and_keys_an_angle_through_the_frame_loop() {
     assert_eq!(angle(&h), Some(0.0), "a malformed angle left the document alone");
     assert!(h.app.status.contains("degrees"), "the status says the unit: {:?}", h.app.status);
 }
+
+#[test]
+fn the_color_panel_chooses_a_choice_option_through_the_frame_loop() {
+    let (mut h, _item) = seeded();
+    let clip = v1_id(&h.app);
+    h.app.selection = Some(clip);
+    let opacity = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effects.iter().position(|effect| effect.effect == "opacity"))
+        .expect("the placed clip carries the intrinsic opacity effect");
+    let blend = |h: &Harness| -> Option<u32> {
+        h.app
+            .sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effects.get(opacity))
+            .and_then(|effect| effect.param("blend"))
+            .and_then(|param| match &param.value {
+                filmcraft_project::keyframe::ParamValue::Choice(index) => Some(*index),
+                _ => None,
+            })
+    };
+
+    h.app.color_effect = Some(opacity);
+    h.app.workspace = crate::app::Workspace::Color;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert_eq!(blend(&h), Some(0), "the fixture blend mode starts on Normal");
+
+    // The choice is a drop-down with explicit ids: the chip opens it, an
+    // option chip picks, and the pick is one undoable engine write. The
+    // automatic ids of a salted `ComboBox`'s items cannot be clicked.
+    let chip = egui::Id::new("ff-color-choice-blend");
+    assert!(h.rect_of(chip).is_some(), "the choice row has a drop-down chip");
+    h.click(chip);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-color-choice-blend-option-3"));
+    assert_eq!(blend(&h), Some(3), "the option chip chose Multiply (status {:?})", h.app.status);
+
+    h.press(Key::Z, command(false));
+    assert_eq!(blend(&h), Some(0), "one Ctrl+Z restores Normal");
+
+    // The list is long, so the test also picks a later option rather than
+    // only advancing one step.
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(chip);
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-color-choice-blend-option-8"));
+    assert_eq!(blend(&h), Some(8), "a second pick chose Screen (status {:?})", h.app.status);
+}
