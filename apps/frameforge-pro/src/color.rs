@@ -288,11 +288,14 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                     }
                 }
             });
-            // Scalar, animatable parameters carry the keyframe row: the
+            // Animatable parameters whose value the panel can render carry the
+            // keyframe row: a Float reads as a number, a Color as hex. The
             // stopwatch keys the value at the playhead and a chip per key
             // deletes exactly that key (the engine toggles and restores the
-            // removed value when the track empties).
-            if p.animatable && matches!(&p.kind, filmcraft_project::ParamKind::Float { .. }) {
+            // removed value when the track empties). Bool and Choice are not
+            // animatable in the project crate, and the other kinds have no
+            // value editor here yet.
+            if p.animatable && matches!(&p.kind, filmcraft_project::ParamKind::Float { .. } | filmcraft_project::ParamKind::Color) {
                 ui.horizontal(|ui| {
                     if crate::ui::glyph_button(
                         ui,
@@ -305,21 +308,20 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                         key_toggles.push(p.id.to_string());
                     }
                     if animated {
-                        let keys: Vec<(i64, f64)> = instance
+                        let keys: Vec<(i64, ParamValue)> = instance
                             .params
                             .get(p.id)
-                            .map(|param| param.keyframes.iter().map(|key| (key.time.0, key.value.as_f64().unwrap_or_default())).collect())
+                            .map(|param| param.keyframes.iter().map(|key| (key.time.0, key.value.clone())).collect())
                             .unwrap_or_default();
                         ui.label(format!("{} key{}: ", keys.len(), if keys.len() == 1 { "" } else { "s" }));
-                        for (t, v) in keys {
-                            if crate::ui::chip_button(
-                                ui,
-                                &format!("ff-color-key-del-{}-{}", p.id, t),
-                                &format!("×{v:.1}@{:.2}s", filmcraft_time::Tick(t).seconds()),
-                                "Delete this keyframe",
-                            )
-                            .clicked()
-                            {
+                        for (t, value) in keys {
+                            // A colour key reads as the engine's hex spelling; a
+                            // scalar key keeps its one-decimal number.
+                            let text = match value.as_color() {
+                                Some(colour) => format!("×{}@{:.2}s", filmcraft_color::to_hex(colour), filmcraft_time::Tick(t).seconds()),
+                                None => format!("×{:.1}@{:.2}s", value.as_f64().unwrap_or_default(), filmcraft_time::Tick(t).seconds()),
+                            };
+                            if crate::ui::chip_button(ui, &format!("ff-color-key-del-{}-{}", p.id, t), &text, "Delete this keyframe").clicked() {
                                 deletions.push((p.id.to_string(), t));
                             }
                         }
