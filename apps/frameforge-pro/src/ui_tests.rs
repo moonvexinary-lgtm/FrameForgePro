@@ -2403,3 +2403,75 @@ fn the_color_panel_keys_a_colour_parameter_through_the_frame_loop() {
     h.press(Key::Z, command(false));
     assert_eq!(keys(&h).len(), 2, "one Ctrl+Z restores the deleted colour key");
 }
+
+#[test]
+fn the_color_panel_sets_and_keys_an_angle_through_the_frame_loop() {
+    let (mut h, _item) = seeded();
+    let clip = v1_id(&h.app);
+    h.app.selection = Some(clip);
+    h.app.execute("effects.apply", serde_json::json!({"clips": [clip.0], "effect": "mirror"})).expect("a real video effect applies to the placed clip");
+    let mirror = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effects.iter().position(|effect| effect.effect == "mirror"))
+        .expect("the clip now carries mirror");
+    let angle = |h: &Harness| -> Option<f64> {
+        h.app
+            .sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effects.get(mirror))
+            .and_then(|effect| effect.param("angle"))
+            .and_then(|param| param.value.as_f64())
+    };
+    let keys = |h: &Harness| -> Vec<(i64, f64)> {
+        h.app
+            .sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effects.get(mirror))
+            .and_then(|effect| effect.param("angle"))
+            .map(|param| param.keyframes.iter().map(|key| (key.time.0, key.value.as_f64().expect("a numeric key"))).collect())
+            .unwrap_or_default()
+    };
+
+    h.app.color_effect = Some(mirror);
+    h.app.workspace = crate::app::Workspace::Color;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert_eq!(angle(&h), Some(0.0), "the fixture angle starts at zero");
+
+    // An angle is a plain Float in the engine, edited here in degrees.
+    let field = egui::Id::new("ff-color-angle-angle");
+    let set = egui::Id::new("ff-color-angle-set-angle");
+    assert!(h.rect_of(field).is_some(), "the angle row has a degrees field");
+    assert!(h.rect_of(set).is_some(), "the angle row has a Set button");
+    h.focus(field);
+    h.retype("45");
+    h.context.memory_mut(|memory| memory.surrender_focus(field));
+    h.frame(Vec::new());
+    h.click(set);
+    assert_eq!(angle(&h), Some(45.0), "the angle row wrote 45 degrees (status {:?})", h.app.status);
+
+    // Angle is animatable, so it carries the same stopwatch as a Float row.
+    h.app.playhead = Tick::ZERO;
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-color-key-angle"));
+    assert_eq!(keys(&h), vec![(0, 45.0)], "the angle stopwatch keys 45 degrees at 0 s (status {:?})", h.app.status);
+
+    h.press(Key::Z, command(false));
+    assert!(keys(&h).is_empty(), "one Ctrl+Z removes the angle key");
+    h.press(Key::Z, command(false));
+    assert_eq!(angle(&h), Some(0.0), "a second Ctrl+Z restores zero");
+
+    // A malformed value is refused, and the document keeps its angle.
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.focus(field);
+    h.retype("sideways");
+    h.context.memory_mut(|memory| memory.surrender_focus(field));
+    h.frame(Vec::new());
+    h.click(set);
+    assert_eq!(angle(&h), Some(0.0), "a malformed angle left the document alone");
+    assert!(h.app.status.contains("degrees"), "the status says the unit: {:?}", h.app.status);
+}
