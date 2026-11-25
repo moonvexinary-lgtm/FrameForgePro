@@ -602,6 +602,43 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T54 - colour keyframes from the Color panel (CI-verified, run 45545815175)
+
+Colour was the one animatable kind the keyframe row skipped: the gate was
+`ParamKind::Float`, written when a Float was the only kind with a value
+editor. T53 gave colour one, the project crate marks colour animatable
+(`col()`), and both `effects.addKeyframe` and the interpolation carry
+`ParamValue::Color`, so nothing in the engine blocked it.
+
+The gate now admits Float and Color. A colour key chip prints the engine's
+hex spelling (`×#rrggbb@0.00s`) instead of the meaningless `×0.0` that
+`as_f64` returns for a colour. The stopwatch and chips stay the same
+commands: `effects.addKeyframe` toggles at the playhead, and a chip sends
+`effects.deleteKeyframe` with that key's media time.
+
+The slice also fixed the write side. An animated parameter's `Set` was sent
+without a `time`, so the engine keyed at the session playhead while the
+stopwatch beside it keyed at `app.playhead`. The two agree in the app because
+every seek sets the session playhead, but not under a test that moves one and
+not the other — and the first green run wrote the 2 s colour onto the 0 s key
+(run 45543805925). The row now names `time: app.playhead.0` for every write of
+an animated parameter, Float included; a static write still sends none.
+
+- **Test**: `ui_tests::the_color_panel_keys_a_colour_parameter_through_the_frame_loop`
+  applies `tint`, keys `black` at 0 s and again at 2 s, types `ff8000` and
+  commits with Set, then checks the 0 s key stayed black and the 2 s key holds
+  orange. A chip deletes the 0 s key and one Ctrl+Z restores it.
+- **History**: red `230aad4` failed on exactly the absent control (run
+  45538133033: 183 passed, 1 failed — `no widget registered for
+  Id::new("ff-color-key-black")`). `f80b7ae` passed the gate but wrote the
+  keyed colour at the session playhead; `2269a54` fixed that.
+- **Limits**: the row reads the parameter's static value (as the Float slider
+  does), so an animated colour shows the base colour rather than the colour at
+  the playhead; bool and choice stay unkeyable because the project crate marks
+  them `animatable: false`.
+- **CI**: run 45545815175 — fmt, clippy `-D warnings`, check, **184 tests**,
+  release build and the binary self-test.
+
 ## T53 - a colour parameter from the Color panel (CI-verified, run 45512169313)
 
 Colour was the widest remaining gap in the panel: every `ParamKind::Color` row
@@ -639,9 +676,9 @@ frame, so Set read the field as `#ffffff` instead of what had been typed (run
   test-harness-only commits (`aa480a5`, `da3ee21`) added the stage checks; the
   shared-draft defect is what `377855d` fixes, and `7f107c5` dropped a helper
   clippy found unused.
-- **Limits**: a colour is edited as hex text, not a picker, and it has no
-  stopwatch row yet — the keyframe row is Float-only — so a colour cannot be
-  keyed from this panel.
+- **Limits**: a colour is edited as hex text, not a picker, and at this slice
+  it had no stopwatch row (the keyframe row was Float-only; T54 extended it to
+  colour).
 - **CI**: run 45512169313 — fmt, clippy `-D warnings`, check, **183 tests**,
   release build and the binary self-test.
 
@@ -2701,6 +2738,7 @@ with a real, user-installed runtime.
 | T51 | The keyframe row's boundary: pins the engine's `animatable` flag - animatable Float rows have a stopwatch, the non-animatable bool (`motion/uniform_scale`) and choice (`opacity/blend`) rows do not, and a keyed `effects.setParam` for both is refused while a static write succeeds. The failed bool/choice attempt (red c42b270, green c951cd3) is recorded as the evidence | CI-verified, run 45076843535 |
 | T52 | The Color panel's bool row: `ui::check_button` gives the bool editor an explicit `ff-color-toggle-<param>` id and writes the opposite value through `effects.setParam`, with a UI test clicking `motion/uniform_scale` off and on through the frame loop and one Ctrl+Z restoring the first value | CI-verified, run 45340731420 |
 | T53 | A colour parameter from the Color panel: the row shows the engine's `#rrggbb`/`#rrggbbaa` spelling in `ff-color-hex-<param>` with a `ff-color-hex-set-<param>` chip, parses through the engine's own `filmcraft_color`, writes the canonical hex string through `effects.setParam`, and refuses a malformed value unchanged; drafts are per effect and parameter (`color::HexDrafts`) so `tint`'s three colour rows cannot overwrite each other, with a UI test typing `ff8000`, checking the document, undoing, and refusing `zz` | CI-verified, run 45512169313 |
+| T54 | Colour keyframes from the Color panel: the keyframe gate admits `Float` and `Color`, colour key chips print `×#rrggbb@0.00s`, and a write of an animated parameter names `time: app.playhead.0` so Set lands on the key the stopwatch made instead of the session playhead; a UI test keys `tint/black` at 0 s and 2 s, writes `ff8000` onto the second key, deletes the first through its chip and restores it with one Ctrl+Z | CI-verified, run 45545815175 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
