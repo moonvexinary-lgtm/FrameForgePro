@@ -602,6 +602,37 @@ Row 39's two remaining UI gaps, closed without an engine change.
 - **CI**: run `42537235054` - fmt, clippy `-D warnings`, check, **108 tests**,
   release build and the binary self-test.
 
+## T55 - angle parameters from the Color panel (CI-verified, run 45554348754)
+
+`ParamKind::Angle` is a plain `ParamValue::Float` in degrees: mirror's
+reflection angle (0), the effect angle (50) and the light angle (-60) are all
+`ang(...)` definitions. The panel had no arm for the kind, so every angle row
+fell through to "not editable in this workspace yet".
+
+An Angle carries no range in its definition, so a slider would invent bounds
+and clamp values the engine accepts. The row is a degrees text field
+(`ff-color-angle-<param>`) with a `Set` chip (`ff-color-angle-set-<param>`):
+Set trims an optional `°`, parses a finite number, writes it through
+`effects.setParam` and canonicalises the field; anything else gets a status
+naming degrees and no write. Because the value is a Float, the row also joins
+the keyframe gate (Float, Color, Angle), so the stopwatch and key chips work
+there unchanged.
+
+The draft map stopped being colour-specific: `color::HexDrafts`/`HexDraft`
+became `Drafts`/`Draft`, and `App::color_hex` became `App::color_drafts`, so
+the hex rows and the angle rows share one reload rule.
+
+- **Test**: `ui_tests::the_color_panel_sets_and_keys_an_angle_through_the_frame_loop`
+  applies `mirror`, finds it by id, writes 45 degrees, keys it at 0 s, undoes
+  the key and then the value with two Ctrl+Z presses, and refuses `sideways`
+  unchanged with a status naming degrees.
+- **History**: red `4dc2378` failed on exactly the absent field (run
+  45551802409: 184 passed, 1 failed — "the angle row has a degrees field").
+- **Limits**: degrees show one decimal and are not range-checked (the engine
+  defines none for Angle), and the row reads the static value like the others.
+- **CI**: run 45554348754 — fmt, clippy `-D warnings`, check, **185 tests**,
+  release build and the binary self-test.
+
 ## T54 - colour keyframes from the Color panel (CI-verified, run 45545815175)
 
 Colour was the one animatable kind the keyframe row skipped: the gate was
@@ -655,7 +686,7 @@ writes the canonical hex string through `effects.setParam`, which accepts a
 hex string for a colour parameter. A malformed value is refused with a status
 naming the two accepted formats, and the document is untouched.
 
-The draft lives in `color::HexDrafts`, keyed by effect index plus parameter id:
+The draft lives in `color::HexDrafts` (now `Drafts`; T55 generalised it), keyed by effect index plus parameter id:
 the document value it was loaded from and the text being typed. A row reloads
 when that document value changes (undo, Reset, a keyframe) and otherwise keeps
 an edit in progress. The per-row key matters: the first attempt used one shared
@@ -2739,6 +2770,7 @@ with a real, user-installed runtime.
 | T52 | The Color panel's bool row: `ui::check_button` gives the bool editor an explicit `ff-color-toggle-<param>` id and writes the opposite value through `effects.setParam`, with a UI test clicking `motion/uniform_scale` off and on through the frame loop and one Ctrl+Z restoring the first value | CI-verified, run 45340731420 |
 | T53 | A colour parameter from the Color panel: the row shows the engine's `#rrggbb`/`#rrggbbaa` spelling in `ff-color-hex-<param>` with a `ff-color-hex-set-<param>` chip, parses through the engine's own `filmcraft_color`, writes the canonical hex string through `effects.setParam`, and refuses a malformed value unchanged; drafts are per effect and parameter (`color::HexDrafts`) so `tint`'s three colour rows cannot overwrite each other, with a UI test typing `ff8000`, checking the document, undoing, and refusing `zz` | CI-verified, run 45512169313 |
 | T54 | Colour keyframes from the Color panel: the keyframe gate admits `Float` and `Color`, colour key chips print `×#rrggbb@0.00s`, and a write of an animated parameter names `time: app.playhead.0` so Set lands on the key the stopwatch made instead of the session playhead; a UI test keys `tint/black` at 0 s and 2 s, writes `ff8000` onto the second key, deletes the first through its chip and restores it with one Ctrl+Z | CI-verified, run 45545815175 |
+| T55 | Angle parameters from the Color panel: an Angle has no range, so the row is a degrees text field (`ff-color-angle-<param>`) with a `Set` chip that parses a finite number (optional `°`), writes it through `effects.setParam`, refuses anything else with a status naming degrees, and joins the keyframe gate; `HexDrafts`/`HexDraft` became `Drafts`/`Draft` for the shared reload rule; a UI test writes 45 degrees on `mirror/angle`, keys it, undoes key and value, and refuses `sideways` | CI-verified, run 45554348754 |
 | U1 | TSX workspace port: design kit, eight-workspace shell, themed Edit layout, Text & Graphics, Masking and Compositing screens over real engine commands | CI-verified, run 40794727835 |
 | U2 | UI interaction tests: an in-crate harness that runs the real `App::ui_frame` through `egui::Context::run_ui` with real `RawInput` key events, covering undo/redo, Add Edit and markers | CI-verified, run 42340371967 |
 | U3 | Scripted pointer gestures: a stable `ff-timeline-body` id and the draw loop's own `timeline_clip_rect` drive a ruler scrub, clip select/delete, a clip move and both edge trims through real pointer events, asserted on the engine document with undo | CI-verified, runs 42401469221 and 42406648700 |
