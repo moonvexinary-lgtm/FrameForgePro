@@ -2331,3 +2331,75 @@ fn the_color_panel_sets_a_colour_from_hex_through_the_frame_loop() {
     assert_eq!(black(&h), Some([0.0, 0.0, 0.0, 1.0]), "a malformed value left the colour alone");
     assert!(h.app.status.contains("rrggbb"), "the status names the accepted formats: {:?}", h.app.status);
 }
+
+#[test]
+fn the_color_panel_keys_a_colour_parameter_through_the_frame_loop() {
+    let (mut h, _item) = seeded();
+    let clip = v1_id(&h.app);
+    h.app.selection = Some(clip);
+    h.app.execute("effects.apply", serde_json::json!({"clips": [clip.0], "effect": "tint"})).expect("a real video effect applies to the placed clip");
+    let tint = h
+        .app
+        .sequence()
+        .and_then(|sequence| sequence.find_item(clip))
+        .and_then(|(_, item)| item.effects.iter().position(|effect| effect.effect == "tint"))
+        .expect("the clip now carries tint");
+    let keys = |h: &Harness| -> Vec<(i64, [f32; 4])> {
+        h.app
+            .sequence()
+            .and_then(|sequence| sequence.find_item(clip))
+            .and_then(|(_, item)| item.effects.get(tint))
+            .and_then(|effect| effect.param("black"))
+            .map(|param| param.keyframes.iter().map(|key| (key.time.0, key.value.as_color().expect("a colour key"))).collect())
+            .unwrap_or_default()
+    };
+
+    h.app.color_effect = Some(tint);
+    h.app.workspace = crate::app::Workspace::Color;
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    assert!(keys(&h).is_empty(), "the fixture colour starts static");
+
+    // Colour is animatable in the engine, so the row offers the same
+    // stopwatch and key chips as an animatable Float row.
+    h.app.playhead = Tick::ZERO;
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-color-key-black"));
+    assert_eq!(keys(&h), vec![(0, [0.0, 0.0, 0.0, 1.0])], "the colour stopwatch keys black at 0 s (status {:?})", h.app.status);
+    assert_eq!(h.app.status, "Keyframe added");
+
+    let two = Tick(2 * TICKS_PER_SECOND);
+    h.app.playhead = two;
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-color-key-black"));
+    assert_eq!(keys(&h).len(), 2, "a second click at 2 s adds a second key (status {:?})", h.app.status);
+
+    // Set writes at the playhead when the parameter is animated, so the
+    // colour typed here lands on the 2 s key and leaves 0 s black.
+    let field = egui::Id::new("ff-color-hex-black");
+    let set = egui::Id::new("ff-color-hex-set-black");
+    h.focus(field);
+    h.retype("ff8000");
+    h.context.memory_mut(|memory| memory.surrender_focus(field));
+    h.frame(Vec::new());
+    h.click(set);
+    let keyed = keys(&h);
+    assert_eq!(keyed.len(), 2, "Set changed a key rather than collapsing the track (status {:?})", h.app.status);
+    assert_eq!(keyed[0], (0, [0.0, 0.0, 0.0, 1.0]), "the 0 s key kept its black");
+    let last = keyed[1].1;
+    assert!(
+        (last[0] - 1.0).abs() < 1e-3 && (last[1] - 0.502).abs() < 1e-2 && last[2].abs() < 1e-3,
+        "the 2 s key holds #ff8000: {last:?} (status {:?})",
+        h.app.status
+    );
+
+    // The key chip deletes exactly its own colour key, and one Ctrl+Z brings
+    // it back.
+    h.app.selection = Some(clip);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    h.click(egui::Id::new("ff-color-key-del-black-0"));
+    assert_eq!(keys(&h).len(), 1, "the key chip deleted the 0 s colour key (status {:?})", h.app.status);
+    h.press(Key::Z, command(false));
+    assert_eq!(keys(&h).len(), 2, "one Ctrl+Z restores the deleted colour key");
+}
