@@ -251,15 +251,11 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                             ParamValue::Choice(c) => *c as usize,
                             _ => 0,
                         };
-                        let selected_text = options.get(current_index).map(|s| s.to_string()).unwrap_or_else(|| "?".to_string());
-                        let mut new_index = current_index;
-                        egui::ComboBox::from_id_salt(p.id).selected_text(selected_text).show_ui(ui, |ui| {
-                            for (i, option) in options.iter().enumerate() {
-                                ui.selectable_value(&mut new_index, i, *option);
+                        if let Some(new_index) = crate::ui::choice_chip(ui, &format!("ff-color-choice-{}", p.id), current_index, options, "Choose this option")
+                        {
+                            if new_index != current_index {
+                                writes.push((p.id.to_string(), serde_json::json!(new_index), None));
                             }
-                        });
-                        if new_index != current_index {
-                            writes.push((p.id.to_string(), serde_json::json!(new_index), None));
                         }
                     }
                     filmcraft_project::ParamKind::Color => {
