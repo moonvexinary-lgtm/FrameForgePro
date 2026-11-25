@@ -214,7 +214,7 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
         .map(|(_, item)| item.source_time_at(app.playhead.clamp(item.start, (item.end() - filmcraft_time::Tick(1)).max(item.start))))
         .unwrap_or(app.playhead);
 
-    let mut writes: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut writes: Vec<(String, serde_json::Value, Option<i64>)> = Vec::new();
     let mut resets: Vec<String> = Vec::new();
     let mut key_toggles: Vec<String> = Vec::new();
     let mut deletions: Vec<(String, i64)> = Vec::new();
@@ -237,13 +237,13 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                             slider = slider.integer();
                         }
                         if ui.add(slider).changed() {
-                            writes.push((p.id.to_string(), serde_json::json!(value)));
+                            writes.push((p.id.to_string(), serde_json::json!(value), animated.then_some(app.playhead.0)));
                         }
                     }
                     filmcraft_project::ParamKind::Bool => {
                         let value = current.as_bool().unwrap_or_default();
                         if crate::ui::check_button(ui, &format!("ff-color-toggle-{}", p.id), value, p.label, "Toggle this parameter").clicked() {
-                            writes.push((p.id.to_string(), serde_json::json!(!value)));
+                            writes.push((p.id.to_string(), serde_json::json!(!value), None));
                         }
                     }
                     filmcraft_project::ParamKind::Choice(options) => {
@@ -259,7 +259,7 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                             }
                         });
                         if new_index != current_index {
-                            writes.push((p.id.to_string(), serde_json::json!(new_index)));
+                            writes.push((p.id.to_string(), serde_json::json!(new_index), None));
                         }
                     }
                     filmcraft_project::ParamKind::Color => {
@@ -277,7 +277,7 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                                     let hex = filmcraft_color::to_hex(color);
                                     draft.loaded = hex.clone();
                                     draft.text = hex.clone();
-                                    writes.push((p.id.to_string(), serde_json::json!(hex)));
+                                    writes.push((p.id.to_string(), serde_json::json!(hex), animated.then_some(app.playhead.0)));
                                 }
                                 None => invalid = Some("A colour is #rrggbb or #rrggbbaa".to_string()),
                             }
@@ -333,8 +333,16 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
     if let Some(message) = invalid {
         app.status = message;
     }
-    for (param, value) in writes {
-        let params = serde_json::json!({"clip": clip.0, "effect": effect_index, "param": param, "value": value});
+    for (param, value, time) in writes {
+        let mut params = serde_json::json!({"clip": clip.0, "effect": effect_index, "param": param, "value": value});
+        // An animated parameter's write is a keyframe write: name the
+        // playhead the row displays, rather than letting the engine fall back
+        // to the session playhead. They agree while the app keeps them in
+        // step, and the stopwatch already keys at `app.playhead`, so the row
+        // must not write somewhere else.
+        if let Some(t) = time {
+            params["time"] = serde_json::json!(t);
+        }
         if let Err(e) = app.execute("effects.setParam", params) {
             app.status = e;
         }
