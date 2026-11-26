@@ -222,6 +222,8 @@ pub struct App {
     /// The Color workspace's text drafts, one per editable parameter: the
     /// document value each was loaded from and the text being typed.
     pub color_drafts: crate::color::Drafts,
+    /// The Color workspace's open choice list, if one is expanded under a row.
+    pub color_choice_open: Option<crate::color::ChoiceOpen>,
     /// The Color workspace's stack width (draggable gutter).
     pub color_stack_w: f32,
     /// The Roto AI (XMem) panel: runtime fields, consent, the verified runtime
@@ -336,6 +338,7 @@ impl App {
             timeline_drag: None,
             color_effect: None,
             color_drafts: crate::color::Drafts::default(),
+            color_choice_open: None,
             color_stack_w: 380.0,
             roto: crate::roto::RotoState::default(),
             roto_engine: crate::roto_engine::RotoEngineState::default(),

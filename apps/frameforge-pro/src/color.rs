@@ -45,6 +45,26 @@ impl Drafts {
     }
 }
 
+/// The one choice row whose option list is open: the clip, the effect index and
+/// the parameter id. Keying on all three means the list stops showing (and later
+/// reopening starts closed) as soon as the panel shows another clip or effect.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChoiceOpen {
+    clip: filmcraft_project::ClipId,
+    effect: usize,
+    param: String,
+}
+
+impl ChoiceOpen {
+    pub fn new(clip: filmcraft_project::ClipId, effect: usize, param: &str) -> Self {
+        Self { clip, effect, param: param.to_string() }
+    }
+
+    pub fn matches(&self, clip: filmcraft_project::ClipId, effect: usize, param: &str) -> bool {
+        self.clip == clip && self.effect == effect && self.param == param
+    }
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui, body: egui::Rect) {
     let Some((clip, _)) = app.selected_clip() else {
         ui.painter().rect_filled(body, 0.0, crate::ui::BG_APP);
@@ -247,15 +267,21 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                         }
                     }
                     filmcraft_project::ParamKind::Choice(options) => {
+                        // The chip opens the option list in place, just under
+                        // this row. The list is drawn on the same layer and in
+                        // the same scroll area as the chip, so picking is an
+                        // ordinary click rather than a click inside a floating
+                        // popup (whose first frame is a non-interactive sizing
+                        // pass and whose layer hit-testing lags a frame).
                         let current_index = match &current {
                             ParamValue::Choice(c) => *c as usize,
                             _ => 0,
                         };
-                        if let Some(new_index) = crate::ui::choice_chip(ui, &format!("ff-color-choice-{}", p.id), current_index, options, "Choose this option")
-                        {
-                            if new_index != current_index {
-                                writes.push((p.id.to_string(), serde_json::json!(new_index), None));
-                            }
+                        let is_open = app.color_choice_open.as_ref().is_some_and(|open| open.matches(clip, effect_index, p.id));
+                        let glyph = if is_open { "▴" } else { "▾" };
+                        let text = format!("{} {glyph}", options.get(current_index).copied().unwrap_or("?"));
+                        if crate::ui::chip_button(ui, &format!("ff-color-choice-{}", p.id), &text, "Choose this option").clicked() {
+                            app.color_choice_open = if is_open { None } else { Some(ChoiceOpen::new(clip, effect_index, p.id)) };
                         }
                     }
                     filmcraft_project::ParamKind::Color => {
@@ -310,6 +336,31 @@ fn parameters(app: &mut App, panel: &mut egui::Ui, clip: filmcraft_project::Clip
                     }
                 }
             });
+            // The open choice list sits directly under its row, in the same
+            // column and on the same layer, so every option chip is laid out
+            // and clicked exactly like the row's own controls.
+            if app.color_choice_open.as_ref().is_some_and(|open| open.matches(clip, effect_index, p.id))
+                && let filmcraft_project::ParamKind::Choice(options) = &p.kind
+            {
+                let current_index = match &current {
+                    ParamValue::Choice(c) => *c as usize,
+                    _ => 0,
+                };
+                let mut picked = None;
+                ui.horizontal_wrapped(|ui| {
+                    for (index, option) in options.iter().enumerate() {
+                        if crate::ui::chip_button(ui, &format!("ff-color-choice-{}-option-{}", p.id, index), option, "Choose this option").clicked() {
+                            picked = Some(index);
+                        }
+                    }
+                });
+                if let Some(index) = picked {
+                    app.color_choice_open = None;
+                    if index != current_index {
+                        writes.push((p.id.to_string(), serde_json::json!(index), None));
+                    }
+                }
+            }
             // Animatable parameters whose value the panel can render carry the
             // keyframe row: a Float or Angle reads as a number, a Color as hex. The
             // stopwatch keys the value at the playhead and a chip per key

@@ -454,24 +454,6 @@ pub fn chip_button(ui: &mut Ui, id: &str, text: &str, tooltip: &str) -> Response
     response.on_hover_text(tooltip)
 }
 
-/// A choice parameter's drop-down: the current option's name on a chip, the
-/// full list on chips inside its menu. Both the chip and every option carry an
-/// explicit id, so a test can pick an option the way a person does - a salted
-/// `ComboBox`'s item ids are automatic and cannot be clicked.
-pub fn choice_chip(ui: &mut Ui, id: &str, current: usize, options: &[&str], tooltip: &str) -> Option<usize> {
-    let current_text = options.get(current).copied().unwrap_or("?");
-    let response = chip_button(ui, id, &format!("{current_text} Γû╛"), tooltip);
-    let mut chosen = None;
-    egui::Popup::menu(&response).show(|ui| {
-        for (index, option) in options.iter().enumerate() {
-            if chip_button(ui, &format!("{id}-option-{index}"), option, "Choose this option").clicked() {
-                chosen = Some(index);
-            }
-        }
-    });
-    chosen
-}
-
 /// A checkbox with an explicit, stable id: a small square plus its label, for
 /// bool rows a test drives and whose automatic ids would shift with the list.
 pub fn check_button(ui: &mut Ui, id: &str, checked: bool, text: &str, tooltip: &str) -> Response {
